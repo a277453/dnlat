@@ -6,7 +6,6 @@ class CategorizationService:
     """
     Step 3: Categorize extracted files by type
     """
-    
     def __init__(self):
         self.categories = {
             'customer_journals': [],
@@ -15,14 +14,12 @@ class CategorizationService:
             'trc_error': [],
             'registry_files': []
         }
-    
+
     def categorize_files(self, extract_path: Path) -> Dict[str, List[str]]:
         """
         Categorize all files in the extracted directory.
-        
         Args:
             extract_path: Path to the directory containing extracted files
-            
         Returns:
             Dictionary with categorized file lists
         """
@@ -46,7 +43,7 @@ class CategorizationService:
                     file_categories[category].append(str(file_path))
         
         return file_categories
-    
+
     def _detect_category(self, file_path: Path) -> str:
         """
         Detect which category a file belongs to.

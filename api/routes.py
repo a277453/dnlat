@@ -21,6 +21,7 @@ from modules.ui_journal_processor import UIJournalProcessor, parse_ui_journal
 from datetime import datetime
 from collections import defaultdict
 import re
+import json
 
 router = APIRouter()
 
@@ -287,14 +288,33 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
         
         for journal_file in journal_files:
             # print(f"📖 Processing: {journal_file}")
+            print(f"📖 Processing: {journal_file}")
+            print(f"   Path object: {Path(journal_file)}")
+            print(f"   Filename (name): {Path(journal_file).name}")
+            print(f"   Filename (stem): {Path(journal_file).stem}")
             
             # Get the source filename - use the same format as in the DataFrame
             source_filename = Path(journal_file).stem  # Match what parse_customer_journal uses
+            
+            # DEBUG: Print to see what we're storing
+            print(f"  🔍 Source filename extracted: '{source_filename}'")
+            
             source_files.append(source_filename)
             
             try:
                 # parse_customer_journal returns a DataFrame
                 df = analyzer.parse_customer_journal(journal_file)
+
+                if df is not None and not df.empty:
+                    print(f"   ✓ Parsed {len(df)} transactions")
+                    if 'Source_File' in df.columns:
+                        unique_sources = df['Source_File'].unique()
+                        print(f"   ✓ Source_File values in DataFrame: {unique_sources}")
+                    else:
+                        print(f"   ⚠️ WARNING: No 'Source_File' column in DataFrame!")
+                        print(f"   Available columns: {df.columns.tolist()}")
+                else:
+                    print(f"   ⚠️ No data parsed from this file")
                 
                 if df is None or df.empty:
                     # print(f"  ⚠️ No transactions found in {source_filename}")
@@ -330,6 +350,12 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
         
         # Combine all dataframes
         combined_df = pd.concat(all_transactions_df, ignore_index=True)
+
+        print(f"\n📊 BEFORE RENAME:")
+        print(f"   Total rows: {len(combined_df)}")
+        print(f"   Columns: {combined_df.columns.tolist()}")
+        if 'Source_File' in combined_df.columns:
+            print(f"   Unique Source_File values: {combined_df['Source_File'].unique()}")
         
         # Rename 'Source_File' to 'Source File' (with space) for consistency
         if 'Source_File' in combined_df.columns:
@@ -346,11 +372,23 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
         
         # Convert DataFrame to list of dictionaries for storage
         transaction_records = combined_df.to_dict('records')
-        
+
+        # ADD THESE DEBUG LINES
+        print(f"\n💾 CONVERTING TO RECORDS:")
+        print(f"   Total records: {len(transaction_records)}")
+        if transaction_records:
+            sample = transaction_records[0]
+            print(f"   Sample record keys: {list(sample.keys())}")
+            print(f"   Sample 'Source File' value: '{sample.get('Source File', 'KEY NOT FOUND')}'")
+                
         # Store in session (remove duplicates from source_files)
         unique_source_files = list(set(source_files))
         unique_source_files.sort()
-        
+
+        # DEBUG: Print what we're about to store
+        print(f"  🔍 Unique source files being stored: {unique_source_files}")
+        print(f"  🔍 Total source files count: {len(unique_source_files)}")
+
         session_service.update_session(session_id, 'transaction_data', transaction_records)
         session_service.update_session(session_id, 'source_files', unique_source_files)
         session_service.update_session(session_id, 'source_file_map', source_file_map)
@@ -413,6 +451,18 @@ async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_
         source_files = list(set(source_files))
         source_files.sort()
         
+        # DEBUG: Check what's actually in the transaction data
+        if transaction_data:
+            actual_sources_in_data = set(txn.get('Source File', '') for txn in transaction_data)
+            print(f"  🔍 Source files from stored list: {source_files}")
+            print(f"  🔍 Actual 'Source File' values in transaction data: {actual_sources_in_data}")
+            print(f"  🔍 Do they match? {set(source_files) == actual_sources_in_data}")
+            
+            # Print first transaction to see structure
+            sample_txn = transaction_data[0]
+            print(f"  🔍 Sample transaction keys: {list(sample_txn.keys())}")
+            print(f"  🔍 Sample 'Source File' value: '{sample_txn.get('Source File', 'KEY NOT FOUND')}'")
+        
         # print(f"✓ Found {len(transaction_data)} transactions from {len(source_files)} source files")
         
         return {
@@ -446,7 +496,8 @@ async def filter_transactions_by_sources(
     }
     """
     try:
-        # print(f"🔍 Filtering transactions by {len(source_files)} source file(s)")
+        print(f"🔍 Filtering transactions by {len(source_files)} source file(s)")
+        print(f"  🔍 Requested source files: {source_files}")
         
         if not session_service.session_exists(session_id):
             raise HTTPException(
@@ -463,13 +514,28 @@ async def filter_transactions_by_sources(
                 detail="No transaction data available. Please analyze customer journals first."
             )
         
+        # DEBUG: Check what's in the data before filtering
+        print(f"  🔍 Total transactions before filter: {len(transaction_data)}")
+        if transaction_data:
+            sample_txn = transaction_data[0]
+            print(f"  🔍 Sample transaction 'Source File': '{sample_txn.get('Source File', 'KEY NOT FOUND')}'")
+            
+            # Get all unique source files in the data
+            actual_sources = set(txn.get('Source File', '') for txn in transaction_data)
+            print(f"  🔍 Actual unique source files in data: {actual_sources}")
+        
         # Filter transactions by source file
         filtered_transactions = [
             txn for txn in transaction_data
             if txn.get('Source File') in source_files
         ]
         
-        # print(f"✓ Filtered to {len(filtered_transactions)} transactions")
+        print(f"  ✓ Filtered to {len(filtered_transactions)} transactions")
+        
+        if len(filtered_transactions) == 0:
+            print(f"  ⚠️ WARNING: No transactions matched!")
+            print(f"  🔍 Requested: {source_files}")
+            print(f"  🔍 Available: {actual_sources}")
         
         return {
             'transactions': filtered_transactions,
@@ -1611,9 +1677,10 @@ def safe_decode(blob: bytes) -> str:
 
 def parse_counter_data_from_trc(log_lines: list) -> list:
     """
-    Parse counter data from TRC trace - simple space-separated format
-    No separator logic - just header detection and column alignment
+    Parse counter data from TRC trace - intelligent field detection
+    Handles missing/optional fields by detecting patterns
     """
+    import re
     counter_rows = []
     
     # Find header line
@@ -1621,123 +1688,131 @@ def parse_counter_data_from_trc(log_lines: list) -> list:
     header_idx = -1
     
     for idx, line in enumerate(log_lines):
-        stripped = line.strip()
-        # Header line contains "No Ty ID" or "No Ty" and column names
-        if 'No' in stripped and 'Ty' in stripped and ('ID' in stripped or 'UnitName' in stripped):
+        if 'No' in line and 'Ty' in line and 'UnitName' in line:
             header_line = line
             header_idx = idx
-            # print(f"    Found header at line {idx}: {stripped[:80]}")
             break
     
     if not header_line or header_idx == -1:
-        print("    ⚠️ No header line found")
         return []
     
-    # Parse data lines after header
+    # Parse data lines
     for idx in range(header_idx + 1, len(log_lines)):
         line = log_lines[idx]
         
-        # DEBUG: Print each line being examined
-        # print(f"    Examining line {idx}: {line[:100]}")
-        
-        # Skip empty lines, CCdm lines, or separator lines
+        # Skip empty, CCdm, or separator lines
         if (not line.strip() or 
             'CCdm' in line or 
             'usTellerID' in line or
             line.strip().startswith('*')):
-            # print(f"      -> Skipped (empty/CCdm/separator)")
             continue
         
-        # Skip lines that start with whitespace (continuation lines)
+        # Skip continuation lines (start with whitespace)
         if line.startswith(' ') or line.startswith('\t'):
-           #  print(f"      -> Skipped (continuation line)")
             continue
         
-        # Split by whitespace
-        parts = line.split()
-        
-        if len(parts) < 3:
-           # print(f"      -> Skipped (less than 3 parts)")
+        # Validate this is a data line (starts with digit)
+        if not line[0].isdigit():
             continue
-        
-        # Check if this is a valid counter data line
-        # Valid lines start with: No Ty ID (e.g., "03 04 95829")
-        # First field should be cassette number (01-50)
-        if not parts[0].isdigit() or int(parts[0]) > 50:
-           # print(f"      -> Skipped (invalid cassette number: {parts[0]})")
-            continue
-        
-        # Second field should be type number (01-20 typically)
-        if not parts[1].isdigit():
-           #  print(f"      -> Skipped (invalid type: {parts[1]})")
-            continue
-        
-        # Third field should be ID (numeric)
-        if not parts[2].isdigit():
-           #  print(f"      -> Skipped (invalid ID: {parts[2]})")
-            continue
-        
-        # print(f"      -> ✓ PARSING THIS LINE")
         
         try:
             counter_data = {}
             
-            # Parse fields: No Ty ID UnitName Cur Val Init Actn Rej Safe Min Max AppL DevL Status HWsens
-            counter_data['No'] = parts[0] if len(parts) > 0 else ''
-            counter_data['Ty'] = parts[1] if len(parts) > 1 else ''
-            counter_data['ID'] = parts[2] if len(parts) > 2 else ''
-            counter_data['UnitName'] = parts[3] if len(parts) > 3 else ''
+            # Parse first 3 fields using single space (always present)
+            first_part = line[:12].strip()
+            first_fields = first_part.split()
             
-            idx_part = 4
+            if len(first_fields) < 3:
+                continue
             
-            # Check for currency
-            if idx_part < len(parts) and parts[idx_part] in ['EUR', 'INR', 'USD', 'GBP', 'JPY', 'CNY']:
-                counter_data['Cur'] = parts[idx_part]
-                idx_part += 1
+            counter_data['No'] = first_fields[0]
+            counter_data['Ty'] = first_fields[1]
+            counter_data['ID'] = first_fields[2]
+            
+            # Parse remaining part (split by 2+ spaces)
+            remaining_part = line[12:]
+            remaining_fields = re.split(r'  +', remaining_part.strip())
+            
+            if not remaining_fields:
+                continue
+            
+            field_idx = 0
+            
+            # Intelligently detect UnitName and Cur
+            # UnitName: alphanumeric with dots/underscores (SLOT1, HEADUNIT.RET)
+            # Cur: exactly 3 uppercase letters (USD, EUR, INR)
+            
+            first_field = remaining_fields[field_idx] if field_idx < len(remaining_fields) else ''
+            
+            # Check if first field is a currency code
+            is_currency = (len(first_field) == 3 and 
+                          first_field.isalpha() and 
+                          first_field.isupper())
+            
+            if is_currency:
+                # No UnitName present, first field is Cur
+                counter_data['UnitName'] = ''
+                counter_data['Cur'] = first_field
+                field_idx += 1
             else:
-                counter_data['Cur'] = ''
-            
-            # Parse numeric fields
-            field_mapping = [
-                ('Val', 'Val'),
-                ('Init', 'Ini'),
-                ('Actn', 'Cnt'),
-                ('Rej', 'RCnt'),
-                ('Safe', 'Safe'),
-                ('Min', 'Min'),
-                ('Max', 'Max')
-            ]
-            
-            for _, target_name in field_mapping:
-                if idx_part < len(parts):
-                    val = parts[idx_part]
-                    counter_data[target_name] = val
-                    idx_part += 1
+                # First field is UnitName
+                counter_data['UnitName'] = first_field
+                field_idx += 1
+                
+                # Check if next field is currency
+                if field_idx < len(remaining_fields):
+                    next_field = remaining_fields[field_idx]
+                    if (len(next_field) == 3 and 
+                        next_field.isalpha() and 
+                        next_field.isupper()):
+                        counter_data['Cur'] = next_field
+                        field_idx += 1
+                    else:
+                        counter_data['Cur'] = ''
                 else:
-                    counter_data[target_name] = ''
+                    counter_data['Cur'] = ''
             
+            # Parse numeric fields: Val, Init, Actn, Rej, Safe, Min, Max
+            numeric_field_names = ['Val', 'Ini', 'Cnt', 'RCnt', 'Safe', 'Min', 'Max']
+            
+            for field_name in numeric_field_names:
+                if field_idx < len(remaining_fields):
+                    value = remaining_fields[field_idx]
+                    # Check if it's a numeric field
+                    if value.replace('-', '').isdigit():
+                        counter_data[field_name] = value
+                        field_idx += 1
+                    else:
+                        # Stop consuming numeric fields if we hit a non-numeric
+                        counter_data[field_name] = ''
+                        break
+                else:
+                    counter_data[field_name] = ''
+            
+            # Set empty fields
             counter_data['Disp'] = ''
             counter_data['Pres'] = ''
             counter_data['Retr'] = ''
             
-            counter_data['A'] = parts[idx_part] if idx_part < len(parts) else ''
-            idx_part += 1
+            # Parse remaining fields: AppL (A), DevL, Status (St), HWsens
+            # These are typically: FALSE FALSE 0/OK
+            counter_data['A'] = remaining_fields[field_idx] if field_idx < len(remaining_fields) else ''
+            field_idx += 1
             
-            if idx_part < len(parts):
-                idx_part += 1
+            counter_data['DevL'] = remaining_fields[field_idx] if field_idx < len(remaining_fields) else ''
+            field_idx += 1
             
-            counter_data['St'] = parts[idx_part] if idx_part < len(parts) else ''
+            counter_data['St'] = remaining_fields[field_idx] if field_idx < len(remaining_fields) else ''
+            field_idx += 1
+            
+            counter_data['HWsens'] = remaining_fields[field_idx] if field_idx < len(remaining_fields) else ''
             
             counter_data['Record_Type'] = 'Logical'
             counter_rows.append(counter_data)
             
-            # print(f"      -> Added counter row: No={counter_data['No']}, UnitName={counter_data['UnitName']}")
-            
         except Exception as e:
-           # print(f"      -> ⚠️ Error parsing: {str(e)[:50]}")
             continue
     
-   # print(f"    Total rows parsed: {len(counter_rows)}")
     return counter_rows
 
 def parse_time_from_trc(time_str: str) -> datetime.time:
@@ -1904,13 +1979,25 @@ async def get_counter_data(
         
         # Find the transaction
         df = pd.DataFrame(transaction_data)
-        if request.transaction_id not in df['Transaction ID'].values:
+        
+        # Filter transactions to only those from the selected source file
+        source_transactions = df[df['Source File'] == request.source_file]
+
+        source_transactions = source_transactions.drop_duplicates(subset=['Transaction ID'], keep='first')
+        
+        if len(source_transactions) == 0:
             raise HTTPException(
                 status_code=404,
-                detail=f"Transaction {request.transaction_id} not found"
+                detail=f"No transactions found in source '{request.source_file}'"
             )
         
-        txn_data = df[df['Transaction ID'] == request.transaction_id].iloc[0]
+        if request.transaction_id not in source_transactions['Transaction ID'].values:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Transaction {request.transaction_id} not found in source '{request.source_file}'"
+            )
+        
+        txn_data = source_transactions[source_transactions['Transaction ID'] == request.transaction_id].iloc[0]
         
         # Get TRC trace files
         file_categories = session_data.get('file_categories', {})
@@ -2055,12 +2142,22 @@ async def get_counter_data(
         # Build Counter per Transaction table
         counter_per_transaction = []
         
-        # Get all transactions from selected transaction to end
-        selected_txn_index = df[df['Transaction ID'] == request.transaction_id].index[0]
-        transactions_subset = df[df.index >= selected_txn_index]
-        
-        # print(f"✓ Building counter per transaction table for {len(transactions_subset)} transactions")
-        
+        # First, reset index to avoid index mismatch issues
+        source_transactions_reset = source_transactions.reset_index(drop=True)
+
+        # Find the position (not index) of the selected transaction
+        selected_txn_position = source_transactions_reset[source_transactions_reset['Transaction ID'] == request.transaction_id].index[0]
+
+        # Get all transactions from that position onwards
+        transactions_subset = source_transactions_reset.iloc[selected_txn_position:]
+
+        # Filter only CIN/CI and COUT/GA transactions
+        transactions_subset = transactions_subset[
+            transactions_subset['Transaction Type'].isin(['CIN/CI', 'COUT/GA'])
+        ]
+
+        # print(f"✓ Building counter per transaction table for {len(transactions_subset)} transactions (CIN/COUT only)")
+
         for _, txn_row in transactions_subset.iterrows():
             txn_id = txn_row['Transaction ID']
             txn_type = txn_row.get('Transaction Type', 'Unknown')
@@ -2088,19 +2185,46 @@ async def get_counter_data(
                     date_formatted = date_part
             
             # Extract count information from transaction log
-            # Pattern: "Dispense info - 1 note(s) of 500,00 INR from cassette 5 (SLOT3)"
+            # Pattern for COUT: "Dispense info - 1 note(s) of 500,00 INR from cassette 5 (SLOT3)"
+            # Pattern for CIN: "Identified notes:     1 x    500 INR"
             count_info = []
-            
-            for log_line in txn_log.split('\n'):
-                # Look for dispense info pattern
-                match = re.search(r'(\d+)\s+note\(s\)\s+of\s+([\d,\.]+)\s+([A-Z]{3})', log_line, re.IGNORECASE)
-                if match:
-                    note_count = match.group(1)
-                    amount = match.group(2).replace(',', '.')  # Handle comma as decimal separator
-                    currency = match.group(3)
-                    count_info.append(f"{currency} {amount} x{note_count}")
-            
-            count_display = ", ".join(count_info) if count_info else ""
+
+            # Check conditions for displaying denomination or cancellation
+            is_cancelled = "Transaction cancelled. Customer timeout." in txn_log
+            is_successful = txn_state == 'Successful'
+            has_card_presented = "Card successfully presented" in txn_log
+            has_banknotes_presented = "Banknotes presented" in txn_log
+
+            # Decision logic based on conditions
+            if is_cancelled and not (is_successful and (has_card_presented or has_banknotes_presented)):
+                # Show "Transaction Canceled" for all cancelled transactions EXCEPT when successful with card/banknotes presented
+                count_display = "Transaction Canceled"
+            else:
+                # Show denomination for:
+                # 1. No cancellation + successful
+                # 2. Cancellation + successful + (card presented OR banknotes presented)
+                
+                if txn_type == 'COUT/GA':
+                    # COUT pattern: "Dispense info - 1 note(s) of 500,00 INR from cassette 5 (SLOT3)"
+                    for log_line in txn_log.split('\n'):
+                        match = re.search(r'(\d+)\s+note\(s\)\s+of\s+([\d,\.]+)\s+([A-Z]{3})', log_line, re.IGNORECASE)
+                        if match:
+                            note_count = match.group(1)
+                            amount = match.group(2).replace(',', '.')  # Handle comma as decimal separator
+                            currency = match.group(3)
+                            count_info.append(f"{currency} {amount} x{note_count}")
+                
+                elif txn_type == 'CIN/CI':
+                    # CIN pattern: "Identified notes:     1 x    500 INR"
+                    for log_line in txn_log.split('\n'):
+                        match = re.search(r'(\d+)\s+x\s+([\d,\.]+)\s+([A-Z]{3})', log_line, re.IGNORECASE)
+                        if match:
+                            note_count = match.group(1)
+                            amount = match.group(2).replace(',', '.')
+                            currency = match.group(3)
+                            count_info.append(f"{currency} {amount} x{note_count}")
+                
+                count_display = ", ".join(count_info) if count_info else ""
             
             # Create transaction summary
             if txn_state == 'Successful':
@@ -2138,10 +2262,12 @@ async def get_counter_data(
         
         # print(f"✓ Created counter per transaction table with {len(counter_per_transaction)} entries")
         
+        # Find this section in get_counter_data endpoint (around line 1890):
         response_data = {
             "transaction_id": request.transaction_id,
             "source_file": request.source_file,
             "all_blocks": all_counter_blocks,
+            "column_descriptions": get_counter_column_descriptions(),  # ADD THIS LINE
             "start_counter": {
                 "date": txn_date_formatted,
                 "timestamp": start_timestamp,
@@ -2171,3 +2297,28 @@ async def get_counter_data(
             status_code=500,
             detail=f"Failed to get counter data: {str(e)}"
         )
+    
+def get_counter_column_descriptions():
+    """Return descriptions for counter table columns"""
+    return {
+        'No': 'Cassette number',
+        'Ty': 'Type',
+        'ID': 'Unit ID',
+        'UnitName': 'UnitName',
+        'Cur': 'Currency',
+        'Val': 'Denomination',
+        'Ini': 'Ini - count in number',
+        'Cnt': 'Cnt - Remaining counters formula: INI - (RETRACT + DISP)',
+        'RCnt': 'Reject Count -> (Reject + Presented (Pres))',
+        'Safe': 'Safe',
+        'Min': 'Min',
+        'Max': 'Max',
+        'Disp': 'Disp',
+        'Pres': 'Presented notes to customer',
+        'Retr': 'Retract',
+        'A': 'AppL',
+        'DevL': 'DevL',
+        'St': 'Status - Indicates status of Logical cassette',
+        'HWsens': 'HWsens',
+        'Record_Type': 'Record Type'
+    }

@@ -1,0 +1,10 @@
+F5 → Select "Debug FastAPI Backend"
+New terminal → source venv/bin/activate → streamlit run streamlit_app.py --server.port=8501
+Use the app → Breakpoints trigger automatically
+
+Key Button Action
+F5 Continue ▶️Run until next breakpoint
+F10S tep Over ⤵️Execute current line, move to next
+F11 Step Into ⬇️Go inside function calls
+Shift+F11 Step Out ⬆️Exit current function
+Shift+F5 Stop ⏹️End debug session

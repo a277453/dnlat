@@ -439,6 +439,25 @@ st.markdown("""
         background: linear-gradient(135deg, #047857 0%, #065f46 100%);
         transform: translateY(-1px);
     }
+            
+    .stSelectbox option[value*="Not available"] {
+        color: #666666 !important;
+        background-color: #2a2a2a !important;
+        font-style: italic !important;
+    }
+            
+    /* Center align all dataframe cells */
+    .dataframe tbody tr td {
+        text-align: center !important;
+    }
+
+    .dataframe thead tr th {
+        text-align: center !important;
+    }
+
+    .stSelectbox select option:disabled {
+        color: #666666 !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -752,14 +771,12 @@ def render_transaction_stats():
             
             if 'statistics' in data:
                 stats_df = pd.DataFrame(data['statistics'])
-                
-                # Display the statistics table
+
                 st.dataframe(
                     stats_df,
                     use_container_width=True,
                     hide_index=True
                 )
-            
             # ========================================
             # SECTION 2: Source File Filter
             # ========================================
@@ -2988,12 +3005,11 @@ def render_individual_transaction_analysis():
                 # User Authentication (only if questions answered)
                 user_name = ""
                 user_email = ""
-                passcode_verified = False
-                
+
                 if questions_answered > 0:
                     st.markdown("---")
-                    st.markdown("#### 👤 User Authentication Required")
-                    st.info("Please identify yourself and enter your passcode to submit feedback.")
+                    st.markdown("#### 👤 User Selection Required")
+                    st.info("Please select your name to submit feedback.")
                     
                     selected_user = st.selectbox(
                         "Select your name and email:",
@@ -3004,38 +3020,18 @@ def render_individual_transaction_analysis():
                     if selected_user != "Select User":
                         user_name = selected_user.split(" (")[0]
                         user_email = users[selected_user]["email"]
-                        
-                        st.markdown("#### 🔐 Enter Your 4-Digit Passcode")
-                        entered_passcode = st.text_input(
-                            "Passcode:",
-                            type="password",
-                            max_chars=4,
-                            key=f"{feedback_key_prefix}_passcode"
-                        )
-                        
-                        if entered_passcode:
-                            if len(entered_passcode) == 4 and entered_passcode.isdigit():
-                                correct_passcode = users[selected_user]["passcode"]
-                                if entered_passcode == correct_passcode:
-                                    passcode_verified = True
-                                    st.success("✅ Passcode verified! You can now submit feedback.")
-                                else:
-                                    st.error("❌ Incorrect passcode. Please try again.")
-                            else:
-                                st.warning("⚠️ Passcode must be exactly 4 digits.")
+                        st.success(f"✅ Selected: {user_name}")
                     
                     if selected_user == "Select User":
                         st.warning("⚠️ Please select your name and email to continue.")
-                    elif not passcode_verified and selected_user != "Select User":
-                        st.warning("⚠️ Please enter your correct 4-digit passcode to submit feedback.")
                 
                 # Submit Feedback
                 st.markdown("---")
                 col1, col2, col3 = st.columns([2, 2, 3])
                 
                 with col1:
-                    can_submit = questions_answered > 0 and selected_user != "Select User" and passcode_verified
-                    
+                    can_submit = questions_answered > 0 and selected_user != "Select User"
+
                     if st.button("Submit Feedback", 
                             key=f"{feedback_key_prefix}_submit",
                             disabled=not can_submit,
@@ -3046,8 +3042,6 @@ def render_individual_transaction_analysis():
                             st.error("Please answer at least one question before submitting.")
                         elif selected_user == "Select User":
                             st.error("Please select your name and email.")
-                        elif not passcode_verified:
-                            st.error("Please enter the correct passcode.")
                         else:
                             # Submit feedback to API
                             with st.spinner("Submitting feedback..."):
@@ -3080,8 +3074,7 @@ def render_individual_transaction_analysis():
                                             f"{feedback_key_prefix}_rating",
                                             f"{feedback_key_prefix}_alternative",
                                             f"{feedback_key_prefix}_comment",
-                                            f"{feedback_key_prefix}_user_select",
-                                            f"{feedback_key_prefix}_passcode"
+                                            f"{feedback_key_prefix}_user_select"
                                         ]
                                         for key in keys_to_clear:
                                             if key in st.session_state:
@@ -3113,31 +3106,7 @@ def render_individual_transaction_analysis():
                                 del st.session_state[key]
                         st.rerun()
 
-            # Display previous feedback
-            try:
-                feedback_response = requests.get(
-                    f"{API_BASE_URL}/get-feedback/{selected_txn_id}",
-                    timeout=30
-                )
-                
-                if feedback_response.status_code == 200:
-                    feedback_data = feedback_response.json()
-                    previous_feedback = feedback_data.get('feedback', [])
-                    
-                    if previous_feedback:
-                        with st.expander(f"📊 Previous Feedback ({len(previous_feedback)})", expanded=False):
-                            for i, feedback in enumerate(previous_feedback, 1):
-                                st.markdown(f"**Feedback #{i} - {feedback['timestamp']}**")
-                                st.write(f"**Submitted by:** {feedback['user_name']} ({feedback['user_email']})")
-                                st.write(f"**Model:** {feedback.get('model_version', 'Unknown')}")
-                                st.write(f"**Rating:** {feedback['rating']}/5")
-                                if feedback.get('alternative_cause') and feedback['alternative_cause'] != "No alternative needed - AI analysis was correct":
-                                    st.write(f"**Alternative Cause:** {feedback['alternative_cause']}")
-                                if feedback.get('comment'):
-                                    st.write(f"**Comment:** {feedback['comment']}")
-                                st.markdown("---")
-            except:
-                pass  # Silently fail if can't retrieve feedback
+
     
     except Exception as e:
         st.error(f"❌ Error: {str(e)}")
@@ -3260,7 +3229,7 @@ def render_counters_analysis():
             if len(source_txns) > 0:
                 txn_count = len(source_txns)
                 first_txn_time = source_txns.iloc[0]['Start Time']
-                display_name = f"{source} ({txn_count} transactions, starts at {first_txn_time})"
+                display_name = f"{source} (starts at {first_txn_time})"
                 source_summary[display_name] = source
         
         if not source_summary:
@@ -3285,18 +3254,46 @@ def render_counters_analysis():
         # Transaction selection
         st.markdown("---")
         st.markdown("#### 🔍 Select Transaction")
-        
+
+        # Filter to only transactions from this specific source file
+        source_only_transactions = txn_df[txn_df['Source File'] == selected_source].copy()
+
+        # Count CIN/CI and COUT/GA transactions
+        cin_cout_count = len(source_only_transactions[source_only_transactions['Transaction Type'].isin(['CIN/CI', 'COUT/GA'])])
+        other_count = len(source_only_transactions) - cin_cout_count
+
+        # Build transaction options - only CIN/COUT are selectable
         transaction_options = {}
-        for _, txn in source_transactions.iterrows():
+
+        for _, txn in source_only_transactions.iterrows():
             txn_id = txn['Transaction ID']
-            display = f"{txn_id} | {txn['Transaction Type']} | {txn['End State']} | {txn['Start Time']}"
-            transaction_options[display] = txn_id
-        
+            txn_type = txn['Transaction Type']
+            display = f"{txn_id} | {txn_type} | {txn['End State']} | {txn['Start Time']}"
+            
+            if txn_type in ['CIN/CI', 'COUT/GA']:
+                transaction_options[display] = txn_id
+            else:
+                # Add to options but mark as disabled with "(Not available)" suffix
+                disabled_key = f"{display} (Not available)"
+                transaction_options[disabled_key] = None
+
+        # Show info message if there are disabled transactions
+        if other_count > 0:
+            st.info(f"ℹ️ Counter analysis is only available for CIN/CI and COUT/GA transactions.")
+
         selected_display = st.selectbox(
             "Transaction",
             options=list(transaction_options.keys()),
-            key="counters_txn_select"
+            key="counters_txn_select",
+            help="Only CIN/CI and COUT/GA transactions are available for counter analysis"
         )
+
+        # Check if selected option is disabled
+        if "(Not available)" in selected_display:
+            st.warning("⚠️ This transaction type is not supported for counter analysis. Please select a CIN/CI or COUT/GA transaction.")
+            return
+
+        selected_txn_id = transaction_options[selected_display]
         
         selected_txn_id = transaction_options[selected_display]
         selected_txn_data = source_transactions[source_transactions['Transaction ID'] == selected_txn_id].iloc[0]
@@ -3336,11 +3333,30 @@ def render_counters_analysis():
                     except:
                         formatted_start_date = start_date
                     
-                    st.markdown(f"#### 🕐 Start Counter (First Transaction) - {formatted_start_date} {start_time}")
+                    st.markdown(f"#### 🕐 First Counter - {formatted_start_date} {start_time}")
                     st.caption("This counter represents the first transaction in the source file")
                     
                     start_df = pd.DataFrame(counter_data['start_counter']['counter_data'])
-                    st.dataframe(start_df, use_container_width=True, hide_index=True)
+
+                    # Get column descriptions
+                    col_descriptions = counter_data.get('column_descriptions', {})
+
+                    # Create column config with tooltips
+                    column_config = {}
+                    for col in start_df.columns:
+                        if col in col_descriptions:
+                            column_config[col] = st.column_config.TextColumn(
+                                col,
+                                help=col_descriptions[col],
+                                width="small"
+                            )
+
+                    st.dataframe(
+                        start_df, 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config=column_config
+                    )
                     
                     st.markdown("---")
                     
@@ -3358,15 +3374,35 @@ def render_counters_analysis():
                     except:
                         formatted_first_date = first_date
                     
-                    st.markdown(f"#### 🕐 First Counter - {formatted_first_date} {first_time}")
+                    st.markdown(f"#### 🕐 Start Counter - {formatted_first_date} {first_time}")
+                    st.caption("This counter represents the first transaction from in the TRCTrace file based on the selected Transaction")
                     
                     first_df = pd.DataFrame(counter_data['first_counter']['counter_data'])
-                    st.dataframe(first_df, use_container_width=True, hide_index=True)
+
+                    # Get column descriptions
+                    col_descriptions = counter_data.get('column_descriptions', {})
+
+                    # Create column config with tooltips
+                    column_config = {}
+                    for col in first_df.columns:
+                        if col in col_descriptions:
+                            column_config[col] = st.column_config.TextColumn(
+                                col,
+                                help=col_descriptions[col],
+                                width="small"
+                            )
+
+                    st.dataframe(
+                        first_df, 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config=column_config
+                    )
                     
                     st.markdown("---")
                     
                     st.markdown("#### 📊 Counter per Transaction")
-                    
+
                     if 'counter_per_transaction' in counter_data and counter_data['counter_per_transaction']:
                         txn_table_data = []
                         
@@ -3382,6 +3418,17 @@ def render_counters_analysis():
                             })
                         
                         txn_df = pd.DataFrame(txn_table_data)
+                        
+                        # Create column config with tooltips for transaction table
+                        txn_column_config = {
+                            'Date Timestamp': st.column_config.TextColumn('Date Timestamp', help='Transaction date and time'),
+                            'Transaction ID': st.column_config.TextColumn('Transaction ID', help='Unique transaction identifier'),
+                            'Transaction Type': st.column_config.TextColumn('Transaction Type', help='Type of transaction (CIN/CI or COUT/GA)'),
+                            'Transaction Summary with Result': st.column_config.TextColumn('Transaction Summary with Result', help='Success or failure status'),
+                            'Count': st.column_config.TextColumn('Count', help='Denomination and count information'),
+                            'Counter Summary': st.column_config.TextColumn('Counter Summary', help='Click to view detailed counter data'),
+                            'Comment': st.column_config.TextColumn('Comment', help='Additional notes')
+                        }
                         
                         # Apply styling for success/failure
                         def highlight_state(row):
@@ -3412,7 +3459,8 @@ def render_counters_analysis():
                             hide_index=True,
                             on_select="rerun",
                             selection_mode="single-row",
-                            key="counter_txn_table"
+                            key="counter_txn_table",
+                            column_config=txn_column_config
                         )
                         
                         # Get selected row
@@ -3451,7 +3499,42 @@ def render_counters_analysis():
                                     
                                     if logical_counters:
                                         counter_display_df = pd.DataFrame(logical_counters)
-                                        st.dataframe(counter_display_df, use_container_width=True, hide_index=True)
+                                        
+                                        # Get column descriptions
+                                        col_descriptions = counter_data.get('column_descriptions', {})
+                                        
+                                        # Column config with descriptions
+                                        detail_column_config = {}
+                                        for col in counter_display_df.columns:
+                                            # Map display column names to description keys
+                                            col_key_map = {
+                                                'Name (PName)': 'UnitName',
+                                                'Value (Val)': 'Val',
+                                                'Cur': 'Cur',
+                                                'Ini': 'Ini',
+                                                'Retr': 'Retr',
+                                                'Disp': 'Disp',
+                                                'RCNT (Reject Count)': 'RCnt',
+                                                'Pres': 'Pres',
+                                                'Cnt': 'Cnt',
+                                                'Status (St)': 'St',
+                                                'NrPCU': 'HWsens'
+                                            }
+                                            
+                                            desc_key = col_key_map.get(col, col)
+                                            if desc_key in col_descriptions:
+                                                detail_column_config[col] = st.column_config.TextColumn(
+                                                    col,
+                                                    help=col_descriptions[desc_key],
+                                                    width="small"
+                                                )
+                                        
+                                        st.dataframe(
+                                            counter_display_df, 
+                                            use_container_width=True, 
+                                            hide_index=True,
+                                            column_config=detail_column_config
+                                        )
                                         
                                         if st.button("✕ Close Counters View", key="close_counters"):
                                             st.session_state["counter_txn_table"]["selection"]["rows"] = []
@@ -3478,9 +3561,29 @@ def render_counters_analysis():
                         formatted_last_date = last_date
                     
                     st.markdown(f"#### 🕐 Last Counter - {formatted_last_date} {last_time}")
-                    
+                    st.caption("This counter represents the last transaction in the source file")
+
                     last_df = pd.DataFrame(counter_data['last_counter']['counter_data'])
-                    st.dataframe(last_df, use_container_width=True, hide_index=True)
+
+                    # Get column descriptions
+                    col_descriptions = counter_data.get('column_descriptions', {})
+
+                    # Create column config with tooltips
+                    column_config = {}
+                    for col in last_df.columns:
+                        if col in col_descriptions:
+                            column_config[col] = st.column_config.TextColumn(
+                                col,
+                                help=col_descriptions[col],
+                                width="small"
+                            )
+
+                    st.dataframe(
+                        last_df, 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config=column_config
+                    )
                 
                 else:
                     error_detail = response.json().get('detail', 'Failed to get counter data')
@@ -3566,31 +3669,6 @@ if uploaded_file is not None:
         # File already processed, show info
         file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
 
-if st.session_state.get('api_cache') and len(st.session_state.get('api_cache', {})) > 0:
-    st.markdown("---")
-    st.markdown("### 📊 Cache Statistics")
-    
-    total_requests = st.session_state.get('cache_hits', 0) + st.session_state.get('cache_misses', 0)
-    
-    if total_requests > 0:
-        hit_rate = (st.session_state.get('cache_hits', 0) / total_requests) * 100
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Cache Hits", st.session_state.get('cache_hits', 0))
-        
-        with col2:
-            st.metric("Hit Rate", f"{hit_rate:.1f}%")
-        
-        with col3:
-            st.metric("Cached Items", len(st.session_state.api_cache))
-        
-        if st.button("🗑️ Clear Cache", use_container_width=True, key="clear_cache_btn"):
-            clear_cache()
-            st.success("✅ Cache cleared!")
-            st.rerun()
-
 if st.session_state.zip_processed:
     st.markdown("---")
     result = st.session_state.processing_result
@@ -3599,7 +3677,7 @@ if st.session_state.zip_processed:
     st.markdown("## Detected Files")
     
     cols = st.columns(5)
-    
+
     category_display = {
         'customer_journals': ('Customer Journals', '📋'),
         'ui_journals': ('UI Journals', '🖥️'),
@@ -3607,7 +3685,7 @@ if st.session_state.zip_processed:
         'trc_error': ('TRC Error', '⚠️'),
         'registry_files': ('Registry Files', '📄')
     }
-    
+
     for idx, (category, (label, icon)) in enumerate(category_display.items()):
         count = categories.get(category, {}).get('count', 0)
         with cols[idx]:
@@ -3742,7 +3820,7 @@ if st.session_state.zip_processed:
                 render_consolidated_flow()
             elif selected_func_id == "counters_analysis":
                 render_counters_analysis()
-
+            
 st.markdown("---")
 st.markdown("""
     <div style='text-align: center; color: #666666; font-size: 0.875rem;'>

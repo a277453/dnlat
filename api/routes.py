@@ -20,6 +20,7 @@ import pandas as pd
 from modules.ui_journal_processor import UIJournalProcessor, parse_ui_journal
 from datetime import datetime
 from collections import defaultdict
+import re
 
 router = APIRouter()
 
@@ -302,6 +303,9 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
                 
                 print(f"  ✓ Found {len(df)} transactions")
                 
+                # Only add source if it has transactions
+                source_files.append(source_filename)
+                
                 # The DataFrame already has 'Source_File' column set by parse_customer_journal
                 # which uses Path(file_path).stem - same as our source_filename above
                 
@@ -344,9 +348,12 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
         # Convert DataFrame to list of dictionaries for storage
         transaction_records = combined_df.to_dict('records')
         
-        # Store in session
+        # Store in session (remove duplicates from source_files)
+        unique_source_files = list(set(source_files))
+        unique_source_files.sort()
+        
         session_service.update_session(session_id, 'transaction_data', transaction_records)
-        session_service.update_session(session_id, 'source_files', source_files)
+        session_service.update_session(session_id, 'source_files', unique_source_files)
         session_service.update_session(session_id, 'source_file_map', source_file_map)
         
         # Generate statistics
@@ -402,6 +409,10 @@ async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_
         transaction_data = session_data.get('transaction_data', [])
         source_files = session_data.get('source_files', [])
         source_file_map = session_data.get('source_file_map', {})
+        
+        # Remove duplicates - keep only unique source files
+        source_files = list(set(source_files))
+        source_files.sort()
         
         print(f"✓ Found {len(transaction_data)} transactions from {len(source_files)} source files")
         
@@ -504,6 +515,7 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
         df = pd.DataFrame(transaction_data)
         
         # Generate statistics by transaction type
+        # Generate statistics by transaction type
         stats = []
         for txn_type in df['Transaction Type'].unique():
             type_df = df[df['Transaction Type'] == txn_type]
@@ -511,12 +523,20 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
             unsuccessful = len(type_df[type_df['End State'] == 'Unsuccessful'])
             total = len(type_df)
             
+            # Calculate average duration
+            if 'Duration (seconds)' in type_df.columns:
+                avg_duration = type_df['Duration (seconds)'].mean()
+                avg_duration_str = f"{avg_duration:.1f}s" if not pd.isna(avg_duration) else "N/A"
+            else:
+                avg_duration_str = "N/A"
+            
             stats.append({
                 'Transaction Type': txn_type,
                 'Total': total,
                 'Successful': successful,
                 'Unsuccessful': unsuccessful,
-                'Success Rate': f"{(successful/total*100):.1f}%" if total > 0 else "0%"
+                'Success Rate': f"{(successful/total*100):.1f}%" if total > 0 else "0%",
+                'Avg Duration': avg_duration_str
             })
         
         return {
@@ -541,7 +561,7 @@ async def compare_transactions_flow(
     session_id: str = Query(default=CURRENT_SESSION_ID)
 ):
     """
-    Compare UI flows of two transactions
+    Compare UI flows of two transactions with durations
     """
     try:
         print(f"🔄 Comparing transactions: {txn1_id} vs {txn2_id}")
@@ -596,24 +616,23 @@ async def compare_transactions_flow(
         
         print(f"📂 Found {len(ui_journals)} UI journal file(s)")
         
-        # Extract UI flows for both transactions
+        # Extract UI flows for both transactions WITH DURATIONS
         ui_flow_1 = ["No screens in time range"]
         ui_flow_2 = ["No screens in time range"]
         
         if ui_journals:
             try:
-                # Get source files for both transactions
                 txn1_source_file = str(txn1_data.get('Source File', ''))
                 txn2_source_file = str(txn2_data.get('Source File', ''))
                 
                 print(f"📂 Transaction 1 source: {txn1_source_file}")
                 print(f"📂 Transaction 2 source: {txn2_source_file}")
                 
-                # Function to extract flow for a transaction
-                def extract_flow_for_transaction(txn_data, txn_source_file, txn_label):
+                # Enhanced function to extract flow WITH durations
+                def extract_flow_with_durations(txn_data, txn_source_file, txn_label):
                     flow_screens = ["No screens in time range"]
                     
-                    # Try to find matching UI journal first
+                    # Try to find matching UI journal
                     matching_ui_journal = None
                     for ui_journal in ui_journals:
                         ui_journal_name = Path(ui_journal).stem
@@ -622,7 +641,6 @@ async def compare_transactions_flow(
                             print(f"✓ Found matching UI journal for {txn_label}: {ui_journal_name}")
                             break
                     
-                    # If no exact match, try all UI journals
                     ui_journals_to_check = [matching_ui_journal] if matching_ui_journal else ui_journals
                     
                     for ui_journal_path in ui_journals_to_check:
@@ -633,12 +651,11 @@ async def compare_transactions_flow(
                         if not ui_df.empty:
                             print(f"✓ Parsed {len(ui_df)} UI events for {txn_label}")
                             
-                            # Create processor
                             processor = UIJournalProcessor(ui_journal_path)
                             processor.df = ui_df
                             
-                            # Convert times
-                            def parse_time(time_str):
+                            # Parse times
+                            def parse_time_local(time_str):
                                 if pd.isna(time_str):
                                     return None
                                 if isinstance(time_str, str):
@@ -650,30 +667,123 @@ async def compare_transactions_flow(
                                     return time_str.time()
                                 return time_str
                             
-                            # Extract flow
-                            start_time = parse_time(txn_data['Start Time'])
-                            end_time = parse_time(txn_data['End Time'])
+                            start_time = parse_time_local(txn_data['Start Time'])
+                            end_time = parse_time_local(txn_data['End Time'])
                             
                             if start_time and end_time:
                                 print(f"⏰ {txn_label} time range: {start_time} to {end_time}")
-                                extracted_screens = processor.get_screen_flow(start_time, end_time)
                                 
-                                if extracted_screens and len(extracted_screens) > 0:
-                                    flow_screens = extracted_screens
-                                    print(f"✓ Flow extracted for {txn_label}: {len(flow_screens)} screens from {Path(ui_journal_path).stem}")
-                                    break  # Found the flow, stop checking other files
+                                # Get unique screens
+                                unique_screens = processor.get_screen_flow(start_time, end_time)
+                                
+                                if unique_screens and len(unique_screens) > 0:
+                                    # Now add durations
+                                    try:
+                                        # Auto-detect columns
+                                        time_col = None
+                                        screen_col = None
+                                        
+                                        for col in ['Time', 'time', 'timestamp', 'Timestamp', 'TimeStamp']:
+                                            if col in ui_df.columns:
+                                                time_col = col
+                                                break
+                                        
+                                        for col in ['ScreenName', 'Screen', 'screen', 'screen_name']:
+                                            if col in ui_df.columns:
+                                                screen_col = col
+                                                break
+                                        
+                                        if time_col and screen_col:
+                                            # Ensure time column is in time format
+                                            if ui_df[time_col].dtype == 'object' or str(ui_df[time_col].dtype).startswith('datetime'):
+                                                ui_df[time_col] = pd.to_datetime(ui_df[time_col], errors='coerce').dt.time
+                                            
+                                            # Filter events in time range
+                                            ui_filtered = ui_df[
+                                                (ui_df[time_col] >= start_time) & 
+                                                (ui_df[time_col] <= end_time)
+                                            ].copy()
+                                            
+                                            if len(ui_filtered) > 0:
+                                                # Build map of screens to times
+                                                screen_info = {}
+                                                for screen_name in unique_screens:
+                                                    occurrences = []
+                                                    for idx, row in ui_filtered.iterrows():
+                                                        screen = str(row.get(screen_col, ''))
+                                                        time_val = row.get(time_col)
+                                                        if screen == screen_name and time_val:
+                                                            occurrences.append(time_val)
+                                                    
+                                                    if occurrences:
+                                                        screen_info[screen_name] = {
+                                                            'first_time': occurrences[0]
+                                                        }
+                                                
+                                                # Build detailed flow
+                                                flow_details = []
+                                                for i, screen_name in enumerate(unique_screens):
+                                                    info = screen_info.get(screen_name)
+                                                    
+                                                    if not info:
+                                                        flow_details.append({
+                                                            'screen': screen_name,
+                                                            'timestamp': '',
+                                                            'duration': None
+                                                        })
+                                                        continue
+                                                    
+                                                    first_time = info['first_time']
+                                                    
+                                                    # Calculate duration to next screen
+                                                    duration = None
+                                                    if i < len(unique_screens) - 1:
+                                                        next_screen = unique_screens[i + 1]
+                                                        next_info = screen_info.get(next_screen)
+                                                        
+                                                        if next_info and next_info['first_time']:
+                                                            try:
+                                                                from datetime import date
+                                                                dt1 = datetime.combine(date.today(), first_time)
+                                                                dt2 = datetime.combine(date.today(), next_info['first_time'])
+                                                                duration = (dt2 - dt1).total_seconds()
+                                                            except:
+                                                                duration = None
+                                                    
+                                                    flow_details.append({
+                                                        'screen': screen_name,
+                                                        'timestamp': str(first_time),
+                                                        'duration': duration
+                                                    })
+                                                
+                                                if flow_details:
+                                                    flow_screens = flow_details
+                                                    print(f"✓ {txn_label} flow with durations: {len(flow_details)} screens")
+                                                    break
+                                            else:
+                                                # No durations, use simple screens
+                                                flow_screens = unique_screens
+                                                print(f"⚠️ No UI events in time range, using simple screens for {txn_label}")
+                                                break
+                                        else:
+                                            # No columns found, use simple screens
+                                            flow_screens = unique_screens
+                                            print(f"⚠️ Columns not found, using simple screens for {txn_label}")
+                                            break
+                                    except Exception as e:
+                                        print(f"⚠️ Could not add durations for {txn_label}: {e}")
+                                        flow_screens = unique_screens
+                                        break
                                 else:
-                                    print(f"⚠️ No screens found in time range for {txn_label} in {Path(ui_journal_path).stem}")
-                            else:
-                                print(f"⚠️ Invalid time range for {txn_label}")
+                                    print(f"⚠️ No screens found for {txn_label}")
                         else:
-                            print(f"⚠️ Empty UI journal for {txn_label}: {Path(ui_journal_path).stem}")
+                            print(f"⚠️ Empty UI journal for {txn_label}")
                     
                     return flow_screens
                 
                 # Extract flows for both transactions
-                ui_flow_1 = extract_flow_for_transaction(txn1_data, txn1_source_file, "Transaction 1")
-                ui_flow_2 = extract_flow_for_transaction(txn2_data, txn2_source_file, "Transaction 2")
+                ui_flow_1 = extract_flow_with_durations(txn1_data, txn1_source_file, "Transaction 1")
+                ui_flow_2 = extract_flow_with_durations(txn2_data, txn2_source_file, "Transaction 2")
                 
             except Exception as e:
                 print(f"❌ Error extracting UI flows: {str(e)}")
@@ -688,13 +798,28 @@ async def compare_transactions_flow(
         # Find matches using LCS (Longest Common Subsequence)
         def find_lcs_matches(flow1, flow2):
             """Find screens that appear in the same relative order in both flows using LCS"""
-            m, n = len(flow1), len(flow2)
+            # Extract screen names
+            screens1 = []
+            for item in flow1:
+                if isinstance(item, dict):
+                    screens1.append(item['screen'])
+                else:
+                    screens1.append(str(item))
+            
+            screens2 = []
+            for item in flow2:
+                if isinstance(item, dict):
+                    screens2.append(item['screen'])
+                else:
+                    screens2.append(str(item))
+            
+            m, n = len(screens1), len(screens2)
             lcs_table = [[0] * (n + 1) for _ in range(m + 1)]
             
             # Fill LCS table
             for i in range(1, m + 1):
                 for j in range(1, n + 1):
-                    if flow1[i-1] == flow2[j-1]:
+                    if screens1[i-1] == screens2[j-1]:
                         lcs_table[i][j] = lcs_table[i-1][j-1] + 1
                     else:
                         lcs_table[i][j] = max(lcs_table[i-1][j], lcs_table[i][j-1])
@@ -705,7 +830,7 @@ async def compare_transactions_flow(
             i, j = m, n
             
             while i > 0 and j > 0:
-                if flow1[i-1] == flow2[j-1]:
+                if screens1[i-1] == screens2[j-1]:
                     matches1[i-1] = True
                     matches2[j-1] = True
                     i -= 1
@@ -719,86 +844,6 @@ async def compare_transactions_flow(
         
         # Get matches
         txn1_matches, txn2_matches = find_lcs_matches(ui_flow_1, ui_flow_2)
-        
-        # Generate detailed analysis
-        detailed_analysis = ""
-        try:
-            # Duration analysis
-            def get_duration(txn_data):
-                try:
-                    if 'Start Time' in txn_data and 'End Time' in txn_data:
-                        start = txn_data['Start Time']
-                        end = txn_data['End Time']
-                        
-                        # Handle both time objects and strings
-                        if isinstance(start, str):
-                            start = datetime.strptime(start, '%H:%M:%S').time()
-                        if isinstance(end, str):
-                            end = datetime.strptime(end, '%H:%M:%S').time()
-                        
-                        start_dt = datetime.combine(datetime.today(), start)
-                        end_dt = datetime.combine(datetime.today(), end)
-                        
-                        return (end_dt - start_dt).total_seconds()
-                except:
-                    return None
-                return None
-            
-            txn1_duration = get_duration(txn1_data)
-            txn2_duration = get_duration(txn2_data)
-            
-            analysis_lines = []
-            analysis_lines.append("**Duration Analysis:**")
-            
-            if txn1_duration is not None:
-                analysis_lines.append(f"- Transaction 1: {txn1_duration:.1f} seconds")
-            else:
-                analysis_lines.append(f"- Transaction 1: Duration unavailable")
-            
-            if txn2_duration is not None:
-                analysis_lines.append(f"- Transaction 2: {txn2_duration:.1f} seconds")
-            else:
-                analysis_lines.append(f"- Transaction 2: Duration unavailable")
-            
-            if txn1_duration is not None and txn2_duration is not None:
-                duration_diff = txn2_duration - txn1_duration
-                if duration_diff > 0:
-                    analysis_lines.append(f"- Transaction 2 took {duration_diff:.1f} seconds longer")
-                elif duration_diff < 0:
-                    analysis_lines.append(f"- Transaction 1 took {abs(duration_diff):.1f} seconds longer")
-                else:
-                    analysis_lines.append(f"- Both transactions took the same time")
-            
-            analysis_lines.append("")
-            analysis_lines.append("**Screen Flow Analysis:**")
-            analysis_lines.append(f"- Transaction 1 screens: {len(ui_flow_1)}")
-            analysis_lines.append(f"- Transaction 2 screens: {len(ui_flow_2)}")
-            
-            # Calculate screen overlap
-            if ui_flow_1[0] != "No screens in time range" and ui_flow_2[0] != "No screens in time range":
-                common_screens = set(ui_flow_1) & set(ui_flow_2)
-                unique_to_txn1 = set(ui_flow_1) - set(ui_flow_2)
-                unique_to_txn2 = set(ui_flow_2) - set(ui_flow_1)
-                
-                analysis_lines.append(f"- Common screens: {len(common_screens)}")
-                analysis_lines.append(f"- Unique to Transaction 1: {len(unique_to_txn1)}")
-                analysis_lines.append(f"- Unique to Transaction 2: {len(unique_to_txn2)}")
-            
-            analysis_lines.append("")
-            analysis_lines.append("**Source Files:**")
-            analysis_lines.append(f"- Transaction 1: {txn1_data.get('Source File', 'Unknown')}")
-            analysis_lines.append(f"- Transaction 2: {txn2_data.get('Source File', 'Unknown')}")
-            
-            if txn1_data.get('Source File') == txn2_data.get('Source File'):
-                analysis_lines.append(f"- Both from the same source file")
-            else:
-                analysis_lines.append(f"- From different source files")
-            
-            detailed_analysis = "\n".join(analysis_lines)
-            
-        except Exception as e:
-            print(f"⚠️ Error generating detailed analysis: {str(e)}")
-            detailed_analysis = "Detailed analysis unavailable"
         
         # Build response
         response_data = {
@@ -814,7 +859,8 @@ async def compare_transactions_flow(
             "txn2_matches": txn2_matches,
             "txn1_log": str(txn1_data.get('Transaction Log', '')),
             "txn2_log": str(txn2_data.get('Transaction Log', '')),
-            "detailed_analysis": detailed_analysis
+            "has_details_1": isinstance(ui_flow_1[0], dict) if (ui_flow_1 and len(ui_flow_1) > 0 and ui_flow_1[0] != "No screens in time range") else False,
+            "has_details_2": isinstance(ui_flow_2[0], dict) if (ui_flow_2 and len(ui_flow_2) > 0 and ui_flow_2[0] != "No screens in time range") else False
         }
         
         print(f"✅ Comparison complete - returning response")
@@ -829,25 +875,6 @@ async def compare_transactions_flow(
             status_code=500,
             detail=f"Comparison failed: {str(e)}"
         )
-
-@router.get("/current-selection")
-async def get_current_selection(session_id: str = Query(default=CURRENT_SESSION_ID)):
-    """
-    Get the currently selected file type(s)
-    """
-    if not session_service.session_exists(session_id):
-        raise HTTPException(
-            status_code=404,
-            detail="No session found"
-        )
-    
-    session = session_service.get_session(session_id)
-    selected_types = session.get('selected_types', [])
-    
-    if not selected_types:
-        return {"selected_types": [], "message": "No file types selected yet"}
-    
-    return {"selected_types": selected_types}
 
 @router.get("/debug-session")
 async def debug_session(session_id: str = Query(default=CURRENT_SESSION_ID)):
@@ -884,73 +911,41 @@ async def visualize_individual_transaction_flow(
     session_id: str = Query(default=CURRENT_SESSION_ID)
 ):
     """
-    Generate UI flow visualization for a single transaction
-    
-    Args:
-        request: Request body containing the transaction ID
-        session_id: Current session ID
-        
-    Returns:
-        Dictionary containing:
-        - transaction_data: Transaction details
-        - ui_flow: List of screen names
-        - has_flow: Boolean indicating if flow data exists
+    Generate UI flow visualization for a single transaction with durations
+    Shows unique screens with correct durations
     """
     try:
         transaction_id = request.transaction_id
         print(f"🔍 Visualizing flow for transaction: {transaction_id}")
         
-        # Check if session exists
         if not session_service.session_exists(session_id):
-            raise HTTPException(
-                status_code=404,
-                detail="No processed ZIP found. Please upload a ZIP file first."
-            )
+            raise HTTPException(status_code=404, detail="No processed ZIP found.")
         
-        # Get session data
         session_data = session_service.get_session(session_id)
-        
-        # Get transaction data from session
         transaction_data = session_data.get('transaction_data')
         if not transaction_data:
-            raise HTTPException(
-                status_code=400,
-                detail="No transaction data available. Please analyze customer journals first."
-            )
+            raise HTTPException(status_code=400, detail="No transaction data available.")
         
-        # Convert to DataFrame
         df = pd.DataFrame(transaction_data)
         
-        # Check if transaction exists
-        txn_exists = len(df[df['Transaction ID'] == transaction_id]) > 0
-        if not txn_exists:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Transaction {transaction_id} not found."
-            )
+        if transaction_id not in df['Transaction ID'].values:
+            raise HTTPException(status_code=404, detail=f"Transaction {transaction_id} not found.")
         
-        # Get transaction details
         txn_data = df[df['Transaction ID'] == transaction_id].iloc[0]
-        
         print(f"✓ Found transaction: {transaction_id}")
         
-        # Extract UI flow
         ui_flow_screens = ["No flow data"]
         has_flow = False
         
-        # Get file categories from session
         file_categories = session_data.get('file_categories', {})
         ui_journals = file_categories.get('ui_journals', [])
-        
         print(f"📂 Found {len(ui_journals)} UI journal file(s)")
         
         if ui_journals:
             try:
-                # Get the source file of the transaction to match with correct UI journal
                 txn_source_file = str(txn_data.get('Source File', ''))
                 print(f"📂 Transaction source file: {txn_source_file}")
                 
-                # Try to find matching UI journal first
                 matching_ui_journal = None
                 for ui_journal in ui_journals:
                     ui_journal_name = Path(ui_journal).stem
@@ -959,7 +954,6 @@ async def visualize_individual_transaction_flow(
                         print(f"✓ Found matching UI journal: {ui_journal_name}")
                         break
                 
-                # If no exact match, try all UI journals
                 ui_journals_to_check = [matching_ui_journal] if matching_ui_journal else ui_journals
                 
                 for ui_journal_path in ui_journals_to_check:
@@ -970,11 +964,9 @@ async def visualize_individual_transaction_flow(
                     if not ui_df.empty:
                         print(f"✓ Parsed {len(ui_df)} UI events")
                         
-                        # Create processor
                         processor = UIJournalProcessor(ui_journal_path)
                         processor.df = ui_df
                         
-                        # Convert times
                         def parse_time(time_str):
                             if pd.isna(time_str):
                                 return None
@@ -987,33 +979,166 @@ async def visualize_individual_transaction_flow(
                                 return time_str.time()
                             return time_str
                         
-                        # Extract flow
                         start_time = parse_time(txn_data['Start Time'])
                         end_time = parse_time(txn_data['End Time'])
                         
                         if start_time and end_time:
                             print(f"⏰ Time range: {start_time} to {end_time}")
-                            ui_flow_screens = processor.get_screen_flow(start_time, end_time)
                             
-                            if ui_flow_screens and len(ui_flow_screens) > 0:
-                                has_flow = True
-                                print(f"✓ Flow extracted: {len(ui_flow_screens)} screens from {Path(ui_journal_path).stem}")
-                                break  # Found the flow, stop checking other files
-                            else:
-                                print(f"⚠️ No screens found in time range for {Path(ui_journal_path).stem}")
+                            try:
+                                print("🔄 Extracting flow with durations...")
+                                
+                                # Get unique screen list (from processor)
+                                unique_screens = processor.get_screen_flow(start_time, end_time)
+                                
+                                if not unique_screens or len(unique_screens) == 0:
+                                    print("⚠️ No screens found in time range")
+                                    continue
+                                
+                                print(f"✓ Found {len(unique_screens)} unique screens")
+                                
+                                # Auto-detect columns
+                                time_col = None
+                                screen_col = None
+                                
+                                for col in ['Time', 'time', 'timestamp', 'Timestamp', 'TimeStamp']:
+                                    if col in ui_df.columns:
+                                        time_col = col
+                                        break
+                                
+                                for col in ['ScreenName', 'Screen', 'screen', 'screen_name']:
+                                    if col in ui_df.columns:
+                                        screen_col = col
+                                        break
+                                
+                                if not time_col or not screen_col:
+                                    raise Exception("Missing required columns")
+                                
+                                print(f"✓ Using columns: time='{time_col}', screen='{screen_col}'")
+                                
+                                # Ensure time column is in time format
+                                if ui_df[time_col].dtype == 'object' or str(ui_df[time_col].dtype).startswith('datetime'):
+                                    ui_df[time_col] = pd.to_datetime(ui_df[time_col], errors='coerce').dt.time
+                                
+                                # Get ALL screen events in chronological order
+                                ui_filtered = ui_df[
+                                    (ui_df[time_col] >= start_time) & 
+                                    (ui_df[time_col] <= end_time)
+                                ].copy()
+                                
+                                print(f"✓ Filtered {len(ui_filtered)} UI events in time range")
+                                
+                                if len(ui_filtered) > 0:
+                                    # Build complete sequence with all occurrences
+                                    all_events = []
+                                    for idx, row in ui_filtered.iterrows():
+                                        screen = str(row.get(screen_col, ''))
+                                        time_val = row.get(time_col)
+                                        
+                                        if screen and not pd.isna(screen):
+                                            all_events.append((screen, time_val))
+                                    
+                                    print(f"✓ Built sequence of {len(all_events)} screen events")
+                                    
+                                    # Now map each UNIQUE screen to its time range
+                                    # For each unique screen, find first and last occurrence
+                                    screen_info = {}
+                                    for screen_name in unique_screens:
+                                        # Find all occurrences of this screen in the sequence
+                                        occurrences = [(s, t) for s, t in all_events if s == screen_name]
+                                        
+                                        if occurrences:
+                                            first_time = occurrences[0][1]
+                                            last_time = occurrences[-1][1]
+                                            
+                                            screen_info[screen_name] = {
+                                                'first_time': first_time,
+                                                'last_time': last_time
+                                            }
+                                    
+                                    print(f"✓ Mapped {len(screen_info)} unique screens to time ranges")
+                                    
+                                    # Build detailed flow for unique screens
+                                    ui_flow_details = []
+                                    
+                                    for i, screen_name in enumerate(unique_screens):
+                                        info = screen_info.get(screen_name)
+                                        
+                                        if not info:
+                                            ui_flow_details.append({
+                                                'screen': screen_name,
+                                                'timestamp': '',
+                                                'duration': None
+                                            })
+                                            continue
+                                        
+                                        first_time = info['first_time']
+                                        
+                                        # Calculate duration: from first occurrence of THIS screen
+                                        # to first occurrence of NEXT screen
+                                        duration = None
+                                        if i < len(unique_screens) - 1:
+                                            next_screen = unique_screens[i + 1]
+                                            next_info = screen_info.get(next_screen)
+                                            
+                                            if next_info and next_info['first_time']:
+                                                try:
+                                                    from datetime import date
+                                                    dt1 = datetime.combine(date.today(), first_time)
+                                                    dt2 = datetime.combine(date.today(), next_info['first_time'])
+                                                    duration = (dt2 - dt1).total_seconds()
+                                                except Exception as e:
+                                                    duration = None
+                                        
+                                        ui_flow_details.append({
+                                            'screen': screen_name,
+                                            'timestamp': str(first_time) if first_time else '',
+                                            'duration': duration
+                                        })
+                                    
+                                    if ui_flow_details and len(ui_flow_details) > 0:
+                                        ui_flow_screens = ui_flow_details
+                                        has_flow = True
+                                        
+                                        with_duration = sum(1 for s in ui_flow_details if s['duration'] is not None)
+                                        print(f"✅ Created detailed flow: {len(ui_flow_details)} unique screens, {with_duration} with durations")
+                                        
+                                        # Debug: print all screens
+                                        for i, screen in enumerate(ui_flow_details):
+                                            dur_str = f"{screen['duration']:.1f}s" if screen['duration'] is not None else "N/A"
+                                            print(f"   {i+1}. {screen['screen']} @ {screen['timestamp']} ({dur_str})")
+                                        
+                                        break
+                                    else:
+                                        raise Exception("No screens after processing")
+                                else:
+                                    raise Exception("No filtered events")
+                                    
+                            except Exception as e:
+                                print(f"❌ Enhancement failed: {e}")
+                                import traceback
+                                traceback.print_exc()
+                                
+                                # Fallback
+                                try:
+                                    simple_screens = processor.get_screen_flow(start_time, end_time)
+                                    if simple_screens and len(simple_screens) > 0:
+                                        ui_flow_screens = simple_screens
+                                        has_flow = True
+                                        print(f"✅ Using fallback: {len(simple_screens)} screens")
+                                        break
+                                except:
+                                    continue
                         else:
                             print(f"⚠️ Invalid time range")
                     else:
-                        print(f"⚠️ Empty UI journal: {Path(ui_journal_path).stem}")
+                        print(f"⚠️ Empty UI journal")
                         
             except Exception as e:
-                print(f"❌ Error extracting UI flow: {str(e)}")
+                print(f"❌ Error: {str(e)}")
                 import traceback
                 traceback.print_exc()
-        else:
-            print("⚠️ No UI journal files available")
         
-        # Build response
         response_data = {
             "transaction_id": transaction_id,
             "transaction_type": str(txn_data.get('Transaction Type', 'Unknown')),
@@ -1021,13 +1146,18 @@ async def visualize_individual_transaction_flow(
             "end_time": str(txn_data.get('End Time', '')),
             "end_state": str(txn_data.get('End State', 'Unknown')),
             "transaction_log": str(txn_data.get('Transaction Log', '')),
-            "source_file": str(txn_data.get('Source File', 'Unknown')),  # Include source file
+            "source_file": str(txn_data.get('Source File', 'Unknown')),
             "ui_flow": ui_flow_screens,
             "has_flow": has_flow,
+            "has_details": isinstance(ui_flow_screens[0], dict) if (ui_flow_screens and len(ui_flow_screens) > 0 and ui_flow_screens[0] != "No flow data") else False,
             "num_events": len(ui_flow_screens) if ui_flow_screens else 0
         }
         
-        print(f"✅ Visualization data prepared")
+        print(f"✅ Response prepared:")
+        print(f"   - has_flow: {response_data['has_flow']}")
+        print(f"   - has_details: {response_data['has_details']}")
+        print(f"   - num_events: {response_data['num_events']}")
+        
         return response_data
         
     except HTTPException:
@@ -1035,10 +1165,7 @@ async def visualize_individual_transaction_flow(
     except Exception as e:
         import traceback
         traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Visualization failed: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Visualization failed: {str(e)}")
     
 @router.post("/generate-consolidated-flow")
 async def generate_consolidated_flow(
@@ -1469,3 +1596,519 @@ async def get_feedback(
             detail=f"Failed to retrieve feedback: {str(e)}"
         )
     
+class CounterDataRequest(BaseModel):
+    transaction_id: str
+    source_file: str
+
+def safe_decode(blob: bytes) -> str:
+    """Safely decode bytes to string"""
+    encs = ["utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "cp1252", "latin-1", "utf-8"]
+    for e in encs:
+        try:
+            return blob.decode(e)
+        except Exception:
+            continue
+    return blob.decode("utf-8", errors="replace")
+
+def parse_counter_data_from_trc(log_lines: list) -> list:
+    """
+    Parse counter data from TRC trace - simple space-separated format
+    No separator logic - just header detection and column alignment
+    """
+    counter_rows = []
+    
+    # Find header line
+    header_line = None
+    header_idx = -1
+    
+    for idx, line in enumerate(log_lines):
+        stripped = line.strip()
+        # Header line contains "No Ty ID" or "No Ty" and column names
+        if 'No' in stripped and 'Ty' in stripped and ('ID' in stripped or 'UnitName' in stripped):
+            header_line = line
+            header_idx = idx
+            # print(f"    Found header at line {idx}: {stripped[:80]}")
+            break
+    
+    if not header_line or header_idx == -1:
+        print("    ⚠️ No header line found")
+        return []
+    
+    # Parse data lines after header
+    for idx in range(header_idx + 1, len(log_lines)):
+        line = log_lines[idx]
+        
+        # DEBUG: Print each line being examined
+        # print(f"    Examining line {idx}: {line[:100]}")
+        
+        # Skip empty lines, CCdm lines, or separator lines
+        if (not line.strip() or 
+            'CCdm' in line or 
+            'usTellerID' in line or
+            line.strip().startswith('*')):
+            # print(f"      -> Skipped (empty/CCdm/separator)")
+            continue
+        
+        # Skip lines that start with whitespace (continuation lines)
+        if line.startswith(' ') or line.startswith('\t'):
+           #  print(f"      -> Skipped (continuation line)")
+            continue
+        
+        # Split by whitespace
+        parts = line.split()
+        
+        if len(parts) < 3:
+           # print(f"      -> Skipped (less than 3 parts)")
+            continue
+        
+        # Check if this is a valid counter data line
+        # Valid lines start with: No Ty ID (e.g., "03 04 95829")
+        # First field should be cassette number (01-50)
+        if not parts[0].isdigit() or int(parts[0]) > 50:
+           # print(f"      -> Skipped (invalid cassette number: {parts[0]})")
+            continue
+        
+        # Second field should be type number (01-20 typically)
+        if not parts[1].isdigit():
+           #  print(f"      -> Skipped (invalid type: {parts[1]})")
+            continue
+        
+        # Third field should be ID (numeric)
+        if not parts[2].isdigit():
+           #  print(f"      -> Skipped (invalid ID: {parts[2]})")
+            continue
+        
+        # print(f"      -> ✓ PARSING THIS LINE")
+        
+        try:
+            counter_data = {}
+            
+            # Parse fields: No Ty ID UnitName Cur Val Init Actn Rej Safe Min Max AppL DevL Status HWsens
+            counter_data['No'] = parts[0] if len(parts) > 0 else ''
+            counter_data['Ty'] = parts[1] if len(parts) > 1 else ''
+            counter_data['ID'] = parts[2] if len(parts) > 2 else ''
+            counter_data['UnitName'] = parts[3] if len(parts) > 3 else ''
+            
+            idx_part = 4
+            
+            # Check for currency
+            if idx_part < len(parts) and parts[idx_part] in ['EUR', 'INR', 'USD', 'GBP', 'JPY', 'CNY']:
+                counter_data['Cur'] = parts[idx_part]
+                idx_part += 1
+            else:
+                counter_data['Cur'] = ''
+            
+            # Parse numeric fields
+            field_mapping = [
+                ('Val', 'Val'),
+                ('Init', 'Ini'),
+                ('Actn', 'Cnt'),
+                ('Rej', 'RCnt'),
+                ('Safe', 'Safe'),
+                ('Min', 'Min'),
+                ('Max', 'Max')
+            ]
+            
+            for _, target_name in field_mapping:
+                if idx_part < len(parts):
+                    val = parts[idx_part]
+                    counter_data[target_name] = val
+                    idx_part += 1
+                else:
+                    counter_data[target_name] = ''
+            
+            counter_data['Disp'] = ''
+            counter_data['Pres'] = ''
+            counter_data['Retr'] = ''
+            
+            counter_data['A'] = parts[idx_part] if idx_part < len(parts) else ''
+            idx_part += 1
+            
+            if idx_part < len(parts):
+                idx_part += 1
+            
+            counter_data['St'] = parts[idx_part] if idx_part < len(parts) else ''
+            
+            counter_data['Record_Type'] = 'Logical'
+            counter_rows.append(counter_data)
+            
+            # print(f"      -> Added counter row: No={counter_data['No']}, UnitName={counter_data['UnitName']}")
+            
+        except Exception as e:
+           # print(f"      -> ⚠️ Error parsing: {str(e)[:50]}")
+            continue
+    
+   # print(f"    Total rows parsed: {len(counter_rows)}")
+    return counter_rows
+
+def parse_time_from_trc(time_str: str) -> datetime.time:
+    """Parse time from TRC trace format (HH:MM:SS or HH:MM:SS.MS)"""
+    try:
+        if '.' in time_str:
+            time_str = time_str.split('.')[0]
+        return datetime.strptime(time_str, '%H:%M:%S').time()
+    except Exception as e:
+        return None
+
+def extract_counter_blocks(trc_file_path: str) -> list:
+    """
+    Extract ALL counter blocks from TRC trace file
+    Returns list of dicts with 'time', 'timestamp', 'data'
+    CRITICAL: Each CCdmCashUnitInfoDataEx block is kept SEPARATE - NO MERGING
+    """
+    all_counter_blocks = []
+    
+    try:
+        with open(trc_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+            lines = content.split('\n')
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            
+            # Look for counter block marker
+            if 'CCdmCashUnitInfoDataEx' in line:
+                # Extract timestamp from THIS line or previous line
+                timestamp_str = None
+                block_time = None
+                
+                # Check current line for timestamp (format: XXXXX YYMMDD HH:MM:SS.ss)
+                ts_match = re.search(r'(\d+)\s+(\d{6})\s+(\d{2}:\d{2}:\d{2}\.\d{2})', line)
+                if not ts_match and i > 0:
+                    # Check previous line
+                    ts_match = re.search(r'(\d+)\s+(\d{6})\s+(\d{2}:\d{2}:\d{2}\.\d{2})', lines[i-1])
+                
+                if ts_match:
+                    timestamp_str = ts_match.group(3)  # HH:MM:SS.ss
+                    try:
+                        block_time = datetime.strptime(timestamp_str, '%H:%M:%S.%f').time()
+                    except:
+                        pass
+                
+                # Extract counter data lines for THIS block only
+                block_lines = []
+                i += 1
+                
+                # Collect lines until we hit another CCdmCashUnitInfoDataEx or empty line pattern
+                while i < len(lines):
+                    current_line = lines[i]
+                    
+                    # Stop if we hit another counter block
+                    if 'CCdmCashUnitInfoDataEx' in current_line:
+                        i -= 1  # Back up so we process this block next iteration
+                        break
+                    
+                    # Stop if we hit another timestamp line (new trace entry)
+                    if re.search(r'^\d+\s+\d{6}\s+\d{2}:\d{2}:\d{2}\.\d{2}', current_line):
+                        break
+                    
+                    # Add line to current block
+                    block_lines.append(current_line)
+                    i += 1
+                
+                # Parse the counter data from this block
+                counter_data = parse_counter_data_from_trc(block_lines)
+                
+                # CRITICAL: Add as NEW BLOCK - NEVER MERGE
+                if counter_data and timestamp_str:
+                    all_counter_blocks.append({
+                        'time': block_time,
+                        'timestamp': timestamp_str,
+                        'data': counter_data
+                    })
+            
+            i += 1
+    
+    except Exception as e:
+        print(f"Error extracting counter blocks: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return all_counter_blocks
+    
+@router.get("/get-matching-sources-for-trc")
+async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_SESSION_ID)):
+    """
+    Get list of source files that have matching TRC trace files
+    """
+    try:
+        if not session_service.session_exists(session_id):
+            raise HTTPException(status_code=404, detail="No session found")
+        
+        session_data = session_service.get_session(session_id)
+        
+        # Get all source files
+        all_sources = session_data.get('source_files', [])
+        
+        # Get TRC trace files
+        file_categories = session_data.get('file_categories', {})
+        trc_trace_files = file_categories.get('trc_trace', [])
+        
+        if not trc_trace_files:
+            return {"matching_sources": []}
+        
+        matching_sources = []
+        
+        for source in all_sources:
+            # Convert YYYYMMDD to YYMMDD
+            source_date_short = source[2:] if len(source) == 8 else source
+            
+            # Check if any TRC file contains this date
+            for trc_file in trc_trace_files:
+                try:
+                    with open(trc_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        first_lines = ''.join([f.readline() for _ in range(100)])
+                    
+                    if source_date_short in first_lines:
+                        matching_sources.append(source)
+                        break
+                except:
+                    continue
+        
+        print(f"✓ Found {len(matching_sources)} sources with matching TRC trace files")
+        
+        return {"matching_sources": matching_sources}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@router.post("/get-counter-data")
+async def get_counter_data(
+    request: CounterDataRequest,
+    session_id: str = Query(default=CURRENT_SESSION_ID)
+):
+    """
+    Get counter data from TRC Trace files mapped to transaction timestamp
+    """
+    try:
+        print(f"📊 Getting counter data for transaction: {request.transaction_id}")
+        
+        # Check session
+        if not session_service.session_exists(session_id):
+            raise HTTPException(
+                status_code=404,
+                detail="No session found"
+            )
+        
+        session_data = session_service.get_session(session_id)
+        
+        # Get transaction data
+        transaction_data = session_data.get('transaction_data')
+        if not transaction_data:
+            raise HTTPException(
+                status_code=400,
+                detail="No transaction data available"
+            )
+        
+        # Find the transaction
+        df = pd.DataFrame(transaction_data)
+        if request.transaction_id not in df['Transaction ID'].values:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Transaction {request.transaction_id} not found"
+            )
+        
+        txn_data = df[df['Transaction ID'] == request.transaction_id].iloc[0]
+        
+        # Get TRC trace files
+        file_categories = session_data.get('file_categories', {})
+        trc_trace_files = file_categories.get('trc_trace', [])
+        
+        if not trc_trace_files:
+            raise HTTPException(
+                status_code=400,
+                detail="No TRC trace files available"
+            )
+        
+        print(f"✓ Found {len(trc_trace_files)} TRC trace file(s)")
+        
+        # Parse transaction date from source file (format: YYYYMMDD -> YYMMDD)
+        txn_date_full = request.source_file  # e.g., "20250404"
+        txn_date_short = txn_date_full[2:] if len(txn_date_full) == 8 else txn_date_full  # "250404"
+        
+        print(f"✓ Transaction date: {txn_date_full} (searching for {txn_date_short})")
+        
+        # Find matching TRC trace file by parsing its content for the date
+        matching_trc = None
+        
+        for trc_file in trc_trace_files:
+            try:
+                # Read first few lines to check date
+                with open(trc_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    first_lines = ''.join([f.readline() for _ in range(100)])
+                    
+                # Check if this TRC file contains the transaction date (YYMMDD format)
+                if txn_date_short in first_lines:
+                    matching_trc = trc_file
+                    print(f"✓ Found matching TRC trace: {Path(trc_file).name}")
+                    break
+            except Exception as e:
+                print(f"⚠️ Error reading {trc_file}: {e}")
+                continue
+        
+        if not matching_trc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No matching TRC trace file found for date '{txn_date_full}' (searched for '{txn_date_short}')"
+            )
+        
+        print(f"✓ Found matching TRC trace: {matching_trc}")
+        
+        # Extract counter blocks from TRC trace file
+        txn_start_time = str(txn_data.get('Start Time', ''))
+        txn_end_time = str(txn_data.get('End Time', ''))
+
+        print(f"📊 Transaction times: {txn_start_time} to {txn_end_time}")
+
+        # OPTIMIZATION: Extract ALL counter blocks from TRC file ONCE
+        all_counter_blocks = extract_counter_blocks(matching_trc)  # ← CHANGED: Only 1 parameter
+
+        if not all_counter_blocks:
+            print("⚠️ No counter blocks found")
+            first_counter_data = []
+            last_counter_data = []
+            first_timestamp = txn_start_time
+            last_timestamp = txn_end_time
+        else:
+            # Simply use first and last blocks from the file
+            first_block = all_counter_blocks[0]
+            last_block = all_counter_blocks[-1]
+            
+            first_counter_data = first_block['data']
+            last_counter_data = last_block['data']
+            first_timestamp = first_block['timestamp']
+            last_timestamp = last_block['timestamp']
+            
+            print(f"✓ First counter: {len(first_counter_data)} rows at {first_timestamp}")
+            print(f"✓ Last counter: {len(last_counter_data)} rows at {last_timestamp}")
+        
+        # Get transaction date
+        txn_date = txn_date_full
+
+        # Format the date for display (YYYYMMDD -> "DD Month YYYY")
+        txn_date_formatted = txn_date
+        if len(txn_date) == 8:  # YYYYMMDD
+            try:
+                from datetime import datetime
+                dt = datetime.strptime(txn_date, '%Y%m%d')
+                txn_date_formatted = dt.strftime('%d %B %Y')
+            except:
+                txn_date_formatted = txn_date
+        
+# Build Counter per Transaction table
+        counter_per_transaction = []
+        
+        # Get all transactions from selected transaction to end
+        selected_txn_index = df[df['Transaction ID'] == request.transaction_id].index[0]
+        transactions_subset = df[df.index >= selected_txn_index]
+        
+        print(f"✓ Building counter per transaction table for {len(transactions_subset)} transactions")
+        
+        for _, txn_row in transactions_subset.iterrows():
+            txn_id = txn_row['Transaction ID']
+            txn_type = txn_row.get('Transaction Type', 'Unknown')
+            txn_state = txn_row.get('End State', 'Unknown')
+            txn_start_time = str(txn_row.get('Start Time', ''))
+            txn_end_time = str(txn_row.get('End Time', ''))
+            txn_log = str(txn_row.get('Transaction Log', ''))
+            
+            # Parse date and time
+            if ' ' in txn_start_time:
+                date_part = txn_start_time.split()[0] if len(txn_start_time.split()) > 0 else txn_date
+                time_part = txn_start_time.split()[1] if len(txn_start_time.split()) > 1 else txn_start_time
+            else:
+                date_part = txn_date
+                time_part = txn_start_time
+            
+            # Format date as "DD Month YYYY" (e.g., "29 May 2025")
+            date_formatted = date_part
+            if len(date_part) == 8:  # YYYYMMDD
+                try:
+                    from datetime import datetime
+                    dt = datetime.strptime(date_part, '%Y%m%d')
+                    date_formatted = dt.strftime('%d %B %Y')
+                except:
+                    date_formatted = date_part
+            
+            # Extract count information from transaction log
+            # Pattern: "Dispense info - 1 note(s) of 500,00 INR from cassette 5 (SLOT3)"
+            count_info = []
+            
+            for log_line in txn_log.split('\n'):
+                # Look for dispense info pattern
+                match = re.search(r'(\d+)\s+note\(s\)\s+of\s+([\d,\.]+)\s+([A-Z]{3})', log_line, re.IGNORECASE)
+                if match:
+                    note_count = match.group(1)
+                    amount = match.group(2).replace(',', '.')  # Handle comma as decimal separator
+                    currency = match.group(3)
+                    count_info.append(f"{currency} {amount} x{note_count}")
+            
+            count_display = ", ".join(count_info) if count_info else ""
+            
+            # Create transaction summary
+            if txn_state == 'Successful':
+                summary = f"Successful"
+            elif txn_state == 'Unsuccessful':
+                summary = f"Unsuccessful"
+            else:
+                summary = txn_state
+            
+            # Check for counters in transaction timeframe
+            counter_summary = ""
+            try:
+                txn_start_dt = parse_time_from_trc(time_part)
+                txn_end_dt = parse_time_from_trc(txn_end_time.split()[-1] if ' ' in txn_end_time else txn_end_time)
+                
+                if txn_start_dt and txn_end_dt and all_counter_blocks:
+                    for block in all_counter_blocks:
+                        block_time = block.get('time')
+                        if block_time and txn_start_dt <= block_time <= txn_end_dt:
+                            counter_summary = "View Counters"
+                            break
+            except Exception as e:
+                print(f"⚠️ Error checking counters for {txn_id}: {e}")
+            
+            counter_per_transaction.append({
+                'date_timestamp': f"{date_formatted} {time_part}",
+                'transaction_id': txn_id,
+                'transaction_type': txn_type,
+                'transaction_summary': summary,
+                'transaction_state': txn_state,
+                'count': count_display,
+                'counter_summary': counter_summary,
+                'comment': ''
+            })
+        
+        print(f"✓ Created counter per transaction table with {len(counter_per_transaction)} entries")
+        
+        response_data = {
+            "transaction_id": request.transaction_id,
+            "source_file": request.source_file,
+            "all_blocks": all_counter_blocks,
+            "first_counter": {
+                "date": txn_date_formatted,
+                "timestamp": first_timestamp,
+                "counter_data": first_counter_data
+            },
+            "last_counter": {
+                "date": txn_date_formatted,
+                "timestamp": last_timestamp,
+                "counter_data": last_counter_data
+            },
+            "counter_per_transaction": counter_per_transaction
+        }
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get counter data: {str(e)}"
+        )

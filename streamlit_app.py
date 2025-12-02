@@ -739,16 +739,12 @@ def render_transaction_stats():
                                         )
                                     
                                     with col3:
-                                        # Get unique source files from filtered data
-                                        unique_sources = sorted(txn_df['Source File'].unique().tolist())
-                                        if len(unique_sources) > 1:
-                                            filter_source = st.selectbox(
-                                                "Source File",
-                                                options=['All'] + unique_sources,
-                                                key="stats_source_filter"
-                                            )
-                                        else:
-                                            filter_source = 'All'
+                                        # Transaction ID search
+                                        search_txn_id = st.text_input(
+                                            "Transaction ID",
+                                            placeholder="Search ID...",
+                                            key="stats_txn_id_search"
+                                        )
                                     
                                     # Apply filters
                                     display_df = txn_df.copy()
@@ -758,13 +754,29 @@ def render_transaction_stats():
                                     
                                     if filter_state != 'All':
                                         display_df = display_df[display_df['State'] == filter_state]
-                                    
-                                    if filter_source != 'All':
-                                        display_df = display_df[display_df['Source File'] == filter_source]
+
+                                    if search_txn_id:
+                                        display_df = display_df[display_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
                                     
                                     # Display filtered count
                                     if len(display_df) != len(txn_df):
                                         st.info(f"Filtered to {len(display_df)} transaction(s)")
+                                    
+                            # Transaction ID search
+                                    st.markdown("---")
+                                    search_txn_id = st.text_input(
+                                        "🔍 Search Transaction ID",
+                                        placeholder="Enter Transaction ID to search...",
+                                        key="ui_flow_txn_search"
+                                    )
+                                    
+                                    if search_txn_id:
+                                        display_df = display_df[display_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
+                                        if len(display_df) == 0:
+                                            st.warning("⚠️ No transactions match the search term")
+                                            return
+                                        st.info(f"Search filtered to {len(display_df)} transaction(s)")
+                                    
                                     
                                     # Display the transactions table
                                     st.dataframe(
@@ -1108,7 +1120,7 @@ def render_registry_compare():
 
 def render_transaction_comparison():
     """
-    Render transaction comparison analysis with source file filter
+    Render transaction comparison analysis with source file filter and Transaction ID search
     """
     st.markdown("### ⚖️ Transaction Comparison Analysis")
     
@@ -1183,11 +1195,16 @@ def render_transaction_comparison():
         
         sources_data = sources_response.json()
         available_sources = sources_data.get('source_files', [])
+        all_txns_df = pd.DataFrame(sources_data.get('all_transactions', []))
         
         if not available_sources:
             st.warning("⚠️ No source files available. Please ensure customer journals were analyzed.")
             return
         
+        if not all_txns_df.empty:
+            sources_with_txns = all_txns_df['Source File'].unique().tolist()
+            available_sources = [src for src in available_sources if src in sources_with_txns]
+                        
         # Multi-select dropdown for source files
         selected_sources = st.multiselect(
             "Choose source files containing transactions to compare",
@@ -1271,7 +1288,51 @@ def render_transaction_comparison():
                         return
         
         # ========================================
-        # SECTION 3: Transaction Selection
+        # SECTION 3: Transaction ID Search
+        # ========================================
+        st.markdown("---")
+        st.markdown("#### 🔍 Search Transactions by ID")
+        
+        search_col1, search_col2 = st.columns(2)
+        
+        with search_col1:
+            search_txn1_id = st.text_input(
+                "Search Transaction 1 ID",
+                placeholder="Enter Transaction ID to search...",
+                key="compare_search_txn1",
+                help="Filter first transaction dropdown by ID"
+            )
+        
+        with search_col2:
+            search_txn2_id = st.text_input(
+                "Search Transaction 2 ID",
+                placeholder="Enter Transaction ID to search...",
+                key="compare_search_txn2",
+                help="Filter second transaction dropdown by ID"
+            )
+        
+        # Apply search filters
+        filtered_txn1_list = filtered_transactions.copy() if isinstance(filtered_transactions, list) else filtered_transactions
+        filtered_txn2_list = filtered_transactions.copy() if isinstance(filtered_transactions, list) else filtered_transactions
+        
+        if search_txn1_id:
+            filtered_txn1_list = [
+                txn for txn in filtered_txn1_list 
+                if search_txn1_id.lower() in str(txn.get('Transaction ID', '')).lower()
+            ]
+            if len(filtered_txn1_list) == 0:
+                st.warning("⚠️ No transactions match Transaction 1 search term")
+        
+        if search_txn2_id:
+            filtered_txn2_list = [
+                txn for txn in filtered_txn2_list 
+                if search_txn2_id.lower() in str(txn.get('Transaction ID', '')).lower()
+            ]
+            if len(filtered_txn2_list) == 0:
+                st.warning("⚠️ No transactions match Transaction 2 search term")
+        
+        # ========================================
+        # SECTION 4: Transaction Selection
         # ========================================
         st.markdown("---")
         st.markdown("#### 🔄 Select Two Transactions to Compare")
@@ -1281,10 +1342,16 @@ def render_transaction_comparison():
         # Transaction 1 selector
         with col1:
             st.markdown("##### First Transaction")
+            
+            # Use filtered list for Transaction 1
             txn1_options = [
                 f"{txn['Transaction ID']} - {txn['Transaction Type']} ({txn['End State']})"
-                for txn in filtered_transactions
+                for txn in filtered_txn1_list
             ]
+            
+            if not txn1_options:
+                st.warning("No transactions available after filtering")
+                return
             
             txn1_selection = st.selectbox(
                 "Transaction 1",
@@ -1296,7 +1363,7 @@ def render_transaction_comparison():
             if txn1_selection:
                 txn1_id = txn1_selection.split(' - ')[0]
                 txn1_data = next(
-                    (txn for txn in filtered_transactions if txn['Transaction ID'] == txn1_id),
+                    (txn for txn in filtered_txn1_list if txn['Transaction ID'] == txn1_id),
                     None
                 )
                 
@@ -1313,9 +1380,12 @@ def render_transaction_comparison():
         with col2:
             st.markdown("##### Second Transaction")
             
-            # Filter out the first selected transaction
+            # Use filtered list for Transaction 2 AND exclude selected txn1
             txn2_options = [
-                opt for opt in txn1_options
+                opt for opt in [
+                    f"{txn['Transaction ID']} - {txn['Transaction Type']} ({txn['End State']})"
+                    for txn in filtered_txn2_list
+                ]
                 if opt.split(' - ')[0] != (txn1_id if txn1_selection else None)
             ]
             
@@ -1333,7 +1403,7 @@ def render_transaction_comparison():
             if txn2_selection:
                 txn2_id = txn2_selection.split(' - ')[0]
                 txn2_data = next(
-                    (txn for txn in filtered_transactions if txn['Transaction ID'] == txn2_id),
+                    (txn for txn in filtered_txn2_list if txn['Transaction ID'] == txn2_id),
                     None
                 )
                 
@@ -1352,7 +1422,7 @@ def render_transaction_comparison():
             return
         
         # ========================================
-        # SECTION 4: Perform Comparison
+        # SECTION 5: Perform Comparison
         # ========================================
         st.markdown("---")
         st.markdown("#### 📊 Comparison Results")
@@ -1399,10 +1469,21 @@ def render_transaction_comparison():
                             st.caption(f"{len(txn1_flow)} screen(s)")
                             
                             for i, (screen, is_match) in enumerate(zip(txn1_flow, txn1_matches), 1):
-                                if is_match:
-                                    st.success(f"**{i}.** {screen}")
+                                # Handle both dict and string formats
+                                if isinstance(screen, dict):
+                                    screen_name = screen.get('screen', 'Unknown')
+                                    duration = screen.get('duration')
+                                    if duration is not None:
+                                        screen_display = f"{screen_name} ({duration:.1f}s)"
+                                    else:
+                                        screen_display = screen_name
                                 else:
-                                    st.warning(f"**{i}.** {screen}")
+                                    screen_display = str(screen)
+                                
+                                if is_match:
+                                    st.success(f"**{i}.** {screen_display}")
+                                else:
+                                    st.warning(f"**{i}.** {screen_display}")
                         
                         with flow_col2:
                             st.markdown(f"##### Transaction 2: {txn2_id}")
@@ -1410,10 +1491,21 @@ def render_transaction_comparison():
                             st.caption(f"{len(txn2_flow)} screen(s)")
                             
                             for i, (screen, is_match) in enumerate(zip(txn2_flow, txn2_matches), 1):
-                                if is_match:
-                                    st.success(f"**{i}.** {screen}")
+                                # Handle both dict and string formats
+                                if isinstance(screen, dict):
+                                    screen_name = screen.get('screen', 'Unknown')
+                                    duration = screen.get('duration')
+                                    if duration is not None:
+                                        screen_display = f"{screen_name} ({duration:.1f}s)"
+                                    else:
+                                        screen_display = screen_name
                                 else:
-                                    st.warning(f"**{i}.** {screen}")
+                                    screen_display = str(screen)
+                                
+                                if is_match:
+                                    st.success(f"**{i}.** {screen_display}")
+                                else:
+                                    st.warning(f"**{i}.** {screen_display}")
                         
                         # Legend
                         st.markdown("---")
@@ -1427,8 +1519,21 @@ def render_transaction_comparison():
                         st.markdown("---")
                         st.markdown("##### 🎯 Flow Similarity Metrics")
                         
-                        common_screens = len(set(txn1_flow) & set(txn2_flow))
-                        total_unique_screens = len(set(txn1_flow) | set(txn2_flow))
+                        # Extract screen names for comparison
+                        def get_screen_names(flow):
+                            screens = []
+                            for item in flow:
+                                if isinstance(item, dict):
+                                    screens.append(item.get('screen', str(item)))
+                                else:
+                                    screens.append(str(item))
+                            return screens
+                        
+                        txn1_screens = get_screen_names(txn1_flow)
+                        txn2_screens = get_screen_names(txn2_flow)
+                        
+                        common_screens = len(set(txn1_screens) & set(txn2_screens))
+                        total_unique_screens = len(set(txn1_screens) | set(txn2_screens))
                         similarity = (common_screens / total_unique_screens * 100) if total_unique_screens > 0 else 0
                         
                         metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
@@ -1512,8 +1617,21 @@ def render_transaction_comparison():
                         # Screen-by-screen comparison
                         st.markdown("##### 🔍 Screen-by-Screen Breakdown")
                         
+                        # Extract screen names for comparison
+                        def get_screen_names(flow):
+                            screens = []
+                            for item in flow:
+                                if isinstance(item, dict):
+                                    screens.append(item.get('screen', str(item)))
+                                else:
+                                    screens.append(str(item))
+                            return screens
+                        
+                        txn1_screens = get_screen_names(txn1_flow)
+                        txn2_screens = get_screen_names(txn2_flow)
+                        
                         # Unique to Transaction 1
-                        unique_to_txn1 = set(txn1_flow) - set(txn2_flow)
+                        unique_to_txn1 = set(txn1_screens) - set(txn2_screens)
                         if unique_to_txn1:
                             with st.expander(f"Screens unique to {txn1_id} ({len(unique_to_txn1)})"):
                                 for screen in sorted(unique_to_txn1):
@@ -1522,7 +1640,7 @@ def render_transaction_comparison():
                             st.info(f"No screens unique to {txn1_id}")
                         
                         # Unique to Transaction 2
-                        unique_to_txn2 = set(txn2_flow) - set(txn1_flow)
+                        unique_to_txn2 = set(txn2_screens) - set(txn1_screens)
                         if unique_to_txn2:
                             with st.expander(f"Screens unique to {txn2_id} ({len(unique_to_txn2)})"):
                                 for screen in sorted(unique_to_txn2):
@@ -1531,7 +1649,7 @@ def render_transaction_comparison():
                             st.info(f"No screens unique to {txn2_id}")
                         
                         # Common screens
-                        common = set(txn1_flow) & set(txn2_flow)
+                        common = set(txn1_screens) & set(txn2_screens)
                         if common:
                             with st.expander(f"Common screens ({len(common)})", expanded=True):
                                 for screen in sorted(common):
@@ -1732,6 +1850,21 @@ def render_ui_flow_individual():
         # Display filtered count
         if len(display_df) != len(txn_df):
             st.info(f"Filtered to {len(display_df)} transaction(s)")
+
+        # Transaction ID search
+        st.markdown("---")
+        search_txn_id = st.text_input(
+            "🔍 Search Transaction ID",
+            placeholder="Enter Transaction ID to search...",
+            key="ui_flow_txn_search"
+        )
+        
+        if search_txn_id:
+            display_df = display_df[display_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
+            if len(display_df) == 0:
+                st.warning("⚠️ No transactions match the search term")
+                return
+            st.info(f"Search filtered to {len(display_df)} transaction(s)")
         
         # Create options for selectbox
         transaction_options = []
@@ -1856,6 +1989,9 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
     if not flow_screens or flow_screens[0] == 'No flow data':
         return None
     
+    # Check if we have detailed flow data (dict) or simple flow (string)
+    has_details = isinstance(flow_screens[0], dict)
+    
     # Color based on transaction state
     if txn_state == 'Successful':
         box_color = '#2563eb'
@@ -1869,8 +2005,24 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
     max_screens = len(flow_screens)
     
     # Add boxes for each screen
-    for i, screen in enumerate(flow_screens):
+    for i, screen_data in enumerate(flow_screens):
         y_pos = max_screens - 1 - i
+        
+        # Extract screen name and duration
+        if has_details:
+            screen_name = screen_data.get('screen', 'Unknown')
+            timestamp = screen_data.get('timestamp', '')
+            duration = screen_data.get('duration')
+            
+            # Format the text with duration
+            if duration is not None:
+                text_label = f"{i+1}. {screen_name}\n({duration:.2f}s)"
+            else:
+                text_label = f"{i+1}. {screen_name}"
+        else:
+            # Old format: just screen name
+            screen_name = screen_data
+            text_label = f"{i+1}. {screen_name}"
         
         # Add box
         fig.add_shape(
@@ -1880,10 +2032,10 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
             line=dict(color=box_color, width=2)
         )
         
-        # Add text
+        # Add text with duration
         fig.add_annotation(
             x=0.5, y=y_pos + 0.35,
-            text=f"{i+1}. {screen}",
+            text=text_label,
             showarrow=False,
             font=dict(color="white", size=11, family="Arial"),
             xanchor="center", yanchor="middle"
@@ -2389,6 +2541,20 @@ def render_individual_transaction_analysis():
             st.warning("⚠️ No transactions match the selected filters")
             return
         
+        # Transaction ID search
+        st.markdown("---")
+        search_txn_id = st.text_input(
+            "🔍 Search Transaction ID",
+            placeholder="Enter Transaction ID to search...",
+            key="indiv_analysis_txn_search"
+        )
+        
+        if search_txn_id and not filtered_df.empty:
+            filtered_df = filtered_df[filtered_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
+            if filtered_df.empty:
+                st.warning("⚠️ No transactions match the search term")
+                return
+        
         # STEP 5: Transaction selection
         st.markdown("---")
         st.markdown("#### 📋 Select a Transaction to Analyze")
@@ -2758,6 +2924,329 @@ def render_individual_transaction_analysis():
         with st.expander("🐛 Debug Information"):
             st.code(traceback.format_exc())
 
+def render_counters_analysis():
+    """Render counters analysis functionality"""
+    st.markdown("### 📊 Counters Analysis")
+    
+    need_analysis = False
+    
+    try:
+        # Check if analysis is needed
+        try:
+            sources_response = requests.get(
+                f"{API_BASE_URL}/get-transactions-with-sources",
+                timeout=30
+            )
+            
+            if sources_response.status_code == 200:
+                sources_data = sources_response.json()
+                available_sources = sources_data.get('source_files', [])
+                
+                if not available_sources:
+                    need_analysis = True
+            else:
+                need_analysis = True
+                
+        except Exception as e:
+            need_analysis = True
+        
+        # Perform analysis if needed
+        if need_analysis:
+            st.info("📊 Customer journals need to be analyzed first...")
+            
+            with st.spinner("Analyzing customer journals..."):
+                try:
+                    analyze_response = requests.post(
+                        f"{API_BASE_URL}/analyze-customer-journals",
+                        timeout=120
+                    )
+                    
+                    if analyze_response.status_code == 200:
+                        st.success("✓ Analysis complete!")
+                        import time
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        error_detail = analyze_response.json().get('detail', 'Analysis failed')
+                        st.error(f"❌ {error_detail}")
+                        return
+                except Exception as e:
+                    st.error(f"❌ Error during analysis: {str(e)}")
+                    return
+        
+        # Get source files and transactions
+        sources_response = requests.get(
+            f"{API_BASE_URL}/get-transactions-with-sources",
+            timeout=30
+        )
+        
+        if sources_response.status_code != 200:
+            st.error("Failed to retrieve transaction data")
+            return
+        
+        sources_data = sources_response.json()
+        available_sources = sources_data.get('source_files', [])
+        all_transactions = sources_data.get('all_transactions', [])
+        
+        if not available_sources:
+            st.warning("⚠️ No source files available")
+            return
+        
+        if not all_transactions:
+            st.warning("⚠️ No transactions available")
+            return
+        
+        # Get TRC trace files to filter source files
+        try:
+            file_categories_response = requests.get(
+                f"{API_BASE_URL}/debug-session",
+                params={"session_id": "current_session"},
+                timeout=30
+            )
+            
+            if file_categories_response.status_code == 200:
+                debug_data = file_categories_response.json()
+                
+                # Get matching sources (check which sources have corresponding TRC trace files)
+                matching_sources_response = requests.get(
+                    f"{API_BASE_URL}/get-matching-sources-for-trc",
+                    timeout=30
+                )
+                
+                if matching_sources_response.status_code == 200:
+                    matching_data = matching_sources_response.json()
+                    filtered_sources = matching_data.get('matching_sources', [])
+                    
+                    if not filtered_sources:
+                        st.warning("⚠️ No source files found that match TRC trace files")
+                        return
+                    
+                    available_sources = filtered_sources
+                else:
+                    st.warning("⚠️ Could not filter sources by TRC trace files")
+        except Exception as e:
+            print(f"⚠️ Error filtering sources: {e}")
+        
+        # Source file selection with unique display
+        st.markdown("#### 📂 Select Source File")
+        
+        # Create unique identifiers for each source
+        txn_df = pd.DataFrame(all_transactions)
+        source_summary = {}
+        
+        for source in available_sources:
+            source_txns = txn_df[txn_df['Source File'] == source]
+            if len(source_txns) > 0:
+                txn_count = len(source_txns)
+                first_txn_time = source_txns.iloc[0]['Start Time']
+                display_name = f"{source} ({txn_count} transactions, starts at {first_txn_time})"
+                source_summary[display_name] = source
+        
+        if not source_summary:
+            st.warning("⚠️ No transactions found in matching sources")
+            return
+        
+        selected_display = st.selectbox(
+            "Choose source file",
+            options=list(source_summary.keys()),
+            key="counters_source_select"
+        )
+        
+        selected_source = source_summary[selected_display]
+        
+        # Filter transactions from this source
+        source_transactions = txn_df[txn_df['Source File'] == selected_source]
+        
+        if len(source_transactions) == 0:
+            st.warning(f"⚠️ No transactions found in source '{selected_source}'")
+            return
+        
+        # Transaction selection
+        st.markdown("---")
+        st.markdown("#### 🔍 Select Transaction")
+        
+        transaction_options = {}
+        for _, txn in source_transactions.iterrows():
+            txn_id = txn['Transaction ID']
+            display = f"{txn_id} | {txn['Transaction Type']} | {txn['End State']} | {txn['Start Time']}"
+            transaction_options[display] = txn_id
+        
+        selected_display = st.selectbox(
+            "Transaction",
+            options=list(transaction_options.keys()),
+            key="counters_txn_select"
+        )
+        
+        selected_txn_id = transaction_options[selected_display]
+        selected_txn_data = source_transactions[source_transactions['Transaction ID'] == selected_txn_id].iloc[0]
+        
+        st.markdown("---")
+        
+        # Call API to get counter data
+        with st.spinner("Loading counter data..."):
+            try:
+                response = requests.post(
+                    f"{API_BASE_URL}/get-counter-data",
+                    json={
+                        "transaction_id": selected_txn_id,
+                        "source_file": selected_source
+                    },
+                    timeout=60
+                )
+                
+                if response.status_code == 200:
+                    counter_data = response.json()
+                    
+                    # Display first counter
+                    from datetime import datetime
+                    
+                    first_date = counter_data['first_counter']['date']
+                    first_time = counter_data['first_counter']['timestamp']
+                    
+                    # Format date as "DD Month YYYY"
+                    try:
+                        if len(first_date) == 6:  # YYMMDD format
+                            dt = datetime.strptime(first_date, '%y%m%d')
+                            formatted_first_date = dt.strftime('%d %B %Y')
+                        else:
+                            formatted_first_date = first_date
+                    except:
+                        formatted_first_date = first_date
+                    
+                    st.markdown(f"#### 🕐 First Counter - {formatted_first_date} {first_time}")
+                    
+                    first_df = pd.DataFrame(counter_data['first_counter']['counter_data'])
+                    st.dataframe(first_df, use_container_width=True, hide_index=True)
+                    
+                    st.markdown("---")
+                    
+                    st.markdown("#### 📊 Counter per Transaction")
+                    
+                    if 'counter_per_transaction' in counter_data and counter_data['counter_per_transaction']:
+                        txn_table_data = []
+                        
+                        for txn_entry in counter_data['counter_per_transaction']:
+                            txn_table_data.append({
+                                'Date Timestamp': txn_entry['date_timestamp'],
+                                'Transaction ID': txn_entry['transaction_id'],
+                                'Transaction Type': txn_entry['transaction_type'],
+                                'Transaction Summary with Result': txn_entry['transaction_summary'],
+                                'Count': txn_entry['count'],
+                                'Counter Summary': txn_entry['counter_summary'],
+                                'Comment': txn_entry['comment']
+                            })
+                        
+                        txn_df = pd.DataFrame(txn_table_data)
+                        
+                        # Apply styling for success/failure
+                        def highlight_state(row):
+                            summary = str(row['Transaction Summary with Result']).strip().lower()
+                            if summary == 'successful':
+                                return ['color: green; font-weight: bold'] * len(row)
+                            elif summary == 'unsuccessful':
+                                return ['color: red; font-weight: bold'] * len(row)
+                            else:
+                                return [''] * len(row)
+                        
+                        styled_df = txn_df.style.apply(highlight_state, axis=1)
+                        
+                        # Add click handling for View Counters
+                        st.dataframe(
+                            styled_df, 
+                            use_container_width=True, 
+                            hide_index=True,
+                            on_select="rerun",
+                            selection_mode="single-row",
+                            key="counter_txn_table"
+                        )
+                        
+                        # Get selected row
+                        if st.session_state.get("counter_txn_table") and st.session_state["counter_txn_table"].get("selection"):
+                            selected_rows = st.session_state["counter_txn_table"]["selection"].get("rows", [])
+                            
+                            if selected_rows:
+                                selected_idx = selected_rows[0]
+                                selected_row = txn_df.iloc[selected_idx]
+                                
+                                if selected_row['Counter Summary'] == 'View Counters':
+                                    st.markdown("---")
+                                    st.markdown(f"#### 📊 Counters for Transaction: {selected_row['Transaction ID']}")
+                                    st.caption(f"Time: {selected_row['Date Timestamp']}")
+                                    
+                                    # Extract matching counters from all_blocks
+                                    logical_counters = []
+                                    
+                                    if 'all_blocks' in counter_data:
+                                        for block in counter_data['all_blocks']:
+                                            for counter in block.get('data', []):
+                                                if counter.get('Record_Type') == 'Logical':
+                                                    logical_counters.append({
+                                                        'Name (PName)': counter.get('UnitName', ''),
+                                                        'Value (Val)': counter.get('Val', ''),
+                                                        'Cur': counter.get('Cur', ''),
+                                                        'Ini': counter.get('Ini', ''),
+                                                        'Retr': counter.get('Retr', ''),
+                                                        'Disp': counter.get('Disp', ''),
+                                                        'RCNT (Reject Count)': counter.get('RCnt', ''),
+                                                        'Pres': counter.get('Pres', ''),
+                                                        'Cnt': counter.get('Cnt', ''),
+                                                        'Status (St)': counter.get('St', ''),
+                                                        'NrPCU': counter.get('No', '')
+                                                    })
+                                    
+                                    if logical_counters:
+                                        counter_display_df = pd.DataFrame(logical_counters)
+                                        st.dataframe(counter_display_df, use_container_width=True, hide_index=True)
+                                        
+                                        if st.button("✕ Close Counters View", key="close_counters"):
+                                            st.session_state["counter_txn_table"]["selection"]["rows"] = []
+                                            st.rerun()
+                                    else:
+                                        st.info("No logical counters found for this transaction timeframe")
+                    else:
+                        st.info("No transaction data available")
+                    
+                    st.markdown("---")
+                    
+                    # Display last counter
+                    last_date = counter_data['last_counter']['date']
+                    last_time = counter_data['last_counter']['timestamp']
+                    
+                    # Format date as "DD Month YYYY"
+                    try:
+                        if len(last_date) == 6:  # YYMMDD format
+                            dt = datetime.strptime(last_date, '%y%m%d')
+                            formatted_last_date = dt.strftime('%d %B %Y')
+                        else:
+                            formatted_last_date = last_date
+                    except:
+                        formatted_last_date = last_date
+                    
+                    st.markdown(f"#### 🕐 Last Counter - {formatted_last_date} {last_time}")
+                    
+                    last_df = pd.DataFrame(counter_data['last_counter']['counter_data'])
+                    st.dataframe(last_df, use_container_width=True, hide_index=True)
+                
+                else:
+                    error_detail = response.json().get('detail', 'Failed to get counter data')
+                    st.error(f"❌ {error_detail}")
+                    
+            except requests.exceptions.Timeout:
+                st.error("⏱️ Request timeout. Please try again.")
+            except requests.exceptions.ConnectionError:
+                st.error("🔌 Connection error. Ensure the API server is running.")
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+                import traceback
+                with st.expander("🐛 Debug Information"):
+                    st.code(traceback.format_exc())
+    
+    except Exception as e:
+        st.error(f"❌ Error: {str(e)}")
+        import traceback
+        with st.expander("🐛 Debug Information"):
+            st.code(traceback.format_exc())
+
 # ============================================
 # MAIN APPLICATION
 # ============================================
@@ -2887,6 +3376,12 @@ if st.session_state.zip_processed:
             "description": "Compare differences between two registry files",
             "status": "ready",
             "requires": ["registry_files"]
+        },
+        "counters_analysis": {
+            "name": "📊 Counters Analysis",
+            "description": "Analyze counter data from TRC Trace files mapped to transactions",
+            "status": "ready",
+            "requires": ["customer_journals", "trc_trace"]
         }
     }
 
@@ -2962,6 +3457,8 @@ if st.session_state.zip_processed:
                 render_ui_flow_individual()
             elif selected_func_id == "consolidated_flow":
                 render_consolidated_flow()
+            elif selected_func_id == "counters_analysis":
+                render_counters_analysis()
 
 st.markdown("---")
 st.markdown("""

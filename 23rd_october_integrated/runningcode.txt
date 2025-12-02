@@ -1,0 +1,27 @@
+Terminal 1:
+
+# Navigate to your DN folder
+cd /Users/yuvikaagrawal/Desktop/DN
+
+# Activate virtual environment
+source venv/bin/activate
+
+# Navigate to your fastapi folder
+cd /Users/yuvikaagrawal/Desktop/DN/ML_DN/23rd_october_integrated
+
+# Run FastAPI server
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+Terminal 2:
+
+# Navigate to your DN folder
+cd /Users/yuvikaagrawal/Desktop/DN
+
+# Activate virtual environment
+source venv/bin/activate
+
+# Navigate to your fastapi folder
+cd /Users/yuvikaagrawal/Desktop/DN/ML_DN/23rd_october_integrated
+
+# Run Streamlit
+streamlit run streamlit_app.py

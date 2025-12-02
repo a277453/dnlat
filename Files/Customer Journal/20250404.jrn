@@ -1,0 +1,622 @@
+ 16:19:36  3207  N200VFL0020250404000101161936
+ 16:19:36  3201 Transaction no. '' started
+ 16:19:36  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:19:40  3233 Pin entered
+ 16:19:44  3217 Function 'VCPPREFS/PR' selected
+ 16:20:16  60002 Account Number: '000' 'Checking'
+ 16:20:16  3260 Account selected (*1442) 'Checking' 
+ 16:20:38  3209 Card successfully presented to customer
+ 16:20:44  3220 Transaction cancelled. Customer timeout.
+ 16:20:44  3202 Transaction no. 'N200VFL0020250404000101161936' finished, state 'T', end-state'E'
+********************************************************
+ 16:20:55  3207  
+ 16:20:56  3201 Transaction no. 'N200VFL0020250404000201162056' started
+ 16:20:56  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:20:58  3233 Pin entered
+ 16:21:02  3217 Function 'COUT/GA' selected
+ 16:21:03  60002 Account Number: '000' 'Checking'
+ 16:21:13  60015 Alternate withdrawal amount entered : 500.00 INR 
+ 16:21:20  3209 Card successfully presented to customer
+ 16:21:26  3828 Dispense info - 1 note(s) of 500,00 INR from cassette 5 (SLOT3) 
+ 16:21:32  3317 Banknotes presented '500,00 INR', requested '500.00 INR', dispense state '4' 
+ 16:21:42  3220 Transaction cancelled. Customer timeout.
+ 16:21:42  3202 Transaction no. 'N200VFL0020250404000201162056' finished, state 'T', end-state'N'
+********************************************************
+ 16:21:46  3207  
+ 16:21:47  3201 Transaction no. 'N200VFL0020250404000301162147' started
+ 16:21:47  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:21:50  3233 Pin entered
+ 16:21:53  3217 Function 'COUT/GA' selected
+ 16:21:54  60002 Account Number: '000' 'Checking'
+ 16:22:11  60015 Alternate withdrawal amount entered : 400.00 INR 
+ 16:22:18  3209 Card successfully presented to customer
+ 16:22:24  3828 Dispense info - 2 note(s) of 100,00 INR from cassette 3 (SLOT1) 
+ 16:22:24  3828 Dispense info - 1 note(s) of 200,00 INR from cassette 4 (SLOT2) 
+ 16:22:31  3317 Banknotes presented '400,00 INR', requested '400.00 INR', dispense state '4' 
+ 16:22:41  3220 Transaction cancelled. Customer timeout.
+ 16:22:41  3202 Transaction no. 'N200VFL0020250404000301162147' finished, state 'T', end-state'N'
+********************************************************
+ 16:22:49  3207  
+ 16:22:49  3201 Transaction no. 'N200VFL0020250404000401162249' started
+ 16:22:49  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:22:52  3233 Pin entered
+ 16:22:55  3217 Function 'CIN/CI' selected
+ 16:23:01  60002 Account Number: '000' 'Checking'
+ 16:23:01  3260 Account selected (*1442) 'Checking' 
+ 16:23:09  3260 Account selected (*1442) 'Checking' 
+ 16:23:33 300013 Total Amount Deposited : 1,300.00 INR 
+ 16:23:33  300054 Identified notes:     1 x    500 INR 
+ 16:23:33  300065 Note type: ID:  8  Currency: INR  Denomination:    500
+ 16:23:33  300444 Cassette Info: Unit:  8  Type: 10  ID: 95810  Currency: INR  Denomination:    0  Init Count:    0  Act Count:    0
+ 16:23:41  3209 Card successfully presented to customer
+ 16:23:50  3220 Transaction cancelled. Customer timeout.
+ 16:23:50  3202 Transaction no. 'N200VFL0020250404000401162249' finished, state 'T', end-state'N'
+********************************************************
+ 16:24:14  3207  
+ 16:24:14  3201 Transaction no. 'N200VFL0020250404000501162414' started
+ 16:24:15  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:24:20  3233 Pin entered
+ 16:24:41  3217 Function 'COUT/GA' selected
+ 16:24:42  60002 Account Number: '000' 'Checking'
+ 16:25:08  3219 Customer cancels 
+ 16:25:10  3209 Card successfully presented to customer
+ 16:25:16  3220 Transaction cancelled. Customer timeout.
+ 16:25:16  3202 Transaction no. 'N200VFL0020250404000501162414' finished, state 'T', end-state'E'
+********************************************************
+ 16:25:47  3207  
+ 16:25:47  3201 Transaction no. 'N200VFL0020250404000601162547' started
+ 16:25:48  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:25:50  3233 Pin entered
+ 16:25:54  3217 Function 'VCPPREFS/PR' selected
+ 16:25:56  3219 Customer cancels 
+ 16:25:58  3209 Card successfully presented to customer
+ 16:26:04  3220 Transaction cancelled. Customer timeout.
+ 16:26:04  3202 Transaction no. 'N200VFL0020250404000601162547' finished, state 'T', end-state'E'
+********************************************************
+ 16:26:10  3207  
+ 16:26:10  3201 Transaction no. 'N200VFL0020250404000701162610' started
+ 16:26:11  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:26:13  3233 Pin entered
+ 16:26:19  3217 Function 'COUT/GA' selected
+ 16:26:19  60002 Account Number: '000' 'Checking'
+ 16:26:38  60015 Alternate withdrawal amount entered : 300.00 INR 
+ 16:26:44  3209 Card successfully presented to customer
+ 16:26:51  3828 Dispense info - 1 note(s) of 100,00 INR from cassette 3 (SLOT1) 
+ 16:26:51  3828 Dispense info - 1 note(s) of 200,00 INR from cassette 4 (SLOT2) 
+ 16:26:57  3317 Banknotes presented '300,00 INR', requested '300.00 INR', dispense state '4' 
+ 16:27:06  3220 Transaction cancelled. Customer timeout.
+ 16:27:06  3202 Transaction no. 'N200VFL0020250404000701162610' finished, state 'T', end-state'N'
+********************************************************
+ 16:27:16  3207  
+ 16:27:16  3201 Transaction no. 'N200VFL0020250404000801162716' started
+ 16:27:16  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:27:21  3233 Pin entered
+ 16:27:24  3217 Function 'COUT/GA' selected
+ 16:27:25  60002 Account Number: '000' 'Checking'
+ 16:27:31  3219 Customer cancels 
+ 16:27:33  3209 Card successfully presented to customer
+ 16:27:39  3220 Transaction cancelled. Customer timeout.
+ 16:27:39  3202 Transaction no. 'N200VFL0020250404000801162716' finished, state 'T', end-state'E'
+********************************************************
+ 16:27:46  3207  
+ 16:27:46  3201 Transaction no. 'N200VFL0020250404000901162746' started
+ 16:27:46  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:27:49  3233 Pin entered
+ 16:27:59  3217 Function 'COUT/GA' selected
+ 16:27:59  60002 Account Number: '000' 'Checking'
+ 16:28:21  3219 Customer cancels 
+ 16:28:23  3209 Card successfully presented to customer
+ 16:28:29  3220 Transaction cancelled. Customer timeout.
+ 16:28:29  3202 Transaction no. 'N200VFL0020250404000901162746' finished, state 'T', end-state'E'
+********************************************************
+ 16:28:39  3201 Transaction no. 'N200VFL0020250404001001162839' started
+ 16:28:42  3209 Card successfully presented to customer
+ 16:28:48  3220 Transaction cancelled. Customer timeout.
+ 16:28:48  3202 Transaction no. 'N200VFL0020250404001001162839' finished, state 'T', end-state'E'
+********************************************************
+ 16:28:56  3201 Transaction no. 'N200VFL0020250404001101162856' started
+ 16:29:00  3209 Card successfully presented to customer
+ 16:29:06  3220 Transaction cancelled. Customer timeout.
+ 16:29:07  3202 Transaction no. 'N200VFL0020250404001101162856' finished, state 'T', end-state'E'
+********************************************************
+ 16:31:57  3201 Transaction no. 'N200VFL0020250404001201163157' started
+ 16:32:00  3209 Card successfully presented to customer
+ 16:32:16  3220 Transaction cancelled. Customer timeout.
+ 16:32:16  3202 Transaction no. 'N200VFL0020250404001201163157' finished, state 'T', end-state'E'
+********************************************************
+ 16:32:39  3207  
+ 16:32:39  3201 Transaction no. 'N200VFL0020250404001301163239' started
+ 16:32:39  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:32:42  3233 Pin entered
+ 16:32:50  3217 Function 'VCPPREFS/PR' selected
+ 16:32:55  60002 Account Number: '000' 'Checking'
+ 16:32:55  3260 Account selected (*5042) 'Checking' 
+ 16:33:10  60002 Account Number: 'SAVINGS' 'Checking'
+ 16:33:10  3260 Account selected (*5042) 'Checking' 
+ 16:33:44  3209 Card successfully presented to customer
+ 16:33:50  3220 Transaction cancelled. Customer timeout.
+ 16:33:50  3202 Transaction no. 'N200VFL0020250404001301163239' finished, state 'T', end-state'E'
+********************************************************
+ 16:33:56  3207  
+ 16:33:56  3201 Transaction no. 'N200VFL0020250404001401163356' started
+ 16:33:57  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:33:59  3233 Pin entered
+ 16:34:04  3217 Function 'COUT/GA' selected
+ 16:34:04  60002 Account Number: '000' 'Checking'
+ 16:34:27  60015 Alternate withdrawal amount entered : 300.00 INR 
+ 16:34:33  3209 Card successfully presented to customer
+ 16:34:39  3828 Dispense info - 1 note(s) of 100,00 INR from cassette 3 (SLOT1) 
+ 16:34:39  3828 Dispense info - 1 note(s) of 200,00 INR from cassette 4 (SLOT2) 
+ 16:34:45  3317 Banknotes presented '300,00 INR', requested '300.00 INR', dispense state '4' 
+ 16:34:55  3220 Transaction cancelled. Customer timeout.
+ 16:34:55  3202 Transaction no. 'N200VFL0020250404001401163356' finished, state 'T', end-state'N'
+********************************************************
+ 16:35:01  3207  
+ 16:35:02  3201 Transaction no. 'N200VFL0020250404001501163502' started
+ 16:35:02  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:35:05  3233 Pin entered
+ 16:35:08  3217 Function 'COUT/GA' selected
+ 16:35:09  60002 Account Number: '000' 'Checking'
+ 16:35:20  60015 Alternate withdrawal amount entered : 600.00 INR 
+ 16:35:26  3209 Card successfully presented to customer
+ 16:35:32  3828 Dispense info - 1 note(s) of 100,00 INR from cassette 3 (SLOT1) 
+ 16:35:32  3828 Dispense info - 1 note(s) of 500,00 INR from cassette 6 (SLOT4) 
+ 16:35:38  3317 Banknotes presented '600,00 INR', requested '600.00 INR', dispense state '4' 
+ 16:35:47  3220 Transaction cancelled. Customer timeout.
+ 16:35:48  3202 Transaction no. 'N200VFL0020250404001501163502' finished, state 'T', end-state'N'
+********************************************************
+ 16:35:57  3207  
+ 16:35:57  3201 Transaction no. 'N200VFL0020250404001601163557' started
+ 16:35:57  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:36:00  3233 Pin entered
+ 16:36:04  3217 Function 'COUT/GA' selected
+ 16:36:05  60002 Account Number: '000' 'Checking'
+ 16:36:15  3219 Customer cancels 
+ 16:36:18  3209 Card successfully presented to customer
+ 16:36:24  3220 Transaction cancelled. Customer timeout.
+ 16:36:24  3202 Transaction no. 'N200VFL0020250404001601163557' finished, state 'T', end-state'E'
+********************************************************
+ 16:36:31  3207  
+ 16:36:31  3201 Transaction no. 'N200VFL0020250404001701163631' started
+ 16:36:32  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:36:35  3233 Pin entered
+ 16:36:40  3217 Function 'COUT/GA' selected
+ 16:36:41  60002 Account Number: '000' 'Checking'
+ 16:36:48  3219 Customer cancels 
+ 16:36:50  3209 Card successfully presented to customer
+ 16:36:56  3220 Transaction cancelled. Customer timeout.
+ 16:36:56  3202 Transaction no. 'N200VFL0020250404001701163631' finished, state 'T', end-state'E'
+********************************************************
+ 16:39:40  3201 Transaction no. 'N200VFL0020250404001801163940' started
+ 16:39:47  3209 Card successfully presented to customer
+ 16:39:53  3220 Transaction cancelled. Customer timeout.
+ 16:39:53  3202 Transaction no. 'N200VFL0020250404001801163940' finished, state 'T', end-state'E'
+********************************************************
+ 16:39:57  3201 Transaction no. 'N200VFL0020250404001901163957' started
+ 16:40:00  3209 Card successfully presented to customer
+ 16:40:06  3220 Transaction cancelled. Customer timeout.
+ 16:40:06  3202 Transaction no. 'N200VFL0020250404001901163957' finished, state 'T', end-state'E'
+********************************************************
+ 16:41:28  3201 Transaction no. 'N200VFL0020250404002001164128' started
+ 16:41:33  3209 Card successfully presented to customer
+ 16:41:39  3220 Transaction cancelled. Customer timeout.
+ 16:41:39  3202 Transaction no. 'N200VFL0020250404002001164128' finished, state 'T', end-state'E'
+********************************************************
+ 16:46:35  3201 Transaction no. 'N200VFL0020250404002101164635' started
+ 16:46:40  3209 Card successfully presented to customer
+ 16:46:45  3220 Transaction cancelled. Customer timeout.
+ 16:46:46  3202 Transaction no. 'N200VFL0020250404002101164635' finished, state 'T', end-state'E'
+********************************************************
+ 16:54:08  3201 Transaction no. 'N200VFL0020250404002201165408' started
+ 16:54:12  3209 Card successfully presented to customer
+ 16:54:18  3220 Transaction cancelled. Customer timeout.
+ 16:54:18  3202 Transaction no. 'N200VFL0020250404002201165408' finished, state 'T', end-state'E'
+********************************************************
+ 16:54:31  3207  
+ 16:54:31  3201 Transaction no. 'N200VFL0020250404002301165431' started
+ 16:54:31  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 16:54:33  3233 Pin entered
+ 16:54:41  3217 Function 'CIN/CI' selected
+ 16:54:43  60002 Account Number: '000' 'Checking'
+ 16:54:43  3260 Account selected (*1442) 'Checking' 
+ 16:54:47  3260 Account selected (*1442) 'Checking' 
+ 16:55:15 300013 Total Amount Deposited : 1,400.00 INR 
+ 16:55:15  300054 Identified notes:     1 x    500 INR 
+ 16:55:15  300065 Note type: ID:  8  Currency: INR  Denomination:    500
+ 16:55:15  300444 Cassette Info: Unit:  8  Type: 10  ID: 95810  Currency: INR  Denomination:    0  Init Count:    0  Act Count:    0
+ 16:55:27  3209 Card successfully presented to customer
+ 16:55:35  3220 Transaction cancelled. Customer timeout.
+ 16:55:35  3202 Transaction no. 'N200VFL0020250404002301165431' finished, state 'T', end-state'N'
+********************************************************
+ 16:58:46  3201 Transaction no. 'N200VFL0020250404002401165846' started
+ 16:58:50  3209 Card successfully presented to customer
+ 16:58:55  3220 Transaction cancelled. Customer timeout.
+ 16:58:56  3202 Transaction no. 'N200VFL0020250404002401165846' finished, state 'T', end-state'E'
+********************************************************
+ 16:59:40  3207  
+ 16:59:40  3201 Transaction no. 'N200VFL0020250404002501165940' started
+ 16:59:44  3209 Card successfully presented to customer
+ 16:59:50  3220 Transaction cancelled. Customer timeout.
+ 16:59:50  3202 Transaction no. 'N200VFL0020250404002501165940' finished, state 'T', end-state'E'
+********************************************************
+ 18:42:28  3207  
+ 18:42:28  3201 Transaction no. 'N200VFL0020250404002601184228' started
+ 18:42:31  3209 Card successfully presented to customer
+ 18:42:37  3220 Transaction cancelled. Customer timeout.
+ 18:42:37  3202 Transaction no. 'N200VFL0020250404002601184228' finished, state 'T', end-state'E'
+********************************************************
+ 18:47:40  3207  
+ 18:47:40  3201 Transaction no. 'N200VFL0020250404002701184740' started
+ 18:47:44  3209 Card successfully presented to customer
+ 18:47:50  3220 Transaction cancelled. Customer timeout.
+ 18:47:50  3202 Transaction no. 'N200VFL0020250404002701184740' finished, state 'T', end-state'E'
+********************************************************
+ 18:47:57  3207  
+ 18:47:57  3201 Transaction no. 'N200VFL0020250404002801184757' started
+ 18:48:01  3209 Card successfully presented to customer
+ 18:48:07  3220 Transaction cancelled. Customer timeout.
+ 18:48:07  3202 Transaction no. 'N200VFL0020250404002801184757' finished, state 'T', end-state'E'
+********************************************************
+ 18:51:57  3207  
+ 18:51:57  3201 Transaction no. 'N200VFL0020250404002901185157' started
+ 18:52:01  3209 Card successfully presented to customer
+ 18:52:07  3220 Transaction cancelled. Customer timeout.
+ 18:52:07  3202 Transaction no. 'N200VFL0020250404002901185157' finished, state 'T', end-state'E'
+********************************************************
+ 18:52:11  3207  
+ 18:52:11  3201 Transaction no. 'N200VFL0020250404003001185211' started
+ 18:52:11  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 18:52:14  3219 Customer cancels 
+ 18:52:17  3209 Card successfully presented to customer
+ 18:52:23  3220 Transaction cancelled. Customer timeout.
+ 18:52:23  3202 Transaction no. 'N200VFL0020250404003001185211' finished, state 'T', end-state'E'
+********************************************************
+ 18:52:53  3207  
+ 18:52:53  3201 Transaction no. 'N200VFL0020250404003101185253' started
+ 18:52:53  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 18:52:58  3233 Pin entered
+ 18:53:04  3217 Function 'COUT/GA' selected
+ 18:53:05  60002 Account Number: '000' 'Checking'
+ 18:53:53  3828 Dispense info -  note(s) of   from cassette  () 
+ 18:53:53  60015 Alternate withdrawal amount entered : 200.00 INR 
+ 18:54:01  3209 Card successfully presented to customer
+ 18:54:07  3828 Dispense info - 1 note(s) of 200,00 INR from cassette 4 (SLOT2) 
+ 18:54:14  3317 Banknotes presented '200,00 INR', requested '200.00 INR', dispense state '4' 
+ 18:54:24  3220 Transaction cancelled. Customer timeout.
+ 18:54:24  3202 Transaction no. 'N200VFL0020250404003101185253' finished, state 'T', end-state'N'
+********************************************************
+ 18:54:38  3207  
+ 18:54:39  3201 Transaction no. 'N200VFL0020250404003201185439' started
+ 18:54:39  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 18:54:42  3233 Pin entered
+ 18:54:48  3217 Function 'CIN/CI' selected
+ 18:54:55  60002 Account Number: '000' 'Checking'
+ 18:54:55  3260 Account selected (*1442) 'Checking' 
+ 18:54:59  3260 Account selected (*1442) 'Checking' 
+ 18:55:17 300013 Total Amount Deposited : 200.00 INR 
+ 18:55:17  300054 Identified notes:     1 x    200 INR 
+ 18:55:17  300065 Note type: ID:  7  Currency: INR  Denomination:    200
+ 18:55:17  300444 Cassette Info: Unit:  8  Type: 10  ID: 95810  Currency: INR  Denomination:    0  Init Count:    0  Act Count:    0
+ 18:56:01  3209 Card successfully presented to customer
+ 18:56:09  3220 Transaction cancelled. Customer timeout.
+ 18:56:09  3202 Transaction no. 'N200VFL0020250404003201185439' finished, state 'T', end-state'N'
+********************************************************
+ 19:10:12  3207  
+ 19:10:12  3201 Transaction no. 'N200VFL0020250404003301191012' started
+ 19:10:12  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 19:10:20  3233 Pin entered
+ 19:10:37  3217 Function 'VCPPREFS/PR' selected
+ 19:12:28  3219 Customer cancels 
+ 19:12:31  3209 Card successfully presented to customer
+ 19:12:37  3220 Transaction cancelled. Customer timeout.
+ 19:12:37  3202 Transaction no. 'N200VFL0020250404003301191012' finished, state 'T', end-state'E'
+********************************************************
+ 19:20:34  3207  
+ 19:20:34  3201 Transaction no. 'N200VFL0020250404003401192034' started
+ 19:20:34  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 19:20:37  3233 Pin entered
+ 19:20:41  3217 Function 'VCPPREFS/PR' selected
+ 19:20:55  60002 Account Number: '000' 'Checking'
+ 19:20:55  3260 Account selected (*5042) 'Checking' 
+ 19:21:00  3209 Card successfully presented to customer
+ 19:21:06  3220 Transaction cancelled. Customer timeout.
+ 19:21:06  3202 Transaction no. 'N200VFL0020250404003401192034' finished, state 'T', end-state'E'
+********************************************************
+ 19:21:11  3207  
+ 19:21:11  3201 Transaction no. 'N200VFL0020250404003501192111' started
+ 19:21:11  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 19:21:14  3233 Pin entered
+ 19:21:18  3217 Function 'COUT/GA' selected
+ 19:21:18  60002 Account Number: '000' 'Checking'
+ 19:21:31  60015 Alternate withdrawal amount entered : 300.00 INR 
+ 19:21:38  3209 Card successfully presented to customer
+ 19:21:45  3828 Dispense info - 1 note(s) of 100,00 INR from cassette 3 (SLOT1) 
+ 19:21:45  3828 Dispense info - 1 note(s) of 200,00 INR from cassette 4 (SLOT2) 
+ 19:21:51  3317 Banknotes presented '300,00 INR', requested '300.00 INR', dispense state '4' 
+ 19:22:00  3220 Transaction cancelled. Customer timeout.
+ 19:22:01  3202 Transaction no. 'N200VFL0020250404003501192111' finished, state 'T', end-state'N'
+********************************************************
+ 19:22:11  3207  
+ 19:22:11  3201 Transaction no. 'N200VFL0020250404003601192211' started
+ 19:22:11  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 19:22:16  3233 Pin entered
+ 19:22:20  3217 Function 'COUT/GA' selected
+ 19:22:21  60002 Account Number: '000' 'Checking'
+ 19:22:24  60014 Withdrawal amount selected : 300.00 INR 
+ 19:22:32  3209 Card successfully presented to customer
+ 19:22:38  3828 Dispense info - 1 note(s) of 100,00 INR from cassette 3 (SLOT1) 
+ 19:22:38  3828 Dispense info - 1 note(s) of 200,00 INR from cassette 4 (SLOT2) 
+ 19:22:45  3317 Banknotes presented '300,00 INR', requested '300.00 INR', dispense state '4' 
+ 19:22:55  3220 Transaction cancelled. Customer timeout.
+ 19:22:55  3202 Transaction no. 'N200VFL0020250404003601192211' finished, state 'T', end-state'N'
+********************************************************
+ 19:23:26  3207  
+ 19:23:27  3201 Transaction no. 'N200VFL0020250404003701192327' started
+ 19:23:27  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 19:23:30  3233 Pin entered
+ 19:23:37  3217 Function 'CIN/CI' selected
+ 19:23:40  60002 Account Number: '000' 'Checking'
+ 19:23:41  3260 Account selected (*1442) 'Checking' 
+ 19:24:00 300013 Total Amount Deposited : 2,300.00 INR 
+ 19:24:00  300054 Identified notes:     3 x    500 INR 
+ 19:24:00  300065 Note type: ID:  8  Currency: INR  Denomination:    500
+ 19:24:00  300444 Cassette Info: Unit:  8  Type: 10  ID: 95810  Currency: INR  Denomination:    0  Init Count:    0  Act Count:    0
+ 19:24:05  3209 Card successfully presented to customer
+ 19:24:20  3220 Transaction cancelled. Customer timeout.
+ 19:24:35  3220 Transaction cancelled. Customer timeout.
+ 19:24:35  3202 Transaction no. 'N200VFL0020250404003701192327' finished, state 'T', end-state'E'
+********************************************************
+ 19:25:18  3201 Transaction no. 'N200VFL0020250404003801192518' started
+ 19:25:22  3209 Card successfully presented to customer
+ 19:25:27  3220 Transaction cancelled. Customer timeout.
+ 19:25:28  3202 Transaction no. 'N200VFL0020250404003801192518' finished, state 'T', end-state'E'
+********************************************************
+ 19:32:52  3201 Transaction no. 'N200VFL0020250404003901193252' started
+ 19:32:56  3209 Card successfully presented to customer
+ 19:33:02  3220 Transaction cancelled. Customer timeout.
+ 19:33:02  3202 Transaction no. 'N200VFL0020250404003901193252' finished, state 'T', end-state'E'
+********************************************************
+ 19:57:31  3207  
+ 19:57:31  3201 Transaction no. 'N200VFL0020250404004001195731' started
+ 19:57:31  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 19:57:42  3233 Pin entered
+ 19:57:51  3217 Function 'CIN/CI' selected
+ 20:04:37  3207  
+ 20:04:37  3201 Transaction no. 'N200VFL0020250404004101200437' started
+ 20:04:37  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 20:04:42  3233 Pin entered
+ 20:04:53  3217 Function 'COUT/GA' selected
+ 20:22:01  3220 Transaction cancelled. Customer timeout.
+ 20:22:23  3207  
+ 20:22:24  3201 Transaction no. 'N200VFL0020250404004201202224' started
+ 20:22:24  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 20:22:27  3233 Pin entered
+ 20:22:31  3217 Function 'COUT/GA' selected
+ 20:29:06  3220 Transaction cancelled. Customer timeout.
+ 20:51:36  3207  
+ 20:51:36  3201 Transaction no. 'N200VFL0020250404004301205136' started
+ 20:51:36  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 20:51:39  3233 Pin entered
+ 20:51:44  3217 Function 'BAL/BI' selected
+ 20:51:46  60002 Account Number: '000' 'Checking'
+ 20:51:46  3260 Account selected (*5042) 'Checking' 
+ 20:51:52  60001 Available Balancee: '₨2,005.23'
+ 20:51:54  3209 Card successfully presented to customer
+ 20:52:00  3220 Transaction cancelled. Customer timeout.
+ 20:52:00  3202 Transaction no. 'N200VFL0020250404004301205136' finished, state 'T', end-state'N'
+********************************************************
+ 20:52:05  3207  
+ 20:52:05  3201 Transaction no. 'N200VFL0020250404004401205205' started
+ 20:52:06  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 20:52:08  3233 Pin entered
+ 20:52:12  3217 Function 'COUT/GA' selected
+ 20:52:13  60002 Account Number: '000' 'Checking'
+ 20:52:27  60015 Alternate withdrawal amount entered : 300.00 INR 
+ 20:52:34  3209 Card successfully presented to customer
+ 20:52:41  3828 Dispense info - 1 note(s) of 100,00 INR from cassette 3 (SLOT1) 
+ 20:52:41  3828 Dispense info - 1 note(s) of 200,00 INR from cassette 4 (SLOT2) 
+ 20:52:47  3317 Banknotes presented '300,00 INR', requested '300.00 INR', dispense state '4' 
+ 20:52:57  3220 Transaction cancelled. Customer timeout.
+ 20:52:57  3202 Transaction no. 'N200VFL0020250404004401205205' finished, state 'T', end-state'N'
+********************************************************
+ 20:53:02  3207  
+ 20:53:02  3201 Transaction no. 'N200VFL0020250404004501205302' started
+ 20:53:03  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 20:53:06  3233 Pin entered
+ 20:53:10  3217 Function 'CIN/CI' selected
+ 20:53:13  60002 Account Number: '000' 'Checking'
+ 20:53:13  3260 Account selected (*1442) 'Checking' 
+ 20:53:15  3260 Account selected (*1442) 'Checking' 
+ 20:53:31 300013 Total Amount Deposited : 700.00 INR 
+ 20:53:31  300054 Identified notes:     2 x    200 INR 
+ 20:53:31  300065 Note type: ID:  7  Currency: INR  Denomination:    200
+ 20:53:31  300444 Cassette Info: Unit:  8  Type: 10  ID: 95810  Currency: INR  Denomination:    0  Init Count:    0  Act Count:    0
+ 20:53:46  3209 Card successfully presented to customer
+ 20:53:54  3220 Transaction cancelled. Customer timeout.
+ 20:53:54  3202 Transaction no. 'N200VFL0020250404004501205302' finished, state 'T', end-state'N'
+********************************************************
+ 20:53:58  3201 Transaction no. 'N200VFL0020250404004601205358' started
+ 20:53:58  3206 Card sequence no. '', class '6', table '6', pan '490074XXXXXX1428=2512999XXXXXXXXXXXXX'
+ 20:54:01  3233 Pin entered
+ 20:54:20  3217 Function 'BAL/BI' selected
+ 20:54:23  3219 Customer cancels 
+ 20:54:26  3209 Card successfully presented to customer
+ 20:54:32  3220 Transaction cancelled. Customer timeout.
+ 20:54:32  3202 Transaction no. 'N200VFL0020250404004601205358' finished, state 'T', end-state'E'
+********************************************************
+ 20:54:40  3207  
+ 20:54:41  3201 Transaction no. 'N200VFL0020250404004701205441' started
+ 20:54:41  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 20:55:12  3220 Transaction cancelled. Customer timeout.
+ 20:55:43  3220 Transaction cancelled. Customer timeout.
+ 20:56:13  3220 Transaction cancelled. Customer timeout.
+ 20:56:15  3244 Card retained
+ 20:56:36  3220 Transaction cancelled. Customer timeout.
+ 20:56:37  3202 Transaction no. 'N200VFL0020250404004701205441' finished, state 'T', end-state'E'
+********************************************************
+ 20:59:15  3207  
+ 20:59:15  3201 Transaction no. 'N200VFL0020250404004801205915' started
+ 20:59:15  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 20:59:18  3233 Pin entered
+ 20:59:21  3217 Function 'COUT/GA' selected
+ 20:59:22  60002 Account Number: '000' 'Checking'
+ 20:59:31  60015 Alternate withdrawal amount entered : 600.00 INR 
+ 20:59:36  3209 Card successfully presented to customer
+ 20:59:42  3828 Dispense info - 1 note(s) of 100,00 INR from cassette 3 (SLOT1) 
+ 20:59:42  3828 Dispense info - 1 note(s) of 500,00 INR from cassette 5 (SLOT3) 
+ 20:59:48  3317 Banknotes presented '600,00 INR', requested '600.00 INR', dispense state '4' 
+ 20:59:58  3220 Transaction cancelled. Customer timeout.
+ 20:59:58  3202 Transaction no. 'N200VFL0020250404004801205915' finished, state 'T', end-state'N'
+********************************************************
+ 21:00:04  3207  
+ 21:00:04  3201 Transaction no. 'N200VFL0020250404004901210004' started
+ 21:00:05  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 21:00:07  3233 Pin entered
+ 21:00:13  3217 Function 'COUT/GA' selected
+ 21:00:14  60002 Account Number: '000' 'Checking'
+ 21:00:31  60015 Alternate withdrawal amount entered : 500.00 INR 
+ 21:00:37  3209 Card successfully presented to customer
+ 21:00:43  3828 Dispense info - 1 note(s) of 500,00 INR from cassette 6 (SLOT4) 
+ 21:00:50  3317 Banknotes presented '500,00 INR', requested '500.00 INR', dispense state '4' 
+ 21:00:58  3220 Transaction cancelled. Customer timeout.
+ 21:00:58  3202 Transaction no. 'N200VFL0020250404004901210004' finished, state 'T', end-state'N'
+********************************************************
+ 21:01:05  3207  
+ 21:01:05  3201 Transaction no. 'N200VFL0020250404005001210105' started
+ 21:01:05  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 21:01:08  3233 Pin entered
+ 21:01:11  3217 Function 'VCPPREFS/PR' selected
+ 21:01:14  60002 Account Number: '000' 'Checking'
+ 21:01:15  3260 Account selected (*5042) 'Checking' 
+ 21:01:20  3209 Card successfully presented to customer
+ 21:01:26  3220 Transaction cancelled. Customer timeout.
+ 21:01:26  3202 Transaction no. 'N200VFL0020250404005001210105' finished, state 'T', end-state'E'
+********************************************************
+ 21:01:35  3207  
+ 21:01:35  3201 Transaction no. 'N200VFL0020250404005101210135' started
+ 21:01:35  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 21:01:38  3233 Pin entered
+ 21:01:41  3217 Function 'VCPPREFS/PR' selected
+ 21:02:38  60002 Account Number: '000' 'Checking'
+ 21:02:38  3260 Account selected (*1442) 'Checking' 
+ 21:03:08  3209 Card successfully presented to customer
+ 21:03:21  3220 Transaction cancelled. Customer timeout.
+ 21:03:22  3202 Transaction no. 'N200VFL0020250404005101210135' finished, state 'T', end-state'E'
+********************************************************
+ 21:03:33  3207  
+ 21:03:33  3201 Transaction no. 'N200VFL0020250404005201210333' started
+ 21:03:33  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 21:03:37  3233 Pin entered
+ 21:03:41  3217 Function 'COUT/GA' selected
+ 21:03:41  60002 Account Number: '000' 'Checking'
+ 21:04:09  60015 Alternate withdrawal amount entered : 300.00 INR 
+ 21:04:15  3209 Card successfully presented to customer
+ 21:04:21  3828 Dispense info - 1 note(s) of 100,00 INR from cassette 3 (SLOT1) 
+ 21:04:21  3828 Dispense info - 1 note(s) of 200,00 INR from cassette 4 (SLOT2) 
+ 21:04:27  3317 Banknotes presented '300,00 INR', requested '300.00 INR', dispense state '4' 
+ 21:05:00  3220 Transaction cancelled. Customer timeout.
+ 21:05:00  3202 Transaction no. 'N200VFL0020250404005201210333' finished, state 'T', end-state'N'
+********************************************************
+ 21:05:12  3207  
+ 21:05:12  3201 Transaction no. 'N200VFL0020250404005301210512' started
+ 21:05:13  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 21:05:16  3233 Pin entered
+ 21:05:20  3217 Function 'COUT/GA' selected
+ 21:05:21  60002 Account Number: '000' 'Checking'
+ 21:06:10  3828 Dispense info -  note(s) of   from cassette  () 
+ 21:06:10  60015 Alternate withdrawal amount entered : 600.00 INR 
+ 21:06:16  3209 Card successfully presented to customer
+ 21:06:22  3828 Dispense info - 2 note(s) of 100,00 INR from cassette 3 (SLOT1) 
+ 21:06:22  3828 Dispense info - 2 note(s) of 200,00 INR from cassette 4 (SLOT2) 
+ 21:06:28  3317 Banknotes presented '600,00 INR', requested '600.00 INR', dispense state '4' 
+ 21:06:38  3220 Transaction cancelled. Customer timeout.
+ 21:06:39  3202 Transaction no. 'N200VFL0020250404005301210512' finished, state 'T', end-state'N'
+********************************************************
+ 21:06:46  3207  
+ 21:06:47  3201 Transaction no. 'N200VFL0020250404005401210647' started
+ 21:06:47  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 21:06:50  3233 Pin entered
+ 21:06:56  3217 Function 'VCPPREFS/PR' selected
+ 21:07:03  60002 Account Number: '000' 'Checking'
+ 21:07:03  3260 Account selected (*5042) 'Checking' 
+ 21:07:08  3209 Card successfully presented to customer
+ 21:07:14  3220 Transaction cancelled. Customer timeout.
+ 21:07:15  3202 Transaction no. 'N200VFL0020250404005401210647' finished, state 'T', end-state'E'
+********************************************************
+ 21:08:01  3207  
+ 21:08:02  3201 Transaction no. 'N200VFL0020250404005501210802' started
+ 21:08:02  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 21:08:04  3233 Pin entered
+ 21:08:08  3217 Function 'COUT/GA' selected
+ 21:08:09  60002 Account Number: '000' 'Checking'
+ 21:08:18  3219 Customer cancels 
+ 21:08:20  3209 Card successfully presented to customer
+ 21:08:26  3220 Transaction cancelled. Customer timeout.
+ 21:08:27  3202 Transaction no. 'N200VFL0020250404005501210802' finished, state 'T', end-state'E'
+********************************************************
+ 21:08:41  3207  
+ 21:08:41  3201 Transaction no. 'N200VFL0020250404005601210841' started
+ 21:08:41  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 21:08:45  3233 Pin entered
+ 21:08:51  3217 Function 'CIN/CI' selected
+ 21:09:01  60002 Account Number: '000' 'Checking'
+ 21:09:01  3260 Account selected (*1442) 'Checking' 
+ 21:09:04  3260 Account selected (*1442) 'Checking' 
+ 21:09:25 300013 Total Amount Deposited : 600.00 INR 
+ 21:09:25  300054 Identified notes:     1 x    500 INR 
+ 21:09:25  300065 Note type: ID:  8  Currency: INR  Denomination:    500
+ 21:09:25  300444 Cassette Info: Unit:  8  Type: 10  ID: 95810  Currency: INR  Denomination:    0  Init Count:    0  Act Count:    0
+ 21:09:37  3209 Card successfully presented to customer
+ 21:09:45  3220 Transaction cancelled. Customer timeout.
+ 21:09:45  3202 Transaction no. 'N200VFL0020250404005601210841' finished, state 'T', end-state'N'
+********************************************************
+ 21:09:55  3201 Transaction no. 'N200VFL0020250404005701210955' started
+ 21:09:56  3206 Card sequence no. '', class '6', table '6', pan '490074XXXXXX1428=2512999XXXXXXXXXXXXX'
+ 21:09:58  3233 Pin entered
+ 21:10:34  3217 Function 'BAL/BI' selected
+ 21:10:37  60002 Account Number: '000' 'Checking'
+ 21:10:37  3260 Account selected (*5042) 'Checking' 
+ 21:10:48  60001 Available Balancee: '₨2,005.23'
+ 21:10:51  3209 Card successfully presented to customer
+ 21:10:57  3220 Transaction cancelled. Customer timeout.
+ 21:10:57  3202 Transaction no. 'N200VFL0020250404005701210955' finished, state 'T', end-state'N'
+********************************************************
+ 21:11:37  3207  
+ 21:11:37  3201 Transaction no. 'N200VFL0020250404005801211137' started
+ 21:11:37  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 21:11:40  3233 Pin entered
+ 21:11:45  3217 Function 'CIN/CI' selected
+ 21:11:47  60002 Account Number: '000' 'Checking'
+ 21:11:48  3260 Account selected (*5042) 'Checking' 
+ 21:11:49  3260 Account selected (*5042) 'Checking' 
+ 21:12:10 300013 Total Amount Deposited : 600.00 INR 
+ 21:12:10  300054 Identified notes:     1 x    500 INR 
+ 21:12:10  300065 Note type: ID:  8  Currency: INR  Denomination:    500
+ 21:12:10  300444 Cassette Info: Unit:  8  Type: 10  ID: 95810  Currency: INR  Denomination:    0  Init Count:    0  Act Count:    0
+ 21:12:15  3209 Card successfully presented to customer
+ 21:12:30  3220 Transaction cancelled. Customer timeout.
+ 21:12:44  3220 Transaction cancelled. Customer timeout.
+ 21:12:45  3202 Transaction no. 'N200VFL0020250404005801211137' finished, state 'T', end-state'E'
+********************************************************
+ 21:13:01  3207  
+ 21:13:01  3201 Transaction no. 'N200VFL0020250404005901211301' started
+ 21:13:02  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 21:13:05  3219 Customer cancels 
+ 21:13:08  3209 Card successfully presented to customer
+ 21:13:14  3220 Transaction cancelled. Customer timeout.
+ 21:13:14  3202 Transaction no. 'N200VFL0020250404005901211301' finished, state 'T', end-state'E'
+********************************************************
+ 21:17:33  3207  
+ 21:17:33  3201 Transaction no. 'N200VFL0020250404006001211733' started
+ 21:17:34  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
+ 21:17:37  3233 Pin entered
+ 21:17:42  3217 Function 'COUT/GA' selected
+ 21:17:42  60002 Account Number: '000' 'Checking'
+ 21:17:45  60014 Withdrawal amount selected : 600.00 INR 
+ 21:17:50  3209 Card successfully presented to customer
+ 21:17:57  3828 Dispense info - 1 note(s) of 100,00 INR from cassette 3 (SLOT1) 
+ 21:17:57  3828 Dispense info - 1 note(s) of 500,00 INR from cassette 5 (SLOT3) 
+ 21:18:03  3317 Banknotes presented '600,00 INR', requested '600.00 INR', dispense state '4' 
+ 21:18:13  3220 Transaction cancelled. Customer timeout.
+ 21:18:13  3202 Transaction no. 'N200VFL0020250404006001211733' finished, state 'T', end-state'N'
+********************************************************

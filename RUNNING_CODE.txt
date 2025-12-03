@@ -1,0 +1,53 @@
+# How to Run the Project
+
+This guide provides detailed steps to set up and run the project, including the FastAPI backend and the Streamlit frontend.
+
+## Prerequisites
+
+- Python 3.8+
+- `pip` (Python package installer)
+- Git for cloning the repository.
+
+## Setup Instructions
+
+### 1. Clone the Repository
+
+First, clone the project repository to your local machine using Git:
+```bash
+git clone <your-repository-url>
+cd <project-directory>
+```
+
+### 2. Create and Activate a Virtual Environment
+
+It is highly recommended to use a virtual environment to manage project dependencies. Navigate to the project's root directory and run the following commands:
+
+```bash
+# Create the virtual environment
+python -m venv venv
+
+# Activate the virtual environment
+# On Windows
+venv\Scripts\activate
+
+# On macOS/Linux
+source venv/bin/activate
+```
+
+### c. Install Dependencies
+
+Install the required Python packages using the `requirements.txt` file:
+
+```bash
+pip install -r requirements.txt
+```
+
+## 3. Running the Application
+
+Once the setup is complete, you can start the FastAPI application using `uvicorn`. Run the following command from the project's root directory, where your `api` folder is located:
+
+```bash
+uvicorn api.main:app --reload
+```
+
+The application will be available at `http://127.0.0.1:8000`. The `--reload` flag enables hot-reloading, which automatically restarts the server when code changes are detected.

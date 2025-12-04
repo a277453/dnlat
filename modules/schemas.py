@@ -141,5 +141,4 @@ class FeedbackSubmission(BaseModel):
     original_llm_response: str
 
     class Config:
-        # Allow 'model_version' as a field name, resolving the Pydantic v2 warning.
         protected_namespaces = ()

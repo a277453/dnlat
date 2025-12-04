@@ -10,8 +10,12 @@ from typing import List, Dict, Tuple, Optional
 from .configManager import xml_to_dict
 import os
 from datetime import datetime, time
+from modules.logging_config import logger
 
 
+logger.info("Transaction Analyzer Service loaded")
+
+            
 class TransactionAnalyzerService:
     """
     Service for parsing and analyzing customer journal transactions
@@ -20,11 +24,12 @@ class TransactionAnalyzerService:
     def __init__(self):
         # Load configuration when service is initialized
         # Define paths relative to this file's location for portability
-        # Assumes config file is in a 'config' directory at the project root.
-        base_dir = Path(__file__).resolve().parent.parent # Moves to the project root
-        config_path_in_config_dir = base_dir / 'config' / 'dnLogAtConfig.xml'
-        config_path_in_root = base_dir / 'dnLogAtConfig.xml'
-        possible_paths = [config_path_in_config_dir, config_path_in_root]
+        base_dir = Path(__file__).resolve().parent
+        possible_paths = [
+            base_dir / 'config' / 'dnLogAtConfig.xml',        # e.g., project/modules/config/dnLogAtConfig.xml
+            base_dir.parent / 'config' / 'dnLogAtConfig.xml', # e.g., project/config/dnLogAtConfig.xml
+            base_dir / 'dnLogAtConfig.xml',                   # e.g., project/dnLogAtConfig.xml
+        ]
         
         config_path = None
         for path in possible_paths:
@@ -33,12 +38,17 @@ class TransactionAnalyzerService:
                 break
         
         if config_path is None:
+            logger.error(
+                "dnLogAtConfig.xml not found. Searched in:\n%s", 
+                "\n".join(map(str, possible_paths))
+            )
             raise FileNotFoundError(
                 "dnLogAtConfig.xml not found. Please ensure the config file exists. Searched in:\n" +
                 "\n".join(map(str, possible_paths))
             )
         
         self.real_dict, self.start_key, self.end_key, self.chain_key = xml_to_dict(config_path)
+        logger.info("Configuration loaded successfully from %s", config_path)
     
     # ============================================
     # NEW METHOD - ADDED TO FIX THE ERROR
@@ -53,7 +63,6 @@ class TransactionAnalyzerService:
         
         Args:
             customer_journal_files: List of paths to customer journal files
-            
         Returns:
             Dictionary containing:
             - transactions: List of transaction dictionaries
@@ -63,13 +72,13 @@ class TransactionAnalyzerService:
         
         for journal_file in customer_journal_files:
             try:
-                print(f"📖 Processing: {Path(journal_file).name}")
+                logger.info("Processing: %s", Path(journal_file).name)
                 
                 # Use the existing parse_customer_journal method
                 df = self.parse_customer_journal(journal_file)
                 
                 if df is None or df.empty:
-                    print(f"⚠️ No data from {Path(journal_file).name}")
+                    logger.warning("No data from %s", Path(journal_file).name)
                     continue
                 
                 # Convert DataFrame to list of dictionaries
@@ -83,25 +92,21 @@ class TransactionAnalyzerService:
                         elif hasattr(value, 'strftime'):
                             # Convert datetime/time to string
                             if hasattr(value, 'time'):
-                                # It's a datetime, extract just the time
                                 txn[key] = value.time().strftime('%H:%M:%S')
                             else:
-                                # It's already a time object
                                 txn[key] = value.strftime('%H:%M:%S')
                         elif isinstance(value, (pd.Timestamp, pd.Timedelta)):
                             txn[key] = str(value)
                 
                 all_transactions.extend(transactions)
-                print(f"✓ Found {len(transactions)} transactions in {Path(journal_file).name}")
+                logger.info("Found %d transactions in %s", len(transactions), Path(journal_file).name)
                 
             except Exception as e:
-                print(f"❌ Error processing {Path(journal_file).name}: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error("Error processing %s: %s", Path(journal_file).name, e, exc_info=True)
                 continue
         
         if not all_transactions:
-            print("⚠️ No transactions found in any journal files")
+            logger.warning("No transactions found in any journal files")
             return {
                 "transactions": [],
                 "summary": {
@@ -131,9 +136,8 @@ class TransactionAnalyzerService:
         if 'Transaction Type' in df_all.columns:
             summary["transaction_types"] = df_all['Transaction Type'].dropna().unique().tolist()
         
-        print(f"✅ Analysis complete: {summary['total_transactions']} total transactions")
-        print(f"   ✓ Successful: {summary['successful']}")
-        print(f"   ✗ Unsuccessful: {summary['unsuccessful']}")
+        logger.info("Analysis complete: %d total transactions", summary['total_transactions'])
+        logger.info("Successful: %d, Unsuccessful: %d", summary['successful'], summary['unsuccessful'])
         
         return {
             "transactions": all_transactions,
@@ -143,22 +147,25 @@ class TransactionAnalyzerService:
     # ============================================
     # ALL YOUR EXISTING METHODS BELOW (UNCHANGED)
     # ============================================
-        
+    
     def parse_customer_journal(self, file_path: str) -> pd.DataFrame:
         """
         Parse a customer journal file and return DataFrame with transactions
         
         Args:
             file_path: Path to the customer journal file
-            
         Returns:
             DataFrame with transaction data
         """
         dummy = Path(file_path).stem
         
-        with open(file_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except Exception as e:
+            logger.error("Failed to read file %s: %s", file_path, e, exc_info=True)
+            return pd.DataFrame()
+        
         # Parse all lines first
         parsed_rows = []
         for line in lines:
@@ -180,10 +187,12 @@ class TransactionAnalyzerService:
         
         transactions = self._find_all_transactions(df, dummy)
         
+        logger.debug("Parsed %d transactions from %s", len(transactions), file_path)
         return pd.DataFrame(transactions)
     
     def _find_all_transactions(self, df: pd.DataFrame, dummy: str) -> List[Dict]:
         """Find all individual transactions in the parsed data"""
+        logger.info("Finding all transactions in parsed data for %s", dummy)
         transactions_bounds = []
         i = 0
         
@@ -304,7 +313,8 @@ class TransactionAnalyzerService:
                     start_dt = datetime.combine(datetime.today(), start_time)
                     end_dt = datetime.combine(datetime.today(), end_time)
                     duration_seconds = (end_dt - start_dt).total_seconds()
-                except Exception:
+                except Exception as e:
+                    logger.warning("Duration calculation failed for txn %s: %s", txn_id, e)
                     duration_seconds = 0 # Keep it 0 if calculation fails
             
             transactions.append({
@@ -317,22 +327,27 @@ class TransactionAnalyzerService:
                 "Transaction Log": txn_log,
                 "Source_File": dummy
             })
-        
+        logger.debug("Found %d transactions for %s", len(transactions), dummy)
         return transactions
     
     def extract_actual_flows_from_txt_file(self, txt_file_path: str, selected_transaction_type: str) -> dict:
+        logger.info("Extracting actual flows from %s for type '%s'", txt_file_path, selected_transaction_type)
         """
         Extract the actual flows from the transaction_flows.txt file for a specific transaction type
         """
         flows = {}
         
         if not os.path.exists(txt_file_path):
+            logger.warning("File not found: %s", txt_file_path)
             return flows
         
-        with open(txt_file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
+        try:
+            with open(txt_file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception as e:
+            logger.error("Failed to read txt file %s: %s", txt_file_path, e, exc_info=True)
+            return flows
         
-        # Split by transaction blocks
         blocks = content.split('-' * 60)
         
         for block in blocks:
@@ -340,8 +355,6 @@ class TransactionAnalyzerService:
                 continue
             
             lines = block.strip().split('\n')
-            
-            # Extract transaction details
             txn_id = None
             txn_type = None
             flow_line = None
@@ -354,29 +367,20 @@ class TransactionAnalyzerService:
                 elif line.startswith('Flow:'):
                     flow_line = line.split(':', 1)[1].strip()
             
-            # Only store if type matches
             if txn_type == selected_transaction_type and txn_id and flow_line:
-                # Parse the flow line
                 if flow_line == 'No screen data available':
                     flows[txn_id] = {'screens': ['No flow data'], 'timestamp': ''}
                 else:
-                    # Parse screen[timestamp] format
                     screens = []
-                    parts = flow_line.split('--')
-                    
-                    for part in parts:
+                    for part in flow_line.split('--'):
                         part = part.strip()
                         if '[' in part and ']' in part:
-                            # Extract screen name (before the bracket)
                             screen = part.split('[')[0].strip()
                             if screen:
                                 screens.append(screen)
-                    
-                    if screens:
-                        flows[txn_id] = {'screens': screens, 'timestamp': ''}
-                    else:
-                        flows[txn_id] = {'screens': ['No flow data'], 'timestamp': ''}
+                    flows[txn_id] = {'screens': screens if screens else ['No flow data'], 'timestamp': ''}
         
+        logger.info("Extracted %d flows for type '%s'", len(flows), selected_transaction_type)
         return flows
     
     def create_side_by_side_flow_comparison_data(self, df: pd.DataFrame, txn1_id: str, txn2_id: str, txt_file_path: str) -> dict:
@@ -384,80 +388,15 @@ class TransactionAnalyzerService:
         Create side-by-side flow comparison data for two transactions
         Uses Longest Common Subsequence (LCS) algorithm to find sequential matches
         """
-        # Get transaction data
-        txn1_data = df[df['Transaction ID'] == txn1_id].iloc[0]
-        txn2_data = df[df['Transaction ID'] == txn2_id].iloc[0]
         
-        # Get the transaction type (should be same for both in comparison)
-        transaction_type = txn1_data['Transaction Type']
-        
-        # Extract flows from txt file
-        flows_data = self.extract_actual_flows_from_txt_file(txt_file_path, transaction_type)
-        
-        # Get flows for both transactions
-        txn1_flow = flows_data.get(txn1_id, {'screens': ['No flow data'], 'timestamp': ''})
-        txn2_flow = flows_data.get(txn2_id, {'screens': ['No flow data'], 'timestamp': ''})
-        
-        # Function to find the longest common subsequence (LCS) between two flows
-        def find_lcs_matches(flow1, flow2):
-            """Find screens that appear in the same relative order in both flows using LCS"""
-            m, n = len(flow1), len(flow2)
-            lcs_table = [[0] * (n + 1) for _ in range(m + 1)]
-            
-            # Fill LCS table
-            for i in range(1, m + 1):
-                for j in range(1, n + 1):
-                    if flow1[i-1] == flow2[j-1]:
-                        lcs_table[i][j] = lcs_table[i-1][j-1] + 1
-                    else:
-                        lcs_table[i][j] = max(lcs_table[i-1][j], lcs_table[i][j-1])
-            
-            # Backtrack to find which screens are part of LCS
-            matches1 = [False] * m
-            matches2 = [False] * n
-            
-            i, j = m, n
-            while i > 0 and j > 0:
-                if flow1[i-1] == flow2[j-1]:
-                    matches1[i-1] = True
-                    matches2[j-1] = True
-                    i -= 1
-                    j -= 1
-                elif lcs_table[i-1][j] > lcs_table[i][j-1]:
-                    i -= 1
-                else:
-                    j -= 1
-            
-            return matches1, matches2
-        
-        # Get sequential matches using LCS
-        txn1_matches, txn2_matches = find_lcs_matches(txn1_flow['screens'], txn2_flow['screens'])
-        
-        # Build comparison data
-        comparison_data = {
-            'txn1_id': txn1_id,
-            'txn2_id': txn2_id,
-            'txn1_type': str(txn1_data['Transaction Type']),
-            'txn2_type': str(txn2_data['Transaction Type']),
-            'txn1_state': str(txn1_data['End State']),
-            'txn2_state': str(txn2_data['End State']),
-            'txn1_flow': {
-                'screens': txn1_flow['screens'],
-                'matches': txn1_matches
-            },
-            'txn2_flow': {
-                'screens': txn2_flow['screens'],
-                'matches': txn2_matches
-            }
-        }
-        
-        return comparison_data
     
     def generate_data_based_comparison_analysis(self, txn1_data, txn2_data, txn1_id: str, txn2_id: str, flows_data: dict) -> str:
         """
         Generate detailed comparison analysis based purely on transaction data without AI/LLM
         Uses only absolute data from the transactions - no generated or assumed data
         """
+        logger.info(f"Starting comparison analysis for transactions {txn1_id} and {txn2_id}")
+
         analysis = []
         analysis.append("")
         
@@ -466,6 +405,8 @@ class TransactionAnalyzerService:
         txn2_flow = flows_data.get(txn2_id, {'screens': ['No flow data']})
         txn1_screens = txn1_flow['screens']
         txn2_screens = txn2_flow['screens']
+        logger.debug("Transaction 1 screens: %s", txn1_screens)
+        logger.debug("Transaction 2 screens: %s", txn2_screens)
         
         # Timing analysis with actual data only
         txn1_duration = None
@@ -479,6 +420,7 @@ class TransactionAnalyzerService:
                 
                 txn1_duration = (datetime.combine(datetime.today(), end_time) - 
                             datetime.combine(datetime.today(), start_time)).total_seconds()
+                logger.info("Transaction 1 duration calculated: %.1f seconds", txn1_duration)
                 
             if txn2_data['Start Time'] and txn2_data['End Time']:
                 # Handle both time objects and strings
@@ -487,9 +429,11 @@ class TransactionAnalyzerService:
                 
                 txn2_duration = (datetime.combine(datetime.today(), end_time) - 
                             datetime.combine(datetime.today(), start_time)).total_seconds()
+                logger.info("Transaction 2 duration calculated: %.1f seconds", txn2_duration)
             
             if txn1_duration is not None and txn2_duration is not None:
                 duration_diff = txn2_duration - txn1_duration
+                logger.debug("Duration difference: %.1f seconds", duration_diff)
                 analysis.append(f"**Actual Duration Data:**")
                 analysis.append(f"   - Transaction 1 Duration: {txn1_duration:.1f} seconds")
                 analysis.append(f"   - Transaction 2 Duration: {txn2_duration:.1f} seconds")
@@ -501,6 +445,7 @@ class TransactionAnalyzerService:
                 else:
                     analysis.append(f"   - Both transactions took exactly the same time")
             else:
+                logger.warning("One or both transaction durations could not be calculated")
                 analysis.append(f"**⏱️ Duration Data:**")
                 if txn1_duration is not None:
                     analysis.append(f"   - Transaction 1 Duration: {txn1_duration:.1f} seconds")
@@ -513,6 +458,7 @@ class TransactionAnalyzerService:
                     analysis.append(f"   - Transaction 2 Duration: Cannot calculate (missing start/end time)")
         
         except Exception as e:
+            logger.error("Error calculating durations: %s", e, exc_info=True)
             analysis.append(f"❌ Unable to calculate duration: {str(e)}")
         
         analysis.append("")
@@ -523,6 +469,8 @@ class TransactionAnalyzerService:
         analysis.append(f"   - Transaction 2 Steps: {len(txn2_screens)}")
         
         step_diff = len(txn2_screens) - len(txn1_screens)
+        logger.info("Step count comparison: txn1=%d, txn2=%d, diff=%d", len(txn1_screens), len(txn2_screens), step_diff)
+    
         if step_diff > 0:
             analysis.append(f"   - Transaction 2 has {step_diff} more steps")
         elif step_diff < 0:
@@ -540,6 +488,8 @@ class TransactionAnalyzerService:
             common_screens = txn1_set & txn2_set
             unique_txn1 = txn1_set - txn2_set
             unique_txn2 = txn2_set - txn1_set
+            logger.info("Screen comparison - common: %d, txn1 unique: %d, txn2 unique: %d",
+                    len(common_screens), len(unique_txn1), len(unique_txn2))
             
             analysis.append(f"**Screen Usage Comparison:**")
             analysis.append(f"   - Common Screens: {len(common_screens)}")
@@ -554,6 +504,7 @@ class TransactionAnalyzerService:
             total_unique_screens = len(txn1_set | txn2_set)
             analysis.append(f"   - Total Unique Screens Used: {total_unique_screens}")
         else:
+            logger.warning("Insufficient flow data to analyze screens")
             analysis.append(f"**Screen Usage:** Cannot analyze - insufficient flow data")
         
         analysis.append("")
@@ -568,8 +519,11 @@ class TransactionAnalyzerService:
         same_source = False
         if 'Source_File' in txn1_data.index and 'Source_File' in txn2_data.index:
             same_source = txn1_data['Source_File'] == txn2_data['Source_File']
+            logger.info("Transactions come from the same source file: %s", same_source)
             analysis.append(f"   - Same Source File: {'Yes' if same_source else 'No'}")
         
         analysis.append("")
+        
+        logger.info("Comparison analysis completed for %s vs %s", txn1_id, txn2_id)
         
         return "\n".join(analysis)

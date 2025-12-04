@@ -2,19 +2,58 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from api import routes
 from pathlib import Path
+from modules.logging_config import logger
+from fastapi.logger import logger
+from contextlib import asynccontextmanager  # <- Added for lifespan
 
 # ======================================================================
-# TEMPORARY DIAGNOSTIC CODE - This will force a startup error if the
-# xml_parser_logic.py file has a problem.
-print("--- Attempting to import xml_parser_logic to diagnose startup issue ---")
+# TEMPORARY DIAGNOSTIC CODE
+logger.info("--- Attempting to import xml_parser_logic to diagnose startup issue ---")
 from modules import xml_parser_logic
-print("--- Successfully imported xml_parser_logic ---")
+logger.info("--- Successfully imported xml_parser_logic ---")
 # ======================================================================
 
+# Global variable to store the processed files directory
+PROCESSED_FILES_DIR = None
+
+def set_processed_files_dir(directory: str):
+    global PROCESSED_FILES_DIR
+    PROCESSED_FILES_DIR = directory
+    logger.info(f"✓ Processed files directory set to: {directory}")
+
+def get_processed_files_dir() -> str:
+    return PROCESSED_FILES_DIR
+
+# ============================================
+# LIFESPAN HANDLER
+# ============================================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Actions to perform on startup"""
+    logger.info("=" * 60)
+    logger.info("DN Diagnostics and Analysis Platform API")
+    logger.info("Version: 1.0.0")
+    logger.info("=" * 60)
+    logger.info("✓ API started successfully")
+    logger.info("✓ Registry endpoints enabled")
+    logger.info("✓ Ready to accept requests")
+    logger.info("=" * 60)
+
+    yield  # Application runs after this
+
+    # Actions to perform on shutdown
+    logger.info("=" * 60)
+    logger.info("API shutting down...")
+    logger.info("=" * 60)
+
+# ============================================
+# CREATE APP
+# ============================================
 app = FastAPI(
     title="DN Diagnostics and Analysis Platform API",
     description="API for processing and analyzing Diebold Nixdorf (DN) log files, transaction journals, and registry data.",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan  # <- Use lifespan instead of on_event
 )
 
 # CORS middleware
@@ -26,25 +65,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global variable to store the processed files directory
-PROCESSED_FILES_DIR = None
-
-def set_processed_files_dir(directory: str):
-    """
-    Set the directory where processed files are stored.
-    This should be called from the ZIP processing endpoint.
-    """
-    global PROCESSED_FILES_DIR
-    PROCESSED_FILES_DIR = directory
-    print(f"✓ Processed files directory set to: {directory}")
-
-def get_processed_files_dir() -> str:
-    """Get the current processed files directory"""
-    return PROCESSED_FILES_DIR
-
 # Include existing routers
 app.include_router(routes.router, prefix="/api/v1", tags=["analysis-engine"])
-
 # ============================================
 # REGISTRY FILE ENDPOINTS
 # ============================================
@@ -233,35 +255,7 @@ async def health_check():
         "processed_dir": PROCESSED_FILES_DIR if PROCESSED_FILES_DIR else "Not set"
     }
 
-
-# ============================================
-# STARTUP EVENT
-# ============================================
-
-@app.on_event("startup")
-async def startup_event():
-    """Actions to perform on application startup"""
-    print("=" * 60)
-    print("DN Diagnostics and Analysis Platform API")
-    print("Version: 1.0.0")
-    print("=" * 60)
-    print("✓ API started successfully")
-    print("✓ Registry endpoints enabled")
-    print("✓ Ready to accept requests")
-    print("=" * 60)
-
-
-# ============================================
-# SHUTDOWN EVENT
-# ============================================
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Actions to perform on application shutdown"""
-    print("=" * 60)
-    print("API shutting down...")
-    print("=" * 60)
-
-
 # Export the set_processed_files_dir function so routes.py can use it
 __all__ = ['app', 'set_processed_files_dir', 'get_processed_files_dir']
+
+

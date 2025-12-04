@@ -1,7 +1,11 @@
 from pathlib import Path
 from typing import Dict, List
 from .schemas import FileCategorizationResponse, CategoryCount
+from modules.logging_config import logger
+import logging
 
+
+logger.info("Starting processing_service")
 
 class ProcessingService:
     """
@@ -15,17 +19,13 @@ class ProcessingService:
     ) -> FileCategorizationResponse:
         """
         Prepare final response with categorized files.
-        
-        Args:
-            file_categories: Dictionary of categorized files
-            extract_path: Path where files were extracted
-            
-        Returns:
-            FileCategorizationResponse object
         """
+        logger.info("Preparing final file categorization response.")
+
         # Calculate totals
         total_files = sum(len(files) for files in file_categories.values())
-        
+        logger.debug(f"Total files counted: {total_files}")
+
         # Create category counts
         category_counts = {
             category: CategoryCount(
@@ -34,9 +34,13 @@ class ProcessingService:
             )
             for category, files in file_categories.items()
         }
-        
-        return FileCategorizationResponse(
+        logger.debug(f"Category counts prepared: {list(category_counts.keys())}")
+
+        response = FileCategorizationResponse(
             total_files=total_files,
             extraction_path=str(extract_path),
             categories=category_counts
         )
+
+        logger.info("File categorization response prepared successfully.")
+        return response

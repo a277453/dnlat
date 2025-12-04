@@ -7,8 +7,10 @@ import io
 import zipfile
 import re
 import plotly.express as px
-import os  # Add this if not already present
-from datetime import datetime  # Add this if not already present
+import os  
+from datetime import datetime  
+from fastapi.logger import logger
+
 
 def create_comparison_flow_plotly(txn1_id, txn1_state, txn1_flow_screens, txn1_matches,
                                    txn2_id, txn2_state, txn2_flow_screens, txn2_matches):
@@ -3074,7 +3076,7 @@ uploaded_file = st.file_uploader(
     help="Upload a ZIP file containing diagnostic files (max 500 MB)",
     key="zip_uploader"
 )
-
+print()
 # Only process if file exists AND it's different from the last processed file
 if uploaded_file is not None:
     # Check if this is a new file or the same file we just processed

@@ -2,6 +2,13 @@ import struct
 import zlib
 import os
 from typing import Dict, List
+from modules.logging_config import logger
+import logging
+
+
+logger.info("zip_extractor initialized")
+
+
 
 CD_SIG = b'PK\x01\x02'
 LH_SIG = b'PK\x03\x04'
@@ -10,10 +17,14 @@ LH_SIG = b'PK\x03\x04'
 def _decode_bytes_to_text(b: bytes) -> str:
 	"""Decodes bytes to text, trying utf-8 then latin1."""
 	try:
-		return b.decode('utf-8')
+		text = b.decode('utf-8')
+		logger.debug("Decoded bytes using utf-8")
+		return text
 	except Exception:
-		return b.decode('latin1', errors='replace')
-
+		text = b.decode('latin1', errors='replace')
+		logger.debug("Decoded bytes using latin1 with replacement")
+		return text
+	
 
 def extract_from_zip_bytes(zip_bytes: bytes, logs: List[str], target_prefixes=('jdd', 'x3')) -> Dict[str, str]:
 	"""
@@ -31,6 +42,8 @@ def extract_from_zip_bytes(zip_bytes: bytes, logs: List[str], target_prefixes=('
 	pos = 0
 	
 	logs.append(f"Starting extraction. ZIP size: {size} bytes")
+	logger.info(f"Starting extraction. ZIP size: {size} bytes")
+
 	entry_count = 0
 
 	cd_struct_fmt = '<IHHHHHHIIIHHHHHII'
@@ -41,8 +54,10 @@ def extract_from_zip_bytes(zip_bytes: bytes, logs: List[str], target_prefixes=('
 		if pos == -1:
 			break
 		try:
+			logger.debug(f"reading Central Dir entry at position {pos}")
 			if pos + cd_struct_size > size:
 				logs.append(f"Central dir header truncated at {pos}.")
+				logger.warning(f"Central dir header truncated at {pos}.")
 				break
 
 			header = struct.unpack_from(cd_struct_fmt, data, pos)
@@ -52,8 +67,10 @@ def extract_from_zip_bytes(zip_bytes: bytes, logs: List[str], target_prefixes=('
 
 			fname_start = pos + cd_struct_size
 			fname_end = fname_start + fname_len
+
 			if fname_end > size:
 				logs.append(f"CD filename truncated at {pos}.")
+				logger.warning(f"CD filename truncated at {pos}.")
 				pos += 4
 				continue
 
@@ -84,14 +101,17 @@ def extract_from_zip_bytes(zip_bytes: bytes, logs: List[str], target_prefixes=('
 				lh_off = local_header_offset
 				if lh_off + 30 > size:
 					logs.append(f"Local header truncated at {lh_off} for {fname}; skipping.")
+					logger.warning(f"Local header truncated at {lh_off} for {fname}; skipping.")	
 					pos += 4
 					continue
 
 				if data[lh_off:lh_off + 4] != LH_SIG:
 					search_from = max(0, lh_off - 8)
 					found_lh = data.find(LH_SIG, search_from, min(size, lh_off + 64))
+
 					if found_lh == -1:
 						logs.append(f"No local header found near {lh_off} for {fname}; skipping.")
+						logger.warning(f"No local header found near {lh_off} for {fname}; skipping.")
 						pos += 4
 						continue
 					else:
@@ -106,7 +126,8 @@ def extract_from_zip_bytes(zip_bytes: bytes, logs: List[str], target_prefixes=('
 				read_comp_size = comp_size if comp_size != 0 else (lh_comp_size or 0)
 
 				if data_start + read_comp_size > size:
-					logs.append(f"Compressed data window overruns buffer for {fname}. Trimming read size.")
+					logger.warning(f"Compressed data window overruns buffer for {fname}. Trimming read size.")
+
 					read_comp_size = max(0, min(read_comp_size, size - data_start))
 
 				comp_bytes = data[data_start:data_start + read_comp_size]
@@ -117,20 +138,24 @@ def extract_from_zip_bytes(zip_bytes: bytes, logs: List[str], target_prefixes=('
 					elif comp_method == 8:
 						file_bytes = zlib.decompress(comp_bytes, -zlib.MAX_WBITS)
 					else:
-						logs.append(f"Unsupported compression method {comp_method} for {fname}; skipping.")
+						logger.error(f"Unsupported compression method {comp_method} for {fname}; skipping.")
+
 						pos += 4
 						continue
 				except Exception as e:
 					logs.append(f"Decompression failed for {fname}: {e}")
+					logger.error(f"Decompression failed for {fname}: {e}")
 					pos += 4
 					continue
+				
 
 				entry_count += 1
 				if entry_count % 5 == 0:
-					logs.append(f"Processed {entry_count} files so far...")
+					logger.debug(f"Processed {entry_count} files so far...")
 					
 				if is_nested_zip:
-					logs.append(f"Found nested zip entry {norm_fname}, attempting in-memory extraction.")
+					logger.info(f"Found nested zip entry {norm_fname}, attempting in-memory extraction.")
+
 					nested_found = extract_from_zip_bytes(file_bytes, logs, target_prefixes=target_prefixes)
 					# Add files from nested zip, ensuring keys are just basenames to avoid long paths
 					for k, v in nested_found.items():
@@ -142,7 +167,9 @@ def extract_from_zip_bytes(zip_bytes: bytes, logs: List[str], target_prefixes=('
 					xsd_basename = os.path.splitext(base)[0].lower()
 					xsd_key = f'__xsd__{xsd_basename}'
 					found[xsd_key] = _decode_bytes_to_text(file_bytes)
-					logs.append(f"Extracted XSD: {norm_fname} -> {xsd_key}")
+
+					logger.info(f"Extracted XSD: {norm_fname} -> {xsd_key}")          
+
 				else:  # Regular XML file
 					text = _decode_bytes_to_text(file_bytes)
 					key = base # Use only the basename for the key
@@ -152,16 +179,19 @@ def extract_from_zip_bytes(zip_bytes: bytes, logs: List[str], target_prefixes=('
 						key = f"{os.path.splitext(basekey)[0]}_{i}{os.path.splitext(basekey)[1]}"
 						i += 1
 					found[key] = text
-					logs.append(f"Extracted XML: {norm_fname} (size={len(text)} chars)")
+					logger.info(f"Extracted XML: {norm_fname} (size={len(text)} chars)")
+
 
 			pos = fname_end + extra_len + comment_len
 
 		except Exception as e:
 			logs.append(f"Error parsing CD entry at {pos}: {e}")
+			logger.error(f"Error parsing CD entry at {pos}: {e}")
 			pos += 4
 
 	xml_count = sum(1 for k in found if not k.startswith('__xsd__'))
 	xsd_count = sum(1 for k in found if k.startswith('__xsd__'))
-	logs.append(f"Extraction complete: {xml_count} XML files, {xsd_count} XSD files")
+	logger.info(f"Extraction complete: {xml_count} XML files, {xsd_count} XSD files")
+
 	
 	return found

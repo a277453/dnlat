@@ -1,0 +1,126 @@
+    <configuration>
+    <transactionList>
+        <transaction>
+            <key>COUT</key>
+            <value>Cash Withdrawal</value>
+        </transaction>
+        <transaction>
+            <key>BAL</key>
+            <value>Balance Inquiry</value>
+        </transaction>
+        <transaction>
+            <key>BILLPAY</key>
+            <value>Bill Payment</value>
+        </transaction>
+        <transaction>
+            <key>CIN</key>
+            <value>Cash Deposit</value>
+        </transaction>
+        <transaction>
+            <key>COUTFAST</key>
+            <value>Fast Cash Withdrawal</value>
+        </transaction>
+        <transaction>
+            <key>PINCHG</key>
+            <value>Pin Change</value>
+        </transaction>
+        <transaction>
+            <key>VCPPREFS</key>
+            <value>Preferences</value>
+        </transaction>
+        <transaction>
+            <key>TRA</key>
+            <value>Transfer</value>
+        </transaction>
+        <transaction>
+            <key>AIN</key>
+            <value>Account Movement</value>
+        </transaction>
+        <transaction>
+            <key>CHCCDM</key>
+            <value>Cheque Deposit</value>
+        </transaction>
+        <transaction>
+            <key>COUT_PRESTAGED</key>
+            <value>Prestaged Withdrawal</value>
+        </transaction>
+        <transaction>
+            <key>COUTMIXED</key>
+            <value>Mixed Withdrawal Notes and Coins</value>
+        </transaction>
+        <transaction>
+            <key>COINOUT</key>
+            <value>Coin Withdrawal</value>
+        </transaction>
+        <transaction>
+            <key>COININ</key>
+            <value>Coin Deposit</value>
+        </transaction>
+        <transaction>
+            <key>CINMIXED</key>
+            <value>Mixed Deposit</value>
+        </transaction>
+        <transaction>
+            <key>MIXEDMEDIA</key>
+            <value>Mixed Deposit</value>
+        </transaction>
+        <transaction>
+            <key>CIN_PRESTAGED</key>
+            <value>Cardless Deposit</value>
+        </transaction>
+        <transaction>
+            <key>CHQCASH</key>
+            <value>Cheque Cashing</value>
+        </transaction>
+        <transaction>
+            <key>PREPAID</key>
+            <value>Prepaid Topup</value>
+        </transaction>
+        <transaction>
+            <key>ACCOUNTCHG</key>
+            <value>Account Preference</value>
+        </transaction>
+        <transaction>
+            <key>CLEARPREFCHG</key>
+            <value>Clear Preference</value>
+        </transaction>
+        <transaction>
+            <key>ENV</key>
+            <value>Envelope Deposit</value>
+        </transaction>
+        <transaction>
+            <key>VOUCHER</key>
+            <value>Voucher Dispense</value>
+        </transaction>
+        <transaction>
+            <key>FCCHG</key>
+            <value>Fast Cash Preference</value>
+        </transaction>
+        <transaction>
+            <key>STP</key>
+            <value>Mini Statement</value>
+        </transaction>
+        <transaction>
+            <key>PINUNLOCK</key>
+            <value>Pin Unlock</value>
+        </transaction>
+    </transactionList>
+    <logging>
+        <level>INFO</level>
+        <file>app.log</file>
+    </logging>
+    <features>
+        <featureA enabled="true"/>
+        <featureB enabled="false"/>
+    </features>
+    <customerJournalParsing>
+        <starttransaction>3201,3207</starttransaction>
+        <endtransaction>3202</endtransaction>
+        <chainingtransaction>3239</chainingtransaction>
+    </customerJournalParsing>
+    <setting name="theme">dark</setting>
+    <setting name="language">en</setting>
+    <setting name="notifications">enabled</setting>
+    </configuration>
+ 
+ 

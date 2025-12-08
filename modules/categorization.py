@@ -14,6 +14,24 @@ class CategorizationService:
     """
     
     def __init__(self):
+        """
+        FUNCTION: __init__
+
+        DESCRIPTION:
+            Initialize CategorizationService and sets up default categories.
+
+        USAGE:
+            service = CategorizationService()
+
+        PARAMETERS:
+            None
+
+        RETURNS:
+            None
+
+        RAISES:
+            None
+        """
         logger.info("CategorizationService initialized")
         self.categories = {
             'customer_journals': [],
@@ -27,7 +45,25 @@ class CategorizationService:
 
     def categorize_files(self, extract_path: Path, file_categories: Dict[str, List[str]], exclude_files: set = None, mode: Optional[str] = None) -> Dict[str, List[str]]:
         """
-        Categorize all files in the extracted directory using FAST filename-based detection.
+        FUNCTION: categorize_files
+
+        DESCRIPTION:
+            Categorize all files in a directory using fast filename-based detection.
+
+        USAGE:
+            categorized = service.categorize_files(Path("/tmp/extracted"), categories, exclude_files=set(), mode="registry")
+
+        PARAMETERS:
+            extract_path (Path)             : Directory path containing extracted files
+            file_categories (dict)          : Pre-existing dictionary of categorized files
+            exclude_files (set, optional)   : Set of filenames to exclude from categorization
+            mode (str, optional)            : Mode of categorization (e.g., 'registry')
+
+        RETURNS:
+            dict : Updated dictionary of categorized files
+
+        RAISES:
+            None
         """
         logger.info(f"Starting file categorization in: {extract_path}")         
         logger.debug(f"Initial exclude_files: {exclude_files}")                
@@ -43,6 +79,7 @@ class CategorizationService:
         
         if file_categories.get('acu_files'):
             print(f"✓ Pre-loaded {len(file_categories['acu_files'])} ACU files from memory extraction")
+            logger.info(' >> SP categorization done.')
 
         for file_path in extract_path.rglob("*"):
             if not file_path.is_file():
@@ -66,8 +103,9 @@ class CategorizationService:
                 file_categories['unidentified'].append(str(file_path))
                 processed_files.add(str(file_path))
                 logger.debug(f"File could not be identified: {file_path.name}")
-                print(f"❓ [unidentified] {file_path.name}")
-        
+                # print(f"❓ [unidentified] {file_path.name}")
+
+        logger.info(f"\n >> SP Categorization Summary:")
         print(f"\n📊 Categorization Summary:")
         for category, files in file_categories.items():
             if files:
@@ -87,6 +125,25 @@ class CategorizationService:
         return file_categories
     
     def _detect_category(self, file_path: Path, mode: Optional[str] = None) -> str:
+        """
+        FUNCTION: _detect_category
+
+        DESCRIPTION:
+            Detects the category of a given file based on filename and content.
+
+        USAGE:
+            category = service._detect_category(Path("/tmp/file.jrn"), mode=None)
+
+        PARAMETERS:
+            file_path (Path)   : Path of the file to categorize
+            mode (str, optional) : Special mode affecting categorization
+
+        RETURNS:
+            str : File category (e.g., 'customer_journals', 'unidentified')
+
+        RAISES:
+            None
+        """
         file_name_lower = file_path.name.lower()
         
         if 'reg.txt' in file_name_lower or (file_name_lower.startswith('reg') and file_name_lower.endswith('.txt')):
@@ -109,6 +166,24 @@ class CategorizationService:
         return 'unidentified'
 
     def _detect_file_type_by_content(self, file_path: str) -> str:
+        """
+        FUNCTION: _detect_file_type_by_content
+
+        DESCRIPTION:
+            Detect the type of a file by analyzing its content lines and patterns.
+
+        USAGE:
+            file_type = service._detect_file_type_by_content("/tmp/file.jrn")
+
+        PARAMETERS:
+            file_path (str) : Path to the file being analyzed
+
+        RETURNS:
+            str : File type detected (e.g., 'Customer Journal', 'UI Journal', 'TRC Error', 'Unidentified')
+
+        RAISES:
+            None
+        """
         try:
             content = self._try_read_file(file_path)
             if content is None:
@@ -152,6 +227,24 @@ class CategorizationService:
         return "Unknown"
 
     def _try_read_file(self, filepath: str) -> Optional[str]:
+        """
+        FUNCTION: _try_read_file
+
+        DESCRIPTION:
+            Attempt to read a file using multiple encodings and fallback to binary read if needed.
+
+        USAGE:
+            content = service._try_read_file("/tmp/file.jrn")
+
+        PARAMETERS:
+            filepath (str) : Path to the file to read
+
+        RETURNS:
+            Optional[str] : File content if successful, None if unable to read
+
+        RAISES:
+            None
+        """
         encodings = ['utf-8', 'latin1', 'windows-1252', 'utf-16']
         
         for encoding in encodings:
@@ -170,6 +263,24 @@ class CategorizationService:
 
     # --- Pattern detection methods remain unchanged ---
     def _detect_ui_journal_pattern(self, lines: list) -> int:
+        """
+        FUNCTION: _detect_ui_journal_pattern
+
+        DESCRIPTION:
+            Count occurrences of UI Journal patterns in file lines.
+
+        USAGE:
+            matches = service._detect_ui_journal_pattern(lines)
+
+        PARAMETERS:
+            lines (list) : List of file lines to analyze
+
+        RETURNS:
+            int : Number of lines matching UI Journal pattern
+
+        RAISES:
+            None
+        """
         ui_matches = 0
         for line in lines:
             line = line.strip()
@@ -186,6 +297,24 @@ class CategorizationService:
         return ui_matches
 
     def _detect_customer_journal_pattern(self, lines: list) -> int:
+        """
+        FUNCTION: _detect_customer_journal_pattern
+
+        DESCRIPTION:
+            Count occurrences of Customer Journal patterns in file lines.
+
+        USAGE:
+            matches = service._detect_customer_journal_pattern(lines)
+
+        PARAMETERS:
+            lines (list) : List of file lines to analyze
+
+        RETURNS:
+            int : Number of lines matching Customer Journal pattern
+
+        RAISES:
+            None
+        """
         customer_matches = 0
         for line in lines:
             line = line.strip()
@@ -203,6 +332,24 @@ class CategorizationService:
         return customer_matches
 
     def _detect_trc_trace_pattern(self, lines: list) -> int:
+        """
+        FUNCTION: _detect_trc_trace_pattern
+
+        DESCRIPTION:
+            Count occurrences of TRC Trace patterns in file lines.
+
+        USAGE:
+            matches = service._detect_trc_trace_pattern(lines)
+
+        PARAMETERS:
+            lines (list) : List of file lines to analyze
+
+        RETURNS:
+            int : Number of lines matching TRC Trace pattern
+
+        RAISES:
+            None
+        """
         matches = 0
         for line in lines:
             line = line.strip()
@@ -214,6 +361,24 @@ class CategorizationService:
         return matches
 
     def _detect_trc_error_pattern(self, lines: list) -> int:
+        """
+        FUNCTION: _detect_trc_error_pattern
+
+        DESCRIPTION:
+            Count occurrences of TRC Error patterns in file lines.
+
+        USAGE:
+            matches = service._detect_trc_error_pattern(lines)
+
+        PARAMETERS:
+            lines (list) : List of file lines to analyze
+
+        RETURNS:
+            int : Number of lines matching TRC Error pattern
+
+        RAISES:
+            None
+        """
         trc_error_matches = 0
         for line in lines:
             line = line.strip()
@@ -226,6 +391,24 @@ class CategorizationService:
         return trc_error_matches
 
     def _count_trc_error_headers(self, lines: list) -> int:
+        """
+        FUNCTION: _count_trc_error_headers
+
+        DESCRIPTION:
+            Count TRC Error header lines in file content.
+
+        USAGE:
+            count = service._count_trc_error_headers(lines)
+
+        PARAMETERS:
+            lines (list) : List of file lines to analyze
+
+        RETURNS:
+            int : Number of TRC Error headers found
+
+        RAISES:
+            None
+        """
         header_matches = 0
         trc_error_header_pattern = r'^\d{2}/\d{2}\s+\d{6}\s+\d{2}:\d{2}:\d{2}\.\d{1,3}\s+\w+\s+\w+\s+PID:\w+\.\w+\s+Data:\d+'
         for line in lines:

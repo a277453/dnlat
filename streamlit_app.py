@@ -1386,8 +1386,7 @@ def render_transaction_comparison():
                         "📊 Side-by-Side Flow",
                         "📝 Transaction Logs",
                         "📈 Detailed Analysis"
-                    ])
-                    
+                    ])          
                     # ========================================
                     # TAB 1: Side-by-Side Flow Comparison
                     # ========================================
@@ -2767,7 +2766,37 @@ def render_individual_transaction_analysis():
         with st.expander("🐛 Debug Information"):
             st.code(traceback.format_exc())
 def render_acu_single_parse(): # MODIFIED
-    """Render ACU Parser for single ZIP archive"""
+    """
+    FUNCTION:
+        render_acu_single_parse
+
+    DESCRIPTION:
+        Renders the Streamlit UI for loading, selecting, parsing, searching,
+        and exporting ACU (ATM Configuration Utility) XML configuration files
+        that were extracted from the main processed ZIP package.
+
+    USAGE:
+        render_acu_single_parse()
+
+    PARAMETERS:
+        None : This function does not accept any input parameters.
+        
+        (Uses Streamlit session state internally)
+        - st.session_state.acu_extracted_files : List of ACU XML filenames
+        - st.session_state.acu_parsed_df       : Parsed ACU parameter dataframe
+        - st.session_state.acu_files_loaded    : Boolean flag to prevent reloading
+
+    RETURNS:
+        None : The function renders UI components directly to Streamlit 
+               and does not return a value.
+
+    RAISES:
+        RuntimeError : If backend API calls fail unexpectedly.
+        Exception    : Any unexpected errors during parsing or UI rendering 
+                       are caught and shown via Streamlit error boxes.
+    """
+    st.write("SESSION STATE DEBUG:", st.session_state)   # debug Added
+
     st.markdown("### ⚡ ACU Configuration Parser")
     st.info("Extract, parse, and analyze ACU configuration files with XSD documentation support.")
     
@@ -2786,9 +2815,13 @@ def render_acu_single_parse(): # MODIFIED
         with st.spinner("Loading ACU files from processed package..."):
             try:
                 resp = requests.get(f"{API_BASE_URL}/get-acu-files", timeout=30)
+                st.write("DEBUG BACKEND STATUS:", resp.status_code)      #add debug point 
+                st.write("DEBUG BACKEND RESPONSE:", resp.text)           #
                 if resp.status_code == 200:
                     data = resp.json()
-                    xml_files = data.get('xml_files', [])
+                    st.write("debug data printing the data:",data)
+                    print("DEBUG DATA PRINTING THE DATA :", data)
+                    xml_files = data.get('acu_files', [])
 
                     if xml_files:
                         st.session_state.acu_extracted_files = xml_files
@@ -3277,8 +3310,6 @@ if st.session_state.zip_processed:
                 render_ui_flow_individual()
             elif selected_func_id == "consolidated_flow":
                 render_consolidated_flow()
-            elif selected_func_id == "acu_single_parse":
-                render_acu_single_parse()
             elif selected_func_id == "acu_single_parse":
                 render_acu_single_parse()
             elif selected_func_id == "acu_compare":

@@ -15,7 +15,6 @@ import logging
 logger.info("Individual Transaction UI Flow Visualization Module loaded")
 
 
-
 def create_individual_transaction_flow_plotly(
     transaction_id: str,
     transaction_type: str,
@@ -25,7 +24,56 @@ def create_individual_transaction_flow_plotly(
     transaction_log: Optional[str] = None
 ) -> go.Figure:
     """
-    Create a Plotly-based vertical flowchart for an individual transaction
+    FUNCTION:
+        create_individual_transaction_flow_plotly
+
+    DESCRIPTION:
+        Creates a vertical, step-by-step Plotly flowchart representing the UI screen
+        navigation of a single transaction.  
+        It visually highlights timestamps, error steps, success paths, and arrows
+        between screens.
+
+    USAGE:
+        fig = create_individual_transaction_flow_plotly(
+                  transaction_id="T123",
+                  transaction_type="FIN",
+                  start_time="10:00:00",
+                  end_time="10:00:10",
+                  ui_flow=["Screen1", "Screen2"],
+                  transaction_log=log_data
+              )
+
+    PARAMETERS:
+        transaction_id (str):
+            Unique identifier of the transaction.
+        
+        transaction_type (str):
+            Type/category of the transaction (e.g., financial, UI event).
+
+        start_time (str):
+            Transaction starting timestamp in string format.
+
+        end_time (str):
+            Transaction ending timestamp in string format.
+
+        ui_flow (List[str]):
+            Ordered list of UI screens captured during the transaction.
+
+        transaction_log (str, optional):
+            Raw log text used to extract timestamps and result details.
+            If None, only UI flow will be used.
+
+    RETURNS:
+        go.Figure :
+            A Plotly Figure object representing a complete interactive flowchart.
+
+    RAISES:
+        ValueError :
+            When ui_flow is empty or invalid.
+        TypeError  :
+            When non-string values are passed to parameters expecting string inputs.
+        Exception  :
+            For any unexpected error during figure creation.
     """
     logger.info(f"Creating transaction flow figure for ID: {transaction_id}")
 
@@ -176,7 +224,39 @@ def create_individual_transaction_flow_plotly(
 
 def _extract_screens_from_log(transaction_log: str, ui_flow: List[str]) -> List[Tuple[str, str, str]]:
     """
-    Extract screen information with timestamps and results from transaction log
+    FUNCTION:
+        _extract_screens_from_log
+
+    DESCRIPTION:
+        Parses the raw transaction log to extract timestamps, screen names,
+        and result statuses (OK, CANCEL, ERROR, TIMEOUT, etc.).  
+        Matches log details with the provided UI flow list.
+
+    USAGE:
+        result = _extract_screens_from_log(log_text, ["Screen1", "Screen2"])
+
+    PARAMETERS:
+        transaction_log (str):
+            Full log text containing timestamps and UI event entries.
+
+        ui_flow (List[str]):
+            List of UI screens expected to appear in the transaction.
+
+    RETURNS:
+        List[Tuple[str, str, str]] :
+            A list of tuples in the format:
+                (screen_name, timestamp, result_detail)
+            Example:
+                [
+                  ("Screen1", "10:00:01", "OK"),
+                  ("Screen2", "10:00:05", "ERROR")
+                ]
+
+    RAISES:
+        ValueError :
+            If transaction_log is empty or not valid text.
+        TypeError  :
+            If ui_flow is not a list of strings.
     """
     logger.debug("Extracting screens from transaction log.")
     screens_with_details = []
@@ -229,7 +309,42 @@ def create_individual_flow_from_ui_data(
     ui_flow_screens: List[str]
 ) -> go.Figure:
     """
-    Convenience function to create flow from transaction data dict
+    FUNCTION:
+        create_individual_flow_from_ui_data
+
+    DESCRIPTION:
+        Convenience wrapper to build a transaction flowchart directly from a
+        dictionary of transaction details.  
+        Extracts required values and passes them to the main plotting function.
+
+    USAGE:
+        fig = create_individual_flow_from_ui_data(transaction_dict, ui_screens)
+
+    PARAMETERS:
+        transaction_data (Dict):
+            Dictionary containing transaction attributes such as:
+                {
+                    "Transaction ID": "T123",
+                    "Transaction Type": "FIN",
+                    "Start Time": "10:00:00",
+                    "End Time": "10:00:05",
+                    "Transaction Log": "raw log text..."
+                }
+
+        ui_flow_screens (List[str]):
+            List of UI screens (in order) for the transaction.
+
+    RETURNS:
+        go.Figure :
+            A Plotly figure visualizing the full UI flow.
+
+    RAISES:
+        KeyError :
+            If required keys are missing from transaction_data.
+        TypeError :
+            If input data types do not match expected formats.
+        Exception :
+            For failures during flowchart generation.
     """
     transaction_id = transaction_data.get('Transaction ID', 'Unknown')
     logger.info(f"Creating flow from UI data for Transaction ID: {transaction_id}")

@@ -28,21 +28,77 @@ logger.info("UI Journal Processor loaded")
 
 class UIJournalProcessor:
     """
-    A class for processing ATM UI journal files and analyzing transaction flows.
+    CLASS: UIJournalProcessor
+
+    DESCRIPTION:
+        Handles processing of ATM UI journal (.jrn) files for extracting UI events,
+        filtering based on time, generating screen flows, and exporting results.
+
+    USAGE:
+        processor = UIJournalProcessor("file.jrn")
+        df = processor.load_journal()
+
+    PARAMETERS:
+        file_path (str | Path) : Path of the UI journal file to load.
+
+    RETURNS:
+        None
+
+    RAISES:
+        FileNotFoundError : When journal file does not exist.
+        ValueError        : When operations are called before loading data.
     """
     
     def __init__(self, file_path: Union[str, Path]):
+        """Initialize processor with file path."""
         self.file_path = Path(file_path)
         self.df = None
         logger.debug(f"UIJournalProcessor initialized with file: {self.file_path}")
         
     def load_journal(self) -> pd.DataFrame:
+        """
+        FUNCTION: load_journal
+
+        DESCRIPTION:
+            Loads and parses the UI journal file into a DataFrame.
+
+        USAGE:
+            df = processor.load_journal()
+
+        PARAMETERS:
+            None
+
+        RETURNS:
+            DataFrame : Parsed UI events.
+
+        RAISES:
+            FileNotFoundError : If file is missing.
+        """
         logger.info(f"Loading journal: {self.file_path}")
         self.df = parse_ui_journal(self.file_path)
         logger.info(f"Loaded {len(self.df)} UI events")
         return self.df
     
     def get_events_in_timerange(self, start_time, end_time) -> pd.DataFrame:
+        """
+        FUNCTION: get_events_in_timerange
+
+        DESCRIPTION:
+            Filters UI events between the given start and end times.
+
+        USAGE:
+            events = processor.get_events_in_timerange(start, end)
+
+        PARAMETERS:
+            start_time (datetime.time) : Start time boundary.
+            end_time   (datetime.time) : End time boundary.
+
+        RETURNS:
+            DataFrame : Filtered rows within the time range.
+
+        RAISES:
+            ValueError : If journal is not loaded.
+        """
         logger.debug(f"Filtering events from {start_time} to {end_time}")
         if self.df is None:
             logger.error("Journal not loaded. Call load_journal() first.")
@@ -59,6 +115,25 @@ class UIJournalProcessor:
         return filtered
     
     def get_screen_flow(self, start_time, end_time) -> List[str]:
+        """
+        FUNCTION: get_screen_flow
+
+        DESCRIPTION:
+            Generates an ordered list of unique screens visited in the given time range.
+
+        USAGE:
+            flow = processor.get_screen_flow(start, end)
+
+        PARAMETERS:
+            start_time (datetime.time) : Start time.
+            end_time   (datetime.time) : End time.
+
+        RETURNS:
+            list : Ordered list of screen names.
+
+        RAISES:
+            ValueError : If journal not loaded or no events found.
+        """
         logger.debug(f"Getting screen flow from {start_time} to {end_time}")
         events = self.get_events_in_timerange(start_time, end_time)
         
@@ -80,6 +155,24 @@ class UIJournalProcessor:
         return flow
     
     def export_to_csv(self, output_path: Union[str, Path]) -> str:
+        """
+        FUNCTION: export_to_csv
+
+        DESCRIPTION:
+            Exports the parsed UI journal DataFrame to a CSV file.
+
+        USAGE:
+            processor.export_to_csv("output.csv")
+
+        PARAMETERS:
+            output_path (str | Path) : Target output CSV path.
+
+        RETURNS:
+            str : Path of saved CSV.
+
+        RAISES:
+            ValueError : If journal not loaded.
+        """
         if self.df is None:
             logger.error("Journal not loaded. Cannot export to CSV")
             raise ValueError("Journal not loaded. Call load_journal() first.")
@@ -91,6 +184,24 @@ class UIJournalProcessor:
 
 
 def parse_ui_journal(file_path: Union[str, Path]) -> pd.DataFrame:
+    """
+    FUNCTION: parse_ui_journal
+
+    DESCRIPTION:
+        Parses a .jrn UI journal file and extracts structured event data.
+
+    USAGE:
+        df = parse_ui_journal("file.jrn")
+
+    PARAMETERS:
+        file_path (str | Path) : Path of UI journal file.
+
+    RETURNS:
+        DataFrame : Parsed UI journal events with timestamps, screens, and JSON fields.
+
+    RAISES:
+        None
+    """
     logger.info(f"Parsing UI journal: {file_path}")
     file_path = Path(file_path)
     if not file_path.exists() or file_path.is_dir():
@@ -228,6 +339,25 @@ def process_multiple_ui_journals(
     journal_files: List[Union[str, Path]], 
     output_dir: Union[str, Path] = None
 ) -> Dict[str, pd.DataFrame]:
+    """
+    FUNCTION: process_multiple_ui_journals
+
+    DESCRIPTION:
+        Processes multiple UI journal files and optionally exports results to CSV.
+
+    USAGE:
+        results = process_multiple_ui_journals(files, "./output")
+
+    PARAMETERS:
+        journal_files (list)    : List of file paths to process.
+        output_dir (str | Path) : Directory to save CSV output (optional).
+
+    RETURNS:
+        dict : Mapping of filename → parsed DataFrame.
+
+    RAISES:
+        None
+    """
     results = {}
     
     if output_dir:

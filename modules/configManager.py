@@ -6,12 +6,19 @@ from modules.logging_config import logger
 import logging
 
 logger.info("Starting config_parser")
+
 def xml_to_dict(xml_file):
     """
-    Parses an XML configuration file to extract transaction metadata and parsing boundaries.
-    
-    Args:
-        xml_file (str): Path to the XML file containing configuration settings.
+    FUNCTION: xml_to_dict
+
+    DESCRIPTION:
+        Parses an XML configuration file to extract transaction metadata and parsing boundaries.
+
+    USAGE:
+        real_name, start_list, end_list, chain_list = xml_to_dict("/path/to/config.xml")
+
+    PARAMETERS:
+        xml_file (str) : Path to the XML configuration file
     
     Returns:
         tuple:
@@ -19,7 +26,10 @@ def xml_to_dict(xml_file):
               For example: {"COUT": "Withdrawal", "CIN": "Deposit"}
             - start_time_list (list): A list of keywords used to identify transaction start lines.
             - end_time_list (list): A list of keywords used to identify transaction end lines.
-            - chain_time_list (list): A list of keywords used to identify transaction chaining lines.
+            - chain_time_list (list): A list of keywords used to identify transaction chaining lines. RAISES:
+
+    RAISES:
+        Exception : If the XML file cannot be read or parsed
     
     Notes:
         - Expects the XML to have this structure:
@@ -83,13 +93,22 @@ def xml_to_dict(xml_file):
 
 def validate_xml_config(xml_file):
     """
-    Validates that the XML configuration file has all required sections.
-    
-    Args:
-        xml_file (str): Path to the XML file
-        
-    Returns:
-        dict: Validation results with status and any missing sections
+    FUNCTION: validate_xml_config
+
+    DESCRIPTION:
+        Validates that the XML configuration file contains all required sections.
+
+    USAGE:
+        result = validate_xml_config("/path/to/config.xml")
+
+    PARAMETERS:
+        xml_file (str) : Path to the XML configuration file
+
+    RETURNS:
+        dict : Validation results including 'valid' (bool), 'missing_sections' (list), 'warnings' (list)
+
+    RAISES:
+        None
     """
     logger.info(f"Validating XML configuration: {xml_file}")
     try:
@@ -152,13 +171,22 @@ def validate_xml_config(xml_file):
 
 def get_all_tids(xml_file):
     """
-    Convenience function to get all TID lists with descriptive names.
-    
-    Args:
-        xml_file (str): Path to the XML file
-        
-    Returns:
-        dict: Dictionary containing all TID lists
+    FUNCTION: get_all_tids
+
+    DESCRIPTION:
+        Convenience function to extract all TID lists from the XML configuration.
+
+    USAGE:
+        all_tids = get_all_tids("/path/to/config.xml")
+
+    PARAMETERS:
+        xml_file (str) : Path to the XML configuration file
+
+    RETURNS:
+        dict : Dictionary containing all TID lists and combined parsing TIDs
+
+    RAISES:
+        Exception : If XML parsing fails
     """
     logger.info(f"Getting all TID lists from XML: {xml_file}")
     real_name, start_tids, end_tids, chain_tids = xml_to_dict(xml_file)
@@ -176,10 +204,22 @@ def get_all_tids(xml_file):
 
 def debug_print_config(xml_file):
     """
-    Debug function to print the parsed configuration.
-    
-    Args:
-        xml_file (str): Path to the XML file
+    FUNCTION: debug_print_config
+
+    DESCRIPTION:
+        Debug function to print the parsed XML configuration in a readable format.
+
+    USAGE:
+        debug_print_config("/path/to/config.xml")
+
+    PARAMETERS:
+        xml_file (str) : Path to the XML configuration file
+
+    RETURNS:
+        None
+
+    RAISES:
+        Exception : If XML parsing or printing fails
     """
     logger.info(f"Debug printing configuration from XML: {xml_file}")
     try:
@@ -207,7 +247,24 @@ def debug_print_config(xml_file):
 
 # Optional: Function to update XML configuration programmatically
 def try_read_file(filepath: str) -> Optional[str]:
-    """Try to read file with different encodings"""
+    """
+    FUNCTION: try_read_file
+
+    DESCRIPTION:
+        Attempts to read a file using multiple encodings, falling back to binary read if necessary.
+
+    USAGE:
+        content = try_read_file("/path/to/file.txt")
+
+    PARAMETERS:
+        filepath (str) : Path to the file to read
+
+    RETURNS:
+        Optional[str] : File content if successful, None otherwise
+
+    RAISES:
+        None
+    """
     logger.info(f"Attempting to read file: {filepath}")
     encodings = ['utf-8', 'latin1', 'windows-1252', 'utf-16']
     
@@ -232,8 +289,22 @@ def try_read_file(filepath: str) -> Optional[str]:
 
 def detect_ui_journal_pattern(lines: list) -> int:
     """
-    Detect UI Journal pattern matches
-    Pattern: timestamp id module direction [viewid] - screen event:{json}
+    FUNCTION: detect_ui_journal_pattern
+
+    DESCRIPTION:
+        Count the number of lines matching the UI Journal pattern.
+
+    USAGE:
+        count = detect_ui_journal_pattern(lines)
+
+    PARAMETERS:
+        lines (list) : List of file lines to analyze
+
+    RETURNS:
+        int : Number of lines matching UI Journal pattern
+
+    RAISES:
+        None
     """
     ui_matches = 0
     for line in lines:
@@ -263,8 +334,22 @@ def detect_ui_journal_pattern(lines: list) -> int:
 
 def detect_customer_journal_pattern(lines: list) -> int:
     """
-    Detect Customer Journal pattern matches
-    Pattern: timestamp tid message
+    FUNCTION: detect_customer_journal_pattern
+
+    DESCRIPTION:
+        Count the number of lines matching the Customer Journal pattern.
+
+    USAGE:
+        count = detect_customer_journal_pattern(lines)
+
+    PARAMETERS:
+        lines (list) : List of file lines to analyze
+
+    RETURNS:
+        int : Number of lines matching Customer Journal pattern
+
+    RAISES:
+        None
     """
     customer_matches = 0
     for line in lines:
@@ -299,8 +384,22 @@ def detect_customer_journal_pattern(lines: list) -> int:
 
 def detect_trc_trace_pattern(lines: list) -> int:
     """
-    Detect TRC Trace pattern matches
-    Pattern: event_num date timestamp module device PID:xxx.xxx Data:xxx
+    FUNCTION: detect_trc_trace_pattern
+
+    DESCRIPTION:
+        Count the number of lines matching the TRC Trace pattern.
+
+    USAGE:
+        count = detect_trc_trace_pattern(lines)
+
+    PARAMETERS:
+        lines (list) : List of file lines to analyze
+
+    RETURNS:
+        int : Number of lines matching TRC Trace pattern
+
+    RAISES:
+        None
     """
     matches = 0
     for line in lines:
@@ -316,8 +415,22 @@ def detect_trc_trace_pattern(lines: list) -> int:
 
 def detect_trc_error_pattern(lines: list) -> int:
     """
-    Detect TRC Error pattern matches
-    Pattern: AA/BB YYMMDD HH:MM:SS.MS ErrorName ModuleName PID:xxx.xxx Data:xxx
+    FUNCTION: detect_trc_error_pattern
+
+    DESCRIPTION:
+        Count the number of lines matching the TRC Error pattern.
+
+    USAGE:
+        count = detect_trc_error_pattern(lines)
+
+    PARAMETERS:
+        lines (list) : List of file lines to analyze
+
+    RETURNS:
+        int : Number of lines matching TRC Error pattern
+
+    RAISES:
+        None
     """
     trc_error_matches = 0
     for line in lines:
@@ -336,7 +449,24 @@ def detect_trc_error_pattern(lines: list) -> int:
 
 
 def count_trc_error_headers(lines: list) -> int:
-    """Count only the TRC Error header patterns (AA/BB YYMMDD format)"""
+    """
+    FUNCTION: count_trc_error_headers
+
+    DESCRIPTION:
+        Count TRC Error header lines in the file.
+
+    USAGE:
+        count = count_trc_error_headers(lines)
+
+    PARAMETERS:
+        lines (list) : List of file lines to analyze
+
+    RETURNS:
+        int : Number of TRC Error header lines
+
+    RAISES:
+        None
+    """
     header_matches = 0
     trc_error_header_pattern = r'^\d{2}/\d{2}\s+\d{6}\s+\d{2}:\d{2}:\d{2}\.\d{1,3}\s+\w+\s+\w+\s+PID:\w+\.\w+\s+Data:\d+'
     
@@ -352,7 +482,22 @@ def count_trc_error_headers(lines: list) -> int:
 
 def detect_file_type(file_path: str) -> str:
     """
-    Main function to detect file type based on pattern matching and file extension validation
+    FUNCTION: detect_file_type
+
+    DESCRIPTION:
+        Detect the type of a file based on content patterns and file extension.
+
+    USAGE:
+        file_type = detect_file_type("/path/to/file.jrn")
+
+    PARAMETERS:
+        file_path (str) : Path to the file to detect
+
+    RETURNS:
+        str : Detected file type (UI Journal, Customer Journal, TRC Trace, TRC Error, Unidentified)
+
+    RAISES:
+        None
     """
     logger.info(f"Detecting file type for: {file_path}")
     
@@ -449,7 +594,26 @@ def detect_file_type(file_path: str) -> str:
 
 
 if __name__ == "__main__":
-    # Test the configuration parser
+    """
+    FUNCTION: main (configuration parser test)
+
+    DESCRIPTION:
+        Entry point for testing the XML configuration parser. 
+        Prints debug information, validates the XML structure, and reports warnings or errors.
+
+    USAGE:
+        Run the script directly:
+            python config_parser.py
+
+    PARAMETERS:
+        None (XML file path is hardcoded inside this block)
+
+    RETURNS:
+        None : Prints validation and debug info to console
+
+    RAISES:
+        Exception : If XML file reading, parsing, or debug printing fails
+    """
     xml_file = '/Users/yuvikaagrawal/Desktop/DN/ML_DN/dnLogAtConfig.xml'
     
     try:

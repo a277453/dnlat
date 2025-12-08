@@ -9,7 +9,25 @@ logger.info("Starting processing_service")
 
 class ProcessingService:
     """
-    Step 4: Process categorization results and prepare response
+    FUNCTION:
+        ProcessingService
+
+    DESCRIPTION:
+        Handles the processing of categorized file data and prepares
+        the final structured API response for the caller.
+
+    USAGE:
+        service = ProcessingService()
+        result = service.prepare_response(file_categories, extract_path)
+
+    PARAMETERS:
+        None
+
+    RETURNS:
+        None
+
+    RAISES:
+        None
     """
     
     def prepare_response(
@@ -18,7 +36,29 @@ class ProcessingService:
         extract_path: Path
     ) -> FileCategorizationResponse:
         """
-        Prepare final response with categorized files.
+        FUNCTION:
+            prepare_response
+
+        DESCRIPTION:
+            Processes categorized file data, calculates totals, converts them
+            into CategoryCount objects, and returns a standardized response model.
+
+        USAGE:
+            result = self.prepare_response(file_categories, extract_path)
+
+        PARAMETERS:
+            file_categories (Dict[str, List[str]]) :
+                Dictionary where key = category name,
+                value = list of associated file names.
+            extract_path (Path) :
+                Path where files were extracted.
+
+        RETURNS:
+            FileCategorizationResponse :
+                Includes total files, extraction path, and categorized file details.
+
+        RAISES:
+            None
         """
         logger.info("Preparing final file categorization response.")
 

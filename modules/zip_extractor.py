@@ -1,3 +1,15 @@
+"""
+ZIP Extraction Logic Module
+
+This module provides low-level utilities to extract XML, XSD, and nested ZIP
+files from raw ZIP byte streams. It does not rely on Python's zipfile module
+and instead manually parses ZIP central directory structures.
+
+Functions:
+    _decode_bytes_to_text()     : Decodes binary data into readable text.
+    extract_from_zip_bytes()    : Extracts XML/XSD files from ZIP byte streams,
+                                  recursively handling nested ZIPs.
+"""
 import struct
 import zlib
 import os
@@ -5,17 +17,36 @@ from typing import Dict, List
 from modules.logging_config import logger
 import logging
 
-
 logger.info("zip_extractor initialized")
-
 
 
 CD_SIG = b'PK\x01\x02'
 LH_SIG = b'PK\x03\x04'
 
-
 def _decode_bytes_to_text(b: bytes) -> str:
-	"""Decodes bytes to text, trying utf-8 then latin1."""
+	"""
+    FUNCTION:
+        _decode_bytes_to_text
+
+    DESCRIPTION:
+        Attempts to decode raw bytes into a readable string. First tries UTF-8;
+        on failure falls back to Latin-1 with replacement characters.
+
+    USAGE:
+        text = _decode_bytes_to_text(binary_data)
+
+    PARAMETERS:
+        b (bytes):
+            Raw byte sequence to decode.
+
+    RETURNS:
+        str:
+            Decoded text. Always returns a string.
+
+    RAISES:
+        None:
+            All decoding failures are handled internally by fallback logic.
+    """
 	try:
 		text = b.decode('utf-8')
 		logger.debug("Decoded bytes using utf-8")
@@ -28,14 +59,42 @@ def _decode_bytes_to_text(b: bytes) -> str:
 
 def extract_from_zip_bytes(zip_bytes: bytes, logs: List[str], target_prefixes=('jdd', 'x3')) -> Dict[str, str]:
 	"""
-	Low-level ZIP extractor that finds and decompresses target files from a byte stream.
-	Extracts both XML files and their corresponding XSD files.
-	Handles nested ZIPs by recursive extraction.
-	
-	Returns:
-		Dictionary mapping filenames to their content. XSD files are prefixed with '__xsd__'
-		followed by the base name (without extension) for easy matching.
-	"""
+    FUNCTION:
+        extract_from_zip_bytes
+
+    DESCRIPTION:
+        Low-level ZIP extraction function that manually scans central directory
+        entries inside a ZIP byte stream and extracts XML, XSD, and nested ZIP
+        files. Handles decompression (stored/deflate), resolves local headers,
+        fixes shifted offsets, supports recursive extraction, and returns
+        extracted file contents as text.
+
+    USAGE:
+        extracted = extract_from_zip_bytes(zip_data, logs_list, target_prefixes=('jdd','x3'))
+
+    PARAMETERS:
+        zip_bytes (bytes):
+            Raw bytes of the ZIP file being processed.
+        logs (List[str]):
+            A log list to append human-readable extraction progress messages.
+        target_prefixes (tuple):
+            File prefixes used to filter XML/XSD files of interest
+            (e.g., ("jdd", "x3")).
+
+    RETURNS:
+        Dict[str, str]:
+            A dictionary mapping:
+                - XML files → "<filename>.xml": extracted text
+                - XSD files → "__xsd__<basename>": extracted text
+            Nested ZIP files are processed recursively and merged into the output.
+
+    RAISES:
+        ValueError:
+            When invalid byte data is provided (e.g., empty input).
+        Exception:
+            Any unexpected parsing/decompression errors are logged, not raised.
+            The function continues processing remaining entries.
+    """
 	found: Dict[str, str] = {}
 	data = zip_bytes
 	size = len(data)

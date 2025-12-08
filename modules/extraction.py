@@ -25,10 +25,47 @@ LH_SIG = b'PK\x03\x04'
 
 class ZipExtractionService:
     """
-    Fast ZIP extraction - only extracts relevant files
+    CLASS: ZipExtractionService
+
+    DESCRIPTION:
+        Fast ZIP extraction service that extracts only relevant DN diagnostic files.
+        Handles nested ZIPs recursively and removes irrelevant files or empty directories.
+    
+    USAGE:
+        service = ZipExtractionService()
+        extract_path = service.extract_zip(zip_bytes)
+        service.cleanup_old_extracts(max_age_hours=24)
+    
+    PARAMETERS:
+        None
+    
+    RETURNS:
+        None
+    
+    RAISES:
+        None
     """
     
     def __init__(self):
+        """
+        FUNCTION: __init__
+
+        DESCRIPTION:
+            Initialize ZipExtractionService, setting base extraction path, relevant file patterns, and skip patterns.
+        
+        USAGE:
+            service = ZipExtractionService()
+        
+        PARAMETERS:
+            None
+        
+        RETURNS:
+            None
+        
+        RAISES:
+            None
+        """
+        
         self.base_extract_path = Path(tempfile.gettempdir()) / "dn_extracts"
         self.base_extract_path.mkdir(exist_ok=True, parents=True)
         
@@ -69,8 +106,22 @@ class ZipExtractionService:
 
     def is_relevant_file(self, filename: str) -> bool:
         """
-        FAST check if file is relevant
-        Returns True only for DN diagnostic files
+        FUNCTION: is_relevant_file
+
+        DESCRIPTION:
+            Checks if a given file is relevant for DN diagnostics based on predefined patterns and skip rules.
+        
+        USAGE:
+            result = service.is_relevant_file("path/to/file.xml")
+        
+        PARAMETERS:
+            filename (str) : Full filename or relative path of the file
+        
+        RETURNS:
+            bool : True if the file is relevant, False otherwise
+        
+        RAISES:
+            None
         """
         filename_lower = filename.lower()
         basename = os.path.basename(filename_lower)
@@ -98,8 +149,23 @@ class ZipExtractionService:
     
     def _extract_nested_zips(self, extract_path: Path):
         """
-        Find and extract any nested ZIP files within the extraction directory.
-        This runs after the main extraction is complete.
+        FUNCTION: _extract_nested_zips
+
+        DESCRIPTION:
+            Recursively extracts nested ZIP files found in a given extraction directory.
+            Removes nested ZIP files after successful extraction.
+        
+        USAGE:
+            service._extract_nested_zips(Path("/tmp/extract_dir"))
+        
+        PARAMETERS:
+            extract_path (Path) : Path object pointing to the extraction directory
+        
+        RETURNS:
+            None
+        
+        RAISES:
+            None
         """
         processed_zips = set()
         # Use a while loop to handle multiple layers of nesting
@@ -133,9 +199,26 @@ class ZipExtractionService:
 
     def extract_zip(self, zip_content: bytes) -> Path:
         """
-        FAST extraction - extracts all files, then filters relevant ones
-        This avoids path separator issues with selective extraction
+        FUNCTION: extract_zip
+
+        DESCRIPTION:
+            Extracts all files from a ZIP archive into a temporary directory and filters only relevant files.
+            Handles nested ZIPs after extraction.
+        
+        USAGE:
+            extract_path = service.extract_zip(zip_bytes)
+        
+        PARAMETERS:
+            zip_content (bytes) : Bytes of the ZIP archive
+        
+        RETURNS:
+            Path : Path to the directory containing the extracted relevant files
+        
+        RAISES:
+            ValueError : When ZIP content is empty or contains no relevant files
+            Exception   : For general extraction errors
         """
+
         if not zip_content:
             logger.warning("Empty ZIP content received")
             raise ValueError("Empty ZIP file")
@@ -215,7 +298,24 @@ class ZipExtractionService:
             raise Exception(f"Extraction failed: {str(e)}")
     
     def cleanup_old_extracts(self, max_age_hours: int = 24):
-        """Clean up old extractions"""
+        """
+        FUNCTION: cleanup_old_extracts
+
+        DESCRIPTION:
+            Deletes old extraction directories older than the specified age to save disk space.
+        
+        USAGE:
+            service.cleanup_old_extracts(max_age_hours=48)
+        
+        PARAMETERS:
+            max_age_hours (int) : Maximum age (in hours) of extraction directories to keep
+        
+        RETURNS:
+            None
+        
+        RAISES:
+            None
+        """
         try:
             current_time = time.time()
             for extract_dir in self.base_extract_path.glob("dn_*"):
@@ -234,7 +334,24 @@ class ZipExtractionService:
 # --- ACU Parser Specific Extraction Logic ---
 
 def _decode_bytes_to_text(b: bytes) -> str:
-    """Decodes bytes to text, trying utf-8 then latin1."""
+    """
+    FUNCTION: _decode_bytes_to_text
+
+    DESCRIPTION:
+        Decodes byte content to text using UTF-8 encoding first, then falls back to Latin1 if needed.
+    
+    USAGE:
+        text = _decode_bytes_to_text(byte_content)
+    
+    PARAMETERS:
+        b (bytes) : Byte sequence to decode
+    
+    RETURNS:
+        str : Decoded text
+    
+    RAISES:
+        None
+    """
     try:
         logger.debug("Decoding bytes as utf-8")
         return b.decode('utf-8')
@@ -243,13 +360,22 @@ def _decode_bytes_to_text(b: bytes) -> str:
 
 def render_html_documentation(html_string: str) -> str:
     """
-    Renders simple HTML documentation into formatted text without external libraries.
+    FUNCTION: render_html_documentation
 
-    Args:
-        html_string: The HTML content as a string.
-
-    Returns:
-        A formatted string with HTML tags replaced by newlines and markdown.
+    DESCRIPTION:
+        Converts HTML content into readable plain text with simple formatting.
+    
+    USAGE:
+        text = render_html_documentation("<p>Hello <b>World</b></p>")
+    
+    PARAMETERS:
+        html_string (str) : HTML content as string
+    
+    RETURNS:
+        str : Formatted text with HTML tags replaced by newlines or markdown
+    
+    RAISES:
+        None
     """
     if not html_string or '<' not in html_string:
         return html_string
@@ -274,17 +400,30 @@ def render_html_documentation(html_string: str) -> str:
     return "\n".join(line for line in lines if line)
 
 def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes: Tuple[str, ...] = ('jdd', 'x3')) -> Dict[str, str]:
-    logger.info(f"starting low-level zip extraction . zip size: {len(zip_content)} bytes")
     """
-    Low-level ZIP extractor that finds and decompresses target files from a byte stream.
-    Extracts both XML files and their corresponding XSD files.
-    Handles nested ZIPs by recursive extraction.
-    Uses struct-based binary parsing to handle edge cases that zipfile module can't.
+    FUNCTION: extract_from_zip_bytes
+
+    DESCRIPTION:
+        Low-level ZIP extraction from bytes.
+        Extracts target XML/XSD files and nested ZIPs recursively.
+        Uses binary parsing to handle edge cases that zipfile module may fail on.
     
-    Returns:
-        Dictionary mapping filenames to their content. XSD files are prefixed with '__xsd__'
-        followed by the base name (without extension) for easy matching.
+    USAGE:
+        files = extract_from_zip_bytes(zip_bytes, logs, target_prefixes=('jdd', 'x3'))
+    
+    PARAMETERS:
+        zip_content (bytes)                  : Bytes of the ZIP archive
+        logs (List[str])                     : List to append extraction log messages
+        target_prefixes (Tuple[str, ...])    : File prefixes to filter for XML/XSD files
+    
+    RETURNS:
+        dict : Mapping of filenames to file content. XSD files are stored with '__xsd__' prefix
+    
+    RAISES:
+        ValueError : When ZIP is empty or contains no relevant files
+        Exception   : For general parsing or decompression errors
     """
+    logger.info(f"starting low-level zip extraction . zip size: {len(zip_content)} bytes")
     found: Dict[str, str] = {}
     data = zip_content
     size = len(data)
@@ -470,8 +609,25 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
 
 def extract_from_directory(base_path: Union[str, Path], logs: List[str], target_prefixes: Tuple[str, ...]) -> Dict[str, str]:
     """
-    Recursively searches a directory for files starting with target_prefixes,
-    and also extracts from any ZIP files found.
+    FUNCTION: extract_from_directory
+
+    DESCRIPTION:
+        Recursively searches a directory for files with target prefixes and ZIP archives.
+        Extracts relevant files and maintains relative paths in returned dictionary.
+    
+    USAGE:
+        files = extract_from_directory("/tmp/data", logs, target_prefixes=('jdd', 'x3'))
+    
+    PARAMETERS:
+        base_path (Union[str, Path]) : Directory path to search
+        logs (List[str])              : List to append extraction log messages
+        target_prefixes (Tuple[str, ...]) : File prefixes for XML/XSD extraction
+    
+    RETURNS:
+        dict : Mapping of relative filenames to file content
+    
+    RAISES:
+        None
     """
     base_path = Path(base_path)
     all_files = {}

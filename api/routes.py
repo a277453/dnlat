@@ -55,6 +55,34 @@ log_file=Path("app.log")
 # ============================================
 @router.get("/read-log")
 async def read_log():
+    """
+    FUNCTION:
+        read_log
+
+    DESCRIPTION:
+        Reads the main application log file and returns its content as a response.
+
+    USAGE:
+        result = await read_log()
+
+    PARAMETERS:
+        None
+
+    RETURNS:
+        dict : 
+            {
+                "status": "success",
+                "log_content": "<full log text>"
+            }
+            OR
+            {
+                "status": "error",
+                "message": "Log file does not exist"
+            }
+
+    RAISES:
+        None explicitly raised.
+    """
     if os.path.exists(log_file):
         with open(log_file, "r", encoding="utf-8") as f:
             content = f.read()
@@ -73,9 +101,43 @@ async def read_log():
 @router.post("/debug-zip-members")
 async def debug_zip_members(file: UploadFile = File(...)):
     """
-    DEBUG ENDPOINT: Returns raw list of all ZIP member names and basic info.
-    Use this to understand ZIP structure and why matching may fail.
-    No extraction or processing — just lists what's inside the archive.
+    FUNCTION:
+        debug_zip_members
+
+    DESCRIPTION:
+        Receives a ZIP file upload and returns a detailed list of all members (files and directories) 
+        in the archive. Filters XML and XSD files and identifies those matching certain patterns 
+        (e.g., starting with 'jdd' or 'x3'). This is mainly used for debugging ZIP structures 
+        and ACU file detection.
+
+    USAGE:
+        result = await debug_zip_members(file=some_upload_file)
+
+    PARAMETERS:
+        file (UploadFile) : The ZIP file uploaded via multipart/form-data.
+
+    RETURNS:
+        dict : 
+            {
+                "status": "success" or "error",
+                "total_members": <total number of members in ZIP>,
+                "all_members": [list of dicts with member info],
+                "xml_files": [list of XML files],
+                "xsd_files": [list of XSD files],
+                "matching_xml_jdd_x3": [XML files starting with 'jdd' or 'x3'],
+                "matching_xsd_jdd_x3": [XSD files starting with 'jdd' or 'x3'],
+                "note": "summary string"
+            }
+            OR
+            {
+                "status": "error",
+                "error": "<error message>",
+                "traceback": "<stack trace if exception>"
+            }
+
+    RAISES:
+        BadZipFile : If the uploaded file is not a valid ZIP archive.
+        Exception  : Any unexpected errors during reading or processing the ZIP file.
     """
     logger.info("📥 Received request: /debug-zip-members")  
     try:
@@ -152,6 +214,33 @@ def set_processed_files_dir(directory: str):
 
 @router.post("/process-zip", response_model=FileCategorizationResponse)
 async def process_zip_file(file: UploadFile = File(..., description="ZIP file to process"),mode: Optional[str] = Query(None, description="Processing mode (e.g., 'registry' to optimize for registry files)")):
+    """
+    FUNCTION:
+        process_zip_file
+
+    DESCRIPTION:
+        Receives a ZIP file upload, extracts its contents (including nested ZIPs),
+        categorizes files into predefined categories (e.g., customer journals, registry files, ACU files),
+        extracts ACU XML/XSD files, updates the session with processed data, 
+        and prepares a response summarizing the categorized files.
+
+    USAGE:
+        result = await process_zip_file(file=some_zip_file, mode="registry")
+
+    PARAMETERS:
+        file (UploadFile) : The ZIP file uploaded via multipart/form-data.
+        mode (str, optional): Optional processing mode to influence categorization.
+
+    RETURNS:
+        FileCategorizationResponse : 
+            Object containing categorized files, ACU extraction logs, and other metadata.
+
+    RAISES:
+        HTTPException : 
+            - 400 if uploaded file is not a ZIP.
+            - 500 if extraction, categorization, or processing fails.
+        Exception     : Any unexpected errors during processing.
+    """
     """
     Step 1: Receive and validate ZIP file upload
     """
@@ -319,6 +408,34 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 @router.post("/extract-files/")
 async def extract_files_from_zip(file: UploadFile = File(...)):
     """
+    FUNCTION:
+        extract_files_from_zip
+
+    DESCRIPTION:
+        Receives a ZIP file upload, extracts ACU XML/XSD files with prefixes 'jdd' or 'x3'
+        for comparison or analysis purposes, and returns the extracted files along with logs.
+
+    USAGE:
+        result = await extract_files_from_zip(file=some_zip_file)
+
+    PARAMETERS:
+        file (UploadFile) : The ZIP file uploaded via multipart/form-data.
+
+    RETURNS:
+        dict :
+            {
+                "files": dict,   # Keys are filenames, values are file contents
+                "logs": list,    # Extraction logs and messages
+                "message": str   # Summary of extraction result
+            }
+
+    RAISES:
+        HTTPException :
+            - 400 if uploaded file is not a ZIP
+            - 500 if extraction fails due to unexpected errors
+        Exception : Any other unexpected errors during extraction
+    """
+    """
     Extract ACU files from an uploaded ZIP for comparison purposes.
     """
     logger.info(f"📥 Received request: /extract-files/ for file: {file.filename}")  
@@ -370,10 +487,34 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
 @router.get("/get-acu-files")
 async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Get the list of ACU XML and XSD files extracted from the processed ZIP.
-    
-    Returns:
-        dict: Contains 'acu_files' (list of XML files) and 'logs' (extraction logs)
+    FUNCTION:
+        get_acu_files
+
+    DESCRIPTION:
+        Retrieves the list of ACU XML files (excluding XSD) and extraction logs
+        from the current session. Used by frontend to display available ACU files
+        for parsing or further processing.
+
+    USAGE:
+        result = await get_acu_files(session_id="current_session")
+
+    PARAMETERS:
+        session_id (str) : Optional session ID to fetch ACU files from. 
+                            Defaults to CURRENT_SESSION_ID.
+
+    RETURNS:
+        dict :
+            {
+                "acu_files": list,  # List of ACU XML filenames
+                "logs": list,       # Extraction logs for reference/debug
+                "count": int,       # Number of ACU XML files found
+                "message": str      # Summary message
+            }
+
+    RAISES:
+        HTTPException :
+            - 404 if session does not exist
+            - 500 if unexpected errors occur during retrieval
     """
     try:
         if not session_service.session_exists(session_id):
@@ -387,7 +528,12 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
         session = session_service.get_session(session_id)
         acu_files = session.get('acu_extracted_files', {})
         acu_logs = session.get('acu_extraction_logs', [])
-        
+        logger.info(f"SESSION KEYS FOR DEBUG: {list(session.keys())}")
+
+        logger.info(f">> SP type acu_files {type(acu_files)}, initial 5 elements {list(acu_files.keys())[:5]}")
+        logger.info(f">> SP type acu_logs {type(acu_logs)}, initial 5 elements {acu_logs[:5]}")
+
+
         logger.debug(f"Retrieved {len(acu_files)} ACU files and {len(acu_logs)} extraction logs from session {session_id}")
         
         if not acu_files or not isinstance(acu_files, dict):
@@ -400,7 +546,10 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
         
         # Filter out XSD files (they start with __xsd__)
         xml_files = [f for f in acu_files if not f.startswith('__xsd__')]
+
+        logger.info(f">> SP list {xml_files[:5]}")
         logger.info(f"Found {len(xml_files)} ACU XML file(s) in session {session_id}")
+        
         
         return {
             "acu_files": xml_files,
@@ -421,14 +570,41 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
 @router.post("/parse-acu-files")
 async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Parse ACU XML files using the advanced ACU parser.
-    
-    Args:
-        files_to_parse: List of dicts with 'filename' (XML filename) keys
-        session_id: Session ID containing extracted files
-        
-    Returns:
-        dict: Parsed data as list of records and parsing logs
+    FUNCTION:
+        parse_acu_files
+
+    DESCRIPTION:
+        Parses selected ACU XML files from a session using the advanced ACU parser.
+        It looks up the XML content (and corresponding XSD if available) in the session,
+        converts them into structured records, and returns parsing results with logs.
+
+    USAGE:
+        result = await parse_acu_files(
+            files_to_parse=[{"filename": "jdd_config.xml"}],
+            session_id="current_session"
+        )
+
+    PARAMETERS:
+        files_to_parse (list of dicts) :
+            List of dictionaries containing filenames to parse.
+            Example: [{"filename": "jdd_config.xml"}]
+        session_id (str) :
+            Session ID where the extracted ACU files are stored.
+            Defaults to CURRENT_SESSION_ID.
+
+    RETURNS:
+        dict :
+            {
+                "data": list,          # Parsed records from XML files
+                "logs": list,          # Logs describing parsing actions, successes, and failures
+                "total_records": int   # Total number of records parsed from all files
+            }
+
+    RAISES:
+        HTTPException :
+            - 404 if the session does not exist
+            - 400 if no ACU files are found in the session
+            - 500 if any unexpected error occurs during parsing
     """
     try:
         if not session_service.session_exists(session_id):
@@ -536,7 +712,40 @@ async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str
 @router.get("/available-file-types", response_model=AvailableFileTypesResponse)
 async def get_available_file_types(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Get available file types from the processed ZIP
+    FUNCTION:
+        get_available_file_types
+
+    DESCRIPTION:
+        Retrieves the list of available file categories/types from a processed ZIP session.
+        It checks the session for categorized files and returns only non-empty categories
+        along with their file counts and filenames.
+
+    USAGE:
+        result = await get_available_file_types(session_id="current_session")
+
+    PARAMETERS:
+        session_id (str) :
+            Session ID where the ZIP file was processed.
+            Defaults to CURRENT_SESSION_ID.
+
+    RETURNS:
+        AvailableFileTypesResponse :
+            {
+                "available_types": list of str,   # List of non-empty file categories
+                "type_details": dict               # Details per category with file count and filenames
+                    {
+                        "<category_name>": {
+                            "count": int,       # Number of files in this category
+                            "files": list[str]  # List of filenames
+                        },
+                        ...
+                    }
+            }
+
+    RAISES:
+        HTTPException :
+            - 404 if the session does not exist
+            - 404 if no file categories are found in the session
     """
     logger.info(f"📥 Received request: /available-file-types for session_id: {session_id}") 
 
@@ -582,7 +791,40 @@ async def get_available_file_types(session_id: str = Query(default=CURRENT_SESSI
 @router.post("/select-file-type")
 async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Select one or multiple file types and get available operations
+    FUNCTION:
+        get_available_file_types
+
+    DESCRIPTION:
+        Retrieves the list of available file categories/types from a processed ZIP session.
+        It checks the session for categorized files and returns only non-empty categories
+        along with their file counts and filenames.
+
+    USAGE:
+        result = await get_available_file_types(session_id="current_session")
+
+    PARAMETERS:
+        session_id (str) :
+            Session ID where the ZIP file was processed.
+            Defaults to CURRENT_SESSION_ID.
+
+    RETURNS:
+        AvailableFileTypesResponse :
+            {
+                "available_types": list of str,   # List of non-empty file categories
+                "type_details": dict               # Details per category with file count and filenames
+                    {
+                        "<category_name>": {
+                            "count": int,       # Number of files in this category
+                            "files": list[str]  # List of filenames
+                        },
+                        ...
+                    }
+            }
+
+    RAISES:
+        HTTPException :
+            - 404 if the session does not exist
+            - 404 if no file categories are found in the session
     """
     logger.info(f"📥 Received request: /select-file-type for session_id: {session_id}")  
 
@@ -679,7 +921,38 @@ async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Q
 @router.post("/analyze-customer-journals")
 async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Analyze customer journal files and extract transaction data
+    FUNCTION:
+        analyze_customer_journals
+
+    DESCRIPTION:
+        Analyzes customer journal files from a processed ZIP session and extracts transaction data.
+        Combines transactions from all customer journal files, calculates statistics per transaction type,
+        and updates the session with extracted transaction data and source file details.
+
+    USAGE:
+        result = await analyze_customer_journals(session_id="current_session")
+
+    PARAMETERS:
+        session_id (str) :
+            Session ID containing the processed ZIP files.
+            Defaults to CURRENT_SESSION_ID.
+
+    RETURNS:
+        dict :
+            {
+                'message': str,                   # Status message
+                'total_transactions': int,        # Total transactions extracted
+                'statistics': list[dict],         # Transaction stats per type
+                'source_files': list[str],        # List of journal source filenames
+                'source_file_count': int          # Number of source files processed
+            }
+
+    RAISES:
+        HTTPException :
+            - 404 if the session does not exist
+            - 400 if no customer journal files are found
+            - 400 if no transactions could be extracted
+            - 500 for unexpected errors during processing
     """
     try:
         logger.info(f"🔍 Starting customer journal analysis for session: {session_id}")
@@ -803,7 +1076,34 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
 @router.get("/get-transactions-with-sources")
 async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Get all transactions with source file information
+    FUNCTION:
+        get_transactions_with_sources
+
+    DESCRIPTION:
+        Retrieves all transactions extracted from customer journal files along with source file information.
+        Provides a mapping of which transaction came from which source file, and a list of all transactions.
+
+    USAGE:
+        result = await get_transactions_with_sources(session_id="current_session")
+
+    PARAMETERS:
+        session_id (str) :
+            Session ID containing the processed ZIP files and analyzed transactions.
+            Defaults to CURRENT_SESSION_ID.
+
+    RETURNS:
+        dict :
+            {
+                'source_files': list[str],        # List of customer journal source filenames
+                'source_file_map': dict,          # Mapping: source filename -> list of transaction IDs
+                'all_transactions': list[dict],   # Full transaction records
+                'total_transactions': int         # Count of all transactions
+            }
+
+    RAISES:
+        HTTPException :
+            - 404 if the session does not exist
+            - 500 for unexpected errors while retrieving data
     """
     try:
         logger.info(f"Fetching transactions with source mapping for session: {session_id}")
@@ -855,18 +1155,45 @@ async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_
 @router.post("/filter-transactions-by-sources")
 async def filter_transactions_by_sources(source_files: List[str] = Body(..., embed=True),session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Filter transactions by selected source files
-    
-    Request body example:
-    {
-        "source_files": ["CustomerJournal_1.txt", "CustomerJournal_2.txt"]
-    }
+    FUNCTION:
+        filter_transactions_by_sources
+
+    DESCRIPTION:
+        Filters previously extracted transactions based on the selected source files.
+        Returns only the transactions that originated from the specified customer journal files.
+
+    USAGE:
+        result = await filter_transactions_by_sources(
+            source_files=["CustomerJournal_1.txt", "CustomerJournal_2.txt"],
+            session_id="current_session"
+        )
+
+    PARAMETERS:
+        source_files (list[str]) :
+            List of source file names to filter transactions by.
+        session_id (str) :
+            Session ID containing the analyzed transactions. Defaults to CURRENT_SESSION_ID.
+
+    RETURNS:
+        dict :
+            {
+                'transactions': list[dict],  # Transactions matching the selected source files
+                'count': int,                # Number of filtered transactions
+                'source_files': list[str]    # List of source files used for filtering
+            }
+
+    RAISES:
+        HTTPException :
+            - 404 if the session does not exist
+            - 400 if transaction data is missing in the session
+            - 500 for unexpected errors during filtering
     """
     try:
         logger.info(f"Request received: Filtering transactions for session {session_id}")
         logger.debug(f"Source files received for filtering: {source_files}")
 
-        print(f"🔍 Filtering transactions by {len(source_files)} source file(s)")
+        logger.info(f"🔍 Filtering transactions by {len(source_files)} source file(s)")
+        
         
         if not session_service.session_exists(session_id):
             logger.error(f"Session not found: {session_id}")
@@ -918,8 +1245,43 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
 @router.get("/transaction-statistics")
 async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Get transaction statistics from analyzed customer journals
+    FUNCTION:
+        get_transaction_statistics
+
+    DESCRIPTION:
+        Generates statistics from previously analyzed customer journal transactions.
+        Provides counts of successful and unsuccessful transactions per transaction type
+        along with the success rate.
+
+    USAGE:
+        result = await get_transaction_statistics(session_id="current_session")
+
+    PARAMETERS:
+        session_id (str) :
+            Session ID containing the analyzed transactions. Defaults to CURRENT_SESSION_ID.
+
+    RETURNS:
+        dict :
+            {
+                'statistics': list[dict],       # Statistics per transaction type
+                'total_transactions': int       # Total number of transactions analyzed
+            }
+            Each item in 'statistics' contains:
+            {
+                'Transaction Type': str,
+                'Total': int,
+                'Successful': int,
+                'Unsuccessful': int,
+                'Success Rate': str
+            }
+
+    RAISES:
+        HTTPException :
+            - 404 if the session does not exist
+            - 400 if no transaction data is available in the session
+            - 500 for unexpected errors during statistics generation
     """
+
     try:
         logger.info(f"Request received: Get transaction statistics for session {session_id}")
         print(f"📊 Getting transaction statistics for session: {session_id}")
@@ -953,12 +1315,20 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
             unsuccessful = len(type_df[type_df['End State'] == 'Unsuccessful'])
             total = len(type_df)
             
+            # Calculate average duration
+            if 'Duration (seconds)' in type_df.columns:
+                avg_duration = type_df['Duration (seconds)'].mean()
+                avg_duration_str = f"{avg_duration:.1f}s" if not pd.isna(avg_duration) else "N/A"
+            else:
+                avg_duration_str = "N/A"
+            
             stats.append({
                 'Transaction Type': txn_type,
                 'Total': total,
                 'Successful': successful,
                 'Unsuccessful': unsuccessful,
-                'Success Rate': f"{(successful/total*100):.1f}%" if total > 0 else "0%"
+                'Success Rate': f"{(successful/total*100):.1f}%" if total > 0 else "0%",
+                'Avg Duration': avg_duration_str
             })
         
         logger.info("Transaction statistics generated successfully")
@@ -984,7 +1354,61 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
 @router.post("/compare-transactions-flow")
 async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Compare UI flows of two transactions
+    FUNCTION:
+        compare_transactions_flow
+
+    DESCRIPTION:
+        Compares the UI flows of two customer transactions within a session.
+        Extracts screens from UI journal files corresponding to each transaction,
+        calculates matching screens using Longest Common Subsequence (LCS),
+        and provides detailed analysis including duration, common and unique screens,
+        and source file information.
+
+    USAGE:
+        result = await compare_transactions_flow(
+            txn1_id="TXN12345",
+            txn2_id="TXN67890",
+            session_id="current_session"
+        )
+
+    PARAMETERS:
+        txn1_id (str):
+            ID of the first transaction to compare.
+        txn2_id (str):
+            ID of the second transaction to compare.
+        session_id (str):
+            Session ID containing extracted transactions and UI journals.
+            Defaults to CURRENT_SESSION_ID.
+
+    RETURNS:
+        dict :
+            {
+                "txn1_id": str,
+                "txn2_id": str,
+                "txn1_type": str,
+                "txn2_type": str,
+                "txn1_state": str,
+                "txn2_state": str,
+                "txn1_flow": list[str],        # Screens for txn1
+                "txn2_flow": list[str],        # Screens for txn2
+                "txn1_matches": list[bool],    # LCS match flags for txn1 screens
+                "txn2_matches": list[bool],    # LCS match flags for txn2 screens
+                "txn1_log": str,               # Original transaction log
+                "txn2_log": str,
+                "detailed_analysis": str       # Human-readable analysis summary
+            }
+
+    RAISES:
+        HTTPException :
+            - 404 if session or transactions are not found
+            - 400 if transaction data is missing
+            - 500 for unexpected errors during comparison
+
+    NOTES:
+        - Uses UI journal files to reconstruct transaction screen flows.
+        - Computes LCS to identify common screens between transactions.
+        - Provides timing/duration analysis if start and end times are available.
+        - Handles missing or empty UI journals gracefully.
     """
     try:
         logger.info(f"🔄 Comparing transactions: {txn1_id} vs {txn2_id}")
@@ -1239,7 +1663,35 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
 @router.get("/current-selection")
 async def get_current_selection(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Get the currently selected file type(s)
+    Retrieve the currently selected file type(s) for a given session.
+
+    DESCRIPTION:
+        This endpoint fetches the user's current selection of file categories
+        (e.g., customer journals, ACU files, UI journals) from the session data.
+        It helps the frontend or other services know which file types are actively selected
+        for further processing, filtering, or analysis.
+
+    PARAMETERS:
+        session_id (str, optional):
+            The session ID containing the selection state.
+            Defaults to CURRENT_SESSION_ID.
+
+    RETURNS:
+        dict:
+            {
+                "selected_types": list[str],  # Currently selected file type(s)
+                "message": str (optional)     # Informational message if no selection exists
+            }
+
+    RAISES:
+        HTTPException:
+            - 404: If the session does not exist
+            - 500: For unexpected errors during retrieval
+
+    NOTES:
+        - If no file types have been selected in the session yet, the response
+          will contain an empty list and an informational message.
+        - Useful for UI components to display or maintain the user's current selection.
     """
     try:
         logger.info(f"🔍 Getting current selection for session: {session_id}")
@@ -1272,8 +1724,44 @@ async def get_current_selection(session_id: str = Query(default=CURRENT_SESSION_
 @router.get("/debug-session")
 async def debug_session(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Debug endpoint to check session contents
+    FUNCTION:
+        debug_session
+
+    DESCRIPTION:
+        Checks and displays the internal structure of the current session.
+        This is a development/debug tool to verify what data has been stored
+        (file categories, selected types, source files, transactions, etc.)
+        after file extraction and processing.
+
+    USAGE:
+        result = await debug_session(session_id="123456")
+
+    PARAMETERS:
+        session_id (str) :
+            The session identifier to inspect. Defaults to CURRENT_SESSION_ID.
+
+    RETURNS:
+        dict :
+            {
+                "exists"               : bool  - Whether the session exists
+                "message"              : str   - Info message when session missing
+                "has_file_categories"  : bool
+                "file_categories_keys" : list  - Names of file categories
+                "file_counts"          : dict  - Count of files per category
+                "selected_types"       : list  - Types of files selected by user
+                "extraction_path"      : str | None
+                "processed_files_dir"  : str
+                "has_transaction_data" : bool
+                "has_source_files"     : bool
+                "source_file_count"    : int
+            }
+
+    RAISES:
+        HTTPException :
+            - 404 : When session does not exist
+            - 500 : On unexpected internal errors
     """
+
     try:
         logger.info(f"🔍 Debugging session: {session_id}")
 
@@ -1321,16 +1809,52 @@ async def debug_session(session_id: str = Query(default=CURRENT_SESSION_ID)):
 @router.post("/visualize-individual-transaction-flow")
 async def visualize_individual_transaction_flow(request: TransactionVisualizationRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Generate UI flow visualization for a single transaction
-     Args:
-        request: Request body containing the transaction ID
-        session_id: Current session ID
-        
-    Returns:
-        Dictionary containing:
-        - transaction_data: Transaction details
-        - ui_flow: List of screen names
-        - has_flow: Boolean indicating if flow data exists
+    FUNCTION:
+        visualize_individual_transaction_flow
+
+    DESCRIPTION:
+        Generates a screen-flow visualization for a single ATM transaction by
+        analyzing UI journal files within the current session. It extracts
+        UI screen transitions based on the transaction's start and end times.
+
+    USAGE:
+        result = visualize_individual_transaction_flow(request)
+
+    PARAMETERS:
+        request (TransactionVisualizationRequest):
+            The request body containing the transaction_id whose UI flow
+            is to be visualized.
+
+        session_id (str):
+            The active session identifier used to retrieve uploaded and
+            processed ZIP data. Defaults to CURRENT_SESSION_ID.
+
+    RETURNS:
+        dict:
+            {
+                "transaction_id": str,
+                "transaction_type": str,
+                "start_time": str,
+                "end_time": str,
+                "end_state": str,
+                "transaction_log": str,
+                "source_file": str,
+                "ui_flow": list[str],      # Ordered screen names
+                "has_flow": bool,          # Whether any UI flow was extracted
+                "num_events": int          # Number of screens in the flow
+            }
+
+    RAISES:
+        HTTPException (404):
+            - If no session data exists
+            - If the transaction ID is not found
+
+        HTTPException (400):
+            - If transaction data is missing but required for visualization
+
+        HTTPException (500):
+            - If unexpected errors occur while parsing UI journals or
+              generating the flow
     """
     try:
         transaction_id = request.transaction_id
@@ -1467,9 +1991,92 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
 @router.post("/generate-consolidated-flow")
 async def generate_consolidated_flow(source_file: str = Body(...),transaction_type: str = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Generate consolidated flow visualization for all transactions of a specific type
-    from a specific source file
-    """
+FUNCTION:
+    generate_consolidated_flow
+
+DESCRIPTION:
+    Generates a consolidated UI flow visualization for all transactions of a
+    specific transaction type originating from a given source file.
+    The function filters transaction data, identifies the correct UI journal,
+    extracts UI screen navigation flows for every matching transaction, and
+    aggregates these results to produce a combined flow map containing:
+    - unique screens visited
+    - screen transitions and frequency
+    - screens involved in each transaction
+    - detailed per-transaction UI flows
+
+USAGE:
+    result = generate_consolidated_flow(
+        source_file="ATM1",
+        transaction_type="Cash Withdrawal",
+        session_id="12345"
+    )
+
+PARAMETERS:
+    source_file (str):
+        File name (without extension) of the UI journal associated with the
+        transaction data. Used to match transaction source to the UI log file.
+
+    transaction_type (str):
+        Specifies which type of transaction should be analyzed
+        (e.g., "Cash Withdrawal", "Balance Inquiry", etc.).
+
+    session_id (str):
+        Unique session ID used to retrieve previously processed ZIP data,
+        including UI journals and parsed transaction data. Defaults to the
+        currently active session.
+
+RETURNS:
+    dict:
+        A structured dictionary containing the consolidated UI flow:
+        {
+            "source_file": str,
+            "transaction_type": str,
+            "total_transactions": int,
+            "transactions_with_flow": int,
+            "successful_count": int,
+            "unsuccessful_count": int,
+            "screens": list[str],                   # unique screens visited
+            "transitions": [
+                {
+                    "from": str,
+                    "to": str,
+                    "count": int
+                }
+            ],
+            "screen_transactions": {
+                "ScreenName": [
+                    {
+                        "txn_id": str,
+                        "start_time": str,
+                        "state": str
+                    }
+                ]
+            },
+            "transaction_flows": {
+                "txn_id": {
+                    "screens": list[str],
+                    "start_time": str,
+                    "end_time": str,
+                    "state": str
+                }
+            }
+        }
+
+RAISES:
+    HTTPException 404:
+        - Session not found
+        - No transactions of the given type found in the specified source file
+        - No matching UI journal found for the source file
+
+    HTTPException 400:
+        - UI journal could not be parsed or is empty
+        - Missing transaction data in session
+
+    HTTPException 500:
+        - Unexpected internal errors during UI flow extraction or processing
+"""
+
     try:
         logger.info(f"🔄 Starting consolidated flow generation for type '{transaction_type}' from source '{source_file}'")
         logger.debug(f"Session ID received: {session_id}")
@@ -1665,7 +2272,85 @@ async def generate_consolidated_flow(source_file: str = Body(...),transaction_ty
 @router.post("/analyze-transaction-llm")
 async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Analyze a transaction log using LLM (Ollama) for anomaly detection
+    FUNCTION:
+        generate_consolidated_flow
+
+    DESCRIPTION:
+        Generates a consolidated UI flow visualization for **all transactions**
+        of a specific transaction type originating from a given source file.
+        The function processes transaction data, matches the correct UI journal,
+        extracts screen flows for each transaction, and returns aggregated
+        results including screens, transitions, and per-transaction flows.
+
+    USAGE:
+        result = generate_consolidated_flow(
+            source_file="ATM1",
+            transaction_type="Cash Withdrawal",
+            session_id="12345"
+        )
+
+    PARAMETERS:
+        source_file (str):
+            Name of the source UI journal file (without extension).
+            Used to match UI logs against transaction data.
+
+        transaction_type (str):
+            Transaction type to filter on (e.g., "Cash Withdrawal",
+            "Balance Inquiry", etc.).
+
+        session_id (str):
+            Session identifier used to retrieve processed ZIP data from
+            session storage. Defaults to the current session.
+
+    RETURNS:
+        dict:
+            A dictionary containing the consolidated UI flow analysis:
+                {
+                    "source_file": str,
+                    "transaction_type": str,
+                    "total_transactions": int,
+                    "transactions_with_flow": int,
+                    "successful_count": int,
+                    "unsuccessful_count": int,
+                    "screens": list[str],                     # unique screens
+                    "transitions": [
+                        {
+                            "from": str,
+                            "to": str,
+                            "count": int
+                        }
+                    ],
+                    "screen_transactions": {
+                        "ScreenName": [
+                            {
+                                "txn_id": str,
+                                "start_time": str,
+                                "state": str
+                            }
+                        ]
+                    },
+                    "transaction_flows": {
+                        "txn_id": {
+                            "screens": list[str],
+                            "start_time": str,
+                            "end_time": str,
+                            "state": str
+                        }
+                    }
+                }
+
+    RAISES:
+        HTTPException 404:
+            - Session not found
+            - No matching transactions found
+            - No matching UI journal found
+
+        HTTPException 400:
+            - Missing or empty UI journal
+            - Missing transaction data in session
+
+        HTTPException 500:
+            - Unexpected errors during flow extraction or processing
     """
     try:
         transaction_id = request.transaction_id
@@ -1785,8 +2470,54 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
 @router.post("/submit-llm-feedback")
 async def submit_llm_feedback(feedback: FeedbackSubmission,session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Submit feedback for LLM analysis
-    """
+FUNCTION:
+    submit_llm_feedback
+
+DESCRIPTION:
+    Handles submission of user feedback related to LLM-generated analysis for a
+    specific transaction. The function logs the feedback, stores it in a local
+    JSONL file for auditability, and keeps a copy in the active session for
+    immediate availability in the UI or further processing.
+
+USAGE:
+    result = await submit_llm_feedback(
+        feedback=FeedbackSubmission(...),
+        session_id="12345"
+    )
+
+PARAMETERS:
+    feedback (FeedbackSubmission):
+        Pydantic model containing all feedback fields submitted by the user,
+        including transaction ID, rating, alternative cause, comments,
+        user identity, model version, and the original LLM response.
+
+    session_id (str):
+        Unique session identifier used to store and organize feedback within
+        session storage. Defaults to the current active session.
+
+RETURNS:
+    dict:
+        {
+            "status": "success",
+            "message": "Thank you <name>! Your feedback has been recorded.",
+            "timestamp": "<YYYY-MM-DD HH:MM:SS>"
+        }
+
+        - `status`: Indicates whether the feedback submission was successful.
+        - `message`: User-friendly confirmation message.
+        - `timestamp`: Server-generated timestamp of the feedback record.
+
+SIDE EFFECTS:
+    - Appends feedback as a JSON line in `llm_feedback.json`
+    - Stores feedback in session under `feedback_data` list
+    - Creates session if missing
+
+RAISES:
+    HTTPException 500:
+        - Raised when unexpected failures occur while processing or storing
+          the feedback (e.g., file write errors, session update failures).
+"""
+
     try:
         logger.info(f"📝 Submitting feedback for transaction: {feedback.transaction_id}")
         logger.debug(f"Feedback payload: {feedback.dict()}")
@@ -1849,8 +2580,65 @@ async def submit_llm_feedback(feedback: FeedbackSubmission,session_id: str = Que
 @router.get("/get-feedback/{transaction_id}")
 async def get_feedback(transaction_id: str,session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Get all feedback for a specific transaction
-    """
+FUNCTION:
+    get_feedback
+
+DESCRIPTION:
+    Retrieves all feedback entries associated with a specific transaction ID.
+    This function searches both the active session storage and the persistent
+    `llm_feedback.json` file to consolidate and return all matching feedback
+    records. Duplicate entries are automatically filtered out.
+
+USAGE:
+    result = await get_feedback(
+        transaction_id="TXN12345",
+        session_id="12345"
+    )
+
+PARAMETERS:
+    transaction_id (str):
+        The unique identifier of the transaction for which the user wants to
+        retrieve feedback.
+
+    session_id (str):
+        Session identifier used to retrieve in-session feedback data. Defaults
+        to the current active session.
+
+RETURNS:
+    dict:
+        {
+            "transaction_id": str,
+            "feedback_count": int,
+            "feedback": list[dict]
+        }
+
+        - `transaction_id`: The transaction ID used in the query.
+        - `feedback_count`: Total number of feedback entries found.
+        - `feedback`: List of feedback objects containing fields such as
+            - transaction_id
+            - rating
+            - alternative_cause
+            - comment
+            - user_name
+            - user_email
+            - model_version
+            - original_llm_response
+            - timestamp
+            - session_id
+
+DATA SOURCES:
+    - Session storage (`feedback_data` list)
+    - `llm_feedback.json` file (JSONL format)
+
+SIDE EFFECTS:
+    None — this endpoint only reads data.
+
+RAISES:
+    HTTPException 500:
+        - Triggered when an unexpected error occurs while reading file data,
+          parsing JSON, or retrieving session information.
+"""
+
     try:
         logger.info(f"📖 Retrieving feedback for transaction: {transaction_id}")
         

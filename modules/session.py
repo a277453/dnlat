@@ -15,17 +15,65 @@ logger.info("Starting session_service")
 
 class SessionService:
     """
-    Manages session data for uploaded and processed files
+    CLASS: SessionService
+
+DESCRIPTION:
+    Manages lifecycle and data storage for sessions created during file
+    processing. Supports creation, retrieval, updating, deletion, and
+    checking of session existence.
+
+USAGE:
+    service = SessionService()
+    service.create_session("123", file_categories={...})
+    data = service.get_session("123")
+
     """
     
     def __init__(self):
+        """
+    FUNCTION: __init__
+
+    DESCRIPTION:
+        Initializes the in-memory session dictionary used to store all
+        session-related data.
+
+    USAGE:
+        service = SessionService()
+
+    PARAMETERS:
+        None
+
+    RETURNS:
+        None
+
+    RAISES:
+        None
+        """
         # In-memory storage (use Redis/Database in production)
         self._sessions: Dict[str, Dict[str, Any]] = {}
         logger.info("SessionService initialized") 
 
     def create_session(self, session_id: str, file_categories: Dict[str, list] = None, extraction_path: Path = None) -> None:
         """
-        Create a new session with file categories
+        FUNCTION: create_session
+
+DESCRIPTION:
+    Creates a new session with file categories, extraction path,
+    and initializes selected type and processed data.
+
+USAGE:
+    service.create_session("abc", file_categories, extraction_path)
+
+PARAMETERS:
+    session_id (str)         : Unique session identifier.
+    file_categories (dict)   : Categories and associated file lists.
+    extraction_path (Path?)  : Path where files were extracted.
+
+RETURNS:
+    None
+
+RAISES:
+    None
         """
         self._sessions[session_id] = {
             'file_categories': file_categories or {},
@@ -38,7 +86,22 @@ class SessionService:
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
-        Retrieve session data
+        FUNCTION: get_session
+
+DESCRIPTION:
+    Retrieves complete session data for a given session ID.
+
+USAGE:
+    session = service.get_session("abc")
+
+PARAMETERS:
+    session_id (str) : Session identifier.
+
+RETURNS:
+    dict | None : Session data if found, otherwise None.
+
+RAISES:
+    None
         """
         session = self._sessions.get(session_id)
         if session:
@@ -49,7 +112,23 @@ class SessionService:
 
     def get_session_data(self, session_id: str, key: str) -> Any:
         """
-        Get a specific piece of data from a session
+        FUNCTION: get_session_data
+
+DESCRIPTION:
+    Retrieves a specific key/value stored in a session.
+
+USAGE:
+    value = service.get_session_data("abc", "file_categories")
+
+PARAMETERS:
+    session_id (str) : Session identifier.
+    key (str)        : Key to fetch from session data.
+
+RETURNS:
+    Any | None : Value of the key, or None if session/key doesn't exist.
+
+RAISES:
+    None
         """
         session = self.get_session(session_id)
         if session:
@@ -61,7 +140,28 @@ class SessionService:
 
     def update_session(self, session_id: str, key: str = None, value: Any = None, data: Dict = None) -> bool:
         """
-        Update specific session data
+        FUNCTION: update_session
+
+DESCRIPTION:
+    Updates session data. Supports updating a single key/value pair or
+    merging an entire dictionary of updates.
+
+USAGE:
+    service.update_session("abc", key="selected_type", value="ui_journals")
+    OR
+    service.update_session("abc", data={"processed_data": {...}})
+
+PARAMETERS:
+    session_id (str) : Session identifier.
+    key (str?)       : A single key to update.
+    value (Any?)     : Value to set for the key.
+    data (dict?)     : Dictionary of multiple keys/values to update.
+
+RETURNS:
+    bool : True if updated, False if session does not exist.
+
+RAISES:
+    None
         """
         if session_id in self._sessions:
             if data:
@@ -77,7 +177,22 @@ class SessionService:
 
     def get_file_categories(self, session_id: str) -> Optional[Dict[str, list]]:
         """
-        Get file categories for a session
+        FUNCTION: get_file_categories
+
+DESCRIPTION:
+    Returns file categories stored in a session.
+
+USAGE:
+    categories = service.get_file_categories("abc")
+
+PARAMETERS:
+    session_id (str) : Session identifier.
+
+RETURNS:
+    dict | None : File categories or None if session does not exist.
+
+RAISES:
+    None
         """
         session = self.get_session(session_id)
         if session:
@@ -88,7 +203,23 @@ class SessionService:
 
     def set_selected_type(self, session_id: str, file_type: str) -> bool:
         """
-        Set the selected file type for a session
+        FUNCTION: set_selected_type
+
+DESCRIPTION:
+    Updates the selected file type for the session.
+
+USAGE:
+    service.set_selected_type("abc", "customer_journals")
+
+PARAMETERS:
+    session_id (str) : Session identifier.
+    file_type (str)  : Selected file type value.
+
+RETURNS:
+    bool : True if updated, False otherwise.
+
+RAISES:
+    None
         """
         result = self.update_session(session_id, 'selected_type', file_type)
         if result:
@@ -97,7 +228,22 @@ class SessionService:
 
     def get_selected_type(self, session_id: str) -> Optional[str]:
         """
-        Get the currently selected file type
+        FUNCTION: get_selected_type
+
+DESCRIPTION:
+    Retrieves the selected file type for a session.
+
+USAGE:
+    t = service.get_selected_type("abc")
+
+PARAMETERS:
+    session_id (str) : Session identifier.
+
+RETURNS:
+    str | None : Selected type or None if not set or session missing.
+
+RAISES:
+    None
         """
         session = self.get_session(session_id)
         if session:
@@ -109,7 +255,22 @@ class SessionService:
 
     def delete_session(self, session_id: str) -> bool:
         """
-        Delete a session
+        FUNCTION: delete_session
+
+    DESCRIPTION:
+        Deletes the entire session from storage.
+
+    USAGE:
+        service.delete_session("abc")
+
+    PARAMETERS:
+        session_id (str) : Session identifier.
+
+    RETURNS:
+        bool : True if deleted, False otherwise.
+
+    RAISES:
+        None
         """
         if session_id in self._sessions:
             del self._sessions[session_id]
@@ -120,12 +281,30 @@ class SessionService:
 
     def session_exists(self, session_id: str) -> bool:
         """
-        Check if session exists
+        FUNCTION: session_exists
+
+    DESCRIPTION:
+        Checks whether a session with the given ID exists.
+
+    USAGE:
+        exists = service.session_exists("abc")
+
+    PARAMETERS:
+        session_id (str) : Session identifier.
+
+    RETURNS:
+        bool : True if session exists, otherwise False.
+
+    RAISES:
+        None
         """
         exists = session_id in self._sessions
-        logger.debug(f"Session exists check for {session_id}: {exists}")  
+        logger.debug(f"Session exists check for {session_id}: {exists}") 
+        logger.info(f"hey saniya any session found")
         return exists
 
-
-# Global session service instance
+"""
+    GLOBAL:
+        session_service : Shared instance of SessionService.
+    """
 session_service = SessionService()

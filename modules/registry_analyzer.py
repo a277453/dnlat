@@ -14,11 +14,53 @@ KV_RE = re.compile(r'^\s*(@|".+?"|[^=]+?)\s*=\s*(.+?)\s*$')
 
 class RegistryAnalyzerService:
     """
-    Service for parsing and comparing Windows Registry (.reg) files.
-    Logic replicated from the reference registry tool.
+    FUNCTION:
+        RegistryAnalyzerService
+
+    DESCRIPTION:
+        Service class responsible for parsing, decoding, analyzing,
+        and comparing Windows Registry (.reg) files. It replicates
+        the logic of standard registry parsing tools and exposes
+        helper functions for data extraction and comparison.
+
+    USAGE:
+        service = RegistryAnalyzerService()
+        diff = service.compare_registry_files("old.reg", "new.reg")
+
+    PARAMETERS:
+        None
+
+    RETURNS:
+        None
+
+    RAISES:
+        None
     """
 
     def _safe_decode_lines(self, blob: bytes) -> List[str]:
+        """
+        FUNCTION:
+            _safe_decode_lines
+
+        DESCRIPTION:
+            Safely decodes raw registry file bytes using multiple encodings
+            until decoding succeeds. Falls back to UTF-8 with replacement
+            if all other decoders fail.
+
+        USAGE:
+            lines = self._safe_decode_lines(blob)
+
+        PARAMETERS:
+            blob (bytes) :
+                Raw file content in bytes format.
+
+        RETURNS:
+            list[str] :
+                List of decoded text lines.
+
+        RAISES:
+            None
+        """
         logger.debug("Starting safe decode for registry file content.")
         encs = ["utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "cp1252", "latin-1", "utf-8"]
         for e in encs:
@@ -33,6 +75,28 @@ class RegistryAnalyzerService:
         return blob.decode("utf-8", errors="replace").splitlines()
 
     def _normalize_key(self, raw: str) -> str:
+        """
+        FUNCTION:
+            _normalize_key
+
+        DESCRIPTION:
+            Normalizes registry key formatting by stripping whitespace,
+            removing quotes, and handling "@" default key cases.
+
+        USAGE:
+            normalized = self._normalize_key(key_string)
+
+        PARAMETERS:
+            raw (str) :
+                Raw key string extracted from registry file.
+
+        RETURNS:
+            str :
+                Cleaned and normalized registry key.
+
+        RAISES:
+            None
+        """
         logger.debug(f"Normalizing registry key: {raw}")
         s = (raw or "").strip()
         if s == "@":
@@ -42,6 +106,31 @@ class RegistryAnalyzerService:
         return s
 
     def _parse_lines(self, lines: List[str]) -> List[Dict[str, str]]:
+        """
+        FUNCTION:
+            _parse_lines
+
+        DESCRIPTION:
+            Parses registry lines into structured dictionaries containing
+            section names (registry paths), keys, and values.
+
+        USAGE:
+            rows = self._parse_lines(lines)
+
+        PARAMETERS:
+            lines (list[str]) :
+                List of decoded registry file lines.
+
+        RETURNS:
+            list[dict] :
+                Each dict includes:
+                    - Device Path
+                    - Key
+                    - Value
+
+        RAISES:
+            None
+        """
         logger.debug("Parsing lines from registry file.")
         rows: List[Dict[str, str]] = []
         current_section: str | None = None
@@ -84,6 +173,26 @@ class RegistryAnalyzerService:
         return rows
 
     def _parse_reg_file_to_df(self, file_path: str) -> pd.DataFrame:
+        """
+        FUNCTION: _parse_reg_file_to_df
+
+        DESCRIPTION:
+        Reads a registry file, decodes its content, parses registry entries,
+        and converts them into a pandas DataFrame.
+
+        USAGE:
+        df = self._parse_reg_file_to_df("file1.reg")
+
+        PARAMETERS:
+        file_path (str) : Path to registry (.reg) file.
+
+        RETURNS:
+        pandas.DataFrame :
+        Columns: ["Device Path", "Key", "Value"]
+
+        RAISES:
+        FileNotFoundError : If the file does not exist.
+        """
         logger.info(f"Parsing registry file: {file_path}")
 
         if not Path(file_path).exists():
@@ -105,6 +214,35 @@ class RegistryAnalyzerService:
         return df
 
     def view_registry_file(self, file_path: str) -> Dict[str, Any]:
+        """
+        FUNCTION:
+            view_registry_file
+
+        DESCRIPTION:
+            Parses a registry file and returns results in JSON-friendly
+            dictionary form. Includes parsed entries and count. If parsing
+            fails, returns raw file content and the error message.
+
+        USAGE:
+            response = self.view_registry_file("settings.reg")
+
+        PARAMETERS:
+            file_path (str) :
+                Path to the registry file being viewed.
+
+        RETURNS:
+            dict :
+                {
+                    "parsed": bool,
+                    "entries": list_of_dicts OR None,
+                    "count": int,
+                    "raw_content": str (if error),
+                    "error": str (if error)
+                }
+
+        RAISES:
+            None
+        """
         logger.info(f"Viewing registry file: {file_path}")
         try:
             df = self._parse_reg_file_to_df(file_path)
@@ -125,6 +263,34 @@ class RegistryAnalyzerService:
             }
 
     def compare_registry_files(self, file1_path: str, file2_path: str) -> Dict[str, Any]:
+
+        """
+        FUNCTION: compare_registry_files
+
+        DESCRIPTION:
+        Compares two registry files by reading and parsing both, merging
+        their content, and identifying added, removed, changed, and identical
+        entries.
+
+        USAGE:
+        result = service.compare_registry_files("a.reg", "b.reg")
+
+        PARAMETERS:
+        file1_path (str) : Path to first registry file.
+        file2_path (str) : Path to second registry file.
+
+        RETURNS:
+        dict :
+            {
+            "changed": list,
+            "added": list,
+            "removed": list,
+            "identical_count": int
+            }
+
+        RAISES:
+        FileNotFoundError : When either file does not exist.
+        """
         logger.info(f"Comparing registry files: {file1_path} <-> {file2_path}")
 
         df_a = self._parse_reg_file_to_df(file1_path)

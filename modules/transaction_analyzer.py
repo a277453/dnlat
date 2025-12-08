@@ -18,10 +18,47 @@ logger.info("Transaction Analyzer Service loaded")
             
 class TransactionAnalyzerService:
     """
-    Service for parsing and analyzing customer journal transactions
+    CLASS: TransactionAnalyzerService
+
+    DESCRIPTION:
+        Service class for parsing and analyzing customer journal log files.
+        Loads XML configuration and provides methods to extract transactions,
+        detect flow patterns, compare transactions and generate analysis output.
+
+    USAGE:
+        analyzer = TransactionAnalyzerService()
+        result = analyzer.analyze_customer_journals(list_of_files)
+
+    ATTRIBUTES:
+        real_dict (dict) : Mapping of raw function names to readable names
+        start_key (list) : List of TIDs representing transaction start
+        end_key (list)   : List of TIDs representing transaction end
+        chain_key (list) : List of TIDs used for transaction chaining
+
+    RAISES:
+        FileNotFoundError : When dnLogAtConfig.xml file is not found
     """
     
     def __init__(self):
+        """
+        FUNCTION: __init__
+
+        DESCRIPTION:
+            Initializes the analyzer, loads XML configuration, resolves paths
+            and prepares key mappings (start, end, chaining TIDs).
+
+        USAGE:
+            analyzer = TransactionAnalyzerService()
+
+        PARAMETERS:
+            None
+
+        RETURNS:
+            None
+
+        RAISES:
+            FileNotFoundError : If XML configuration is missing
+        """
         # Load configuration when service is initialized
         # Define paths relative to this file's location for portability
         base_dir = Path(__file__).resolve().parent
@@ -56,17 +93,32 @@ class TransactionAnalyzerService:
     
     def analyze_customer_journals(self, customer_journal_files: List[str]) -> Dict:
         """
-        Analyze customer journal files and return transaction data
-        
-        This method processes multiple customer journal files and aggregates
-        all transactions into a single response.
-        
-        Args:
-            customer_journal_files: List of paths to customer journal files
-        Returns:
-            Dictionary containing:
-            - transactions: List of transaction dictionaries
-            - summary: Summary statistics
+        FUNCTION: analyze_customer_journals
+
+        DESCRIPTION:
+            Processes multiple customer journal text files, extracts transaction
+            data from each file, merges them, and generates summary statistics.
+
+        USAGE:
+            result = analyze_customer_journals(["file1.txt", "file2.txt"])
+
+        PARAMETERS:
+            customer_journal_files (List[str]) :
+                List of full file paths for customer journals.
+
+        RETURNS:
+            dict : {
+                "transactions": [ ... list of txn dictionaries ... ],
+                "summary": {
+                    "total_transactions": int,
+                    "successful": int,
+                    "unsuccessful": int,
+                    "transaction_types": list
+                }
+            }
+
+        RAISES:
+            Exception : Logged internally when file parsing fails
         """
         all_transactions = []
         
@@ -150,13 +202,28 @@ class TransactionAnalyzerService:
     
     def parse_customer_journal(self, file_path: str) -> pd.DataFrame:
         """
-        Parse a customer journal file and return DataFrame with transactions
-        
-        Args:
-            file_path: Path to the customer journal file
-        Returns:
-            DataFrame with transaction data
+        FUNCTION: parse_customer_journal
+
+        DESCRIPTION:
+            Reads a customer journal log text file, extracts timestamp/TID/message
+            information, and identifies transactions using internal logic.
+
+        USAGE:
+            df = parse_customer_journal("path/to/journal.txt")
+
+        PARAMETERS:
+            file_path (str) :
+                Full path to a customer journal file.
+
+        RETURNS:
+            pd.DataFrame :
+                DataFrame containing extracted transaction rows.
+
+        RAISES:
+            FileNotFoundError : When file cannot be read
+            ValueError        : When parsing timestamp fails
         """
+        logger.info("Parsing journal file: %s", file_path)
         dummy = Path(file_path).stem
         
         try:
@@ -191,7 +258,38 @@ class TransactionAnalyzerService:
         return pd.DataFrame(transactions)
     
     def _find_all_transactions(self, df: pd.DataFrame, dummy: str) -> List[Dict]:
-        """Find all individual transactions in the parsed data"""
+        """
+        FUNCTION: _find_all_transactions
+
+        DESCRIPTION:
+            Internal method to identify all transaction boundaries based on
+            start TIDs, end TIDs, and chained TIDs. Extracts each transaction's
+            type, state, duration and full log.
+
+        USAGE:
+            txns = _find_all_transactions(df, "file1")
+
+        PARAMETERS:
+            df (pd.DataFrame) :
+                Parsed journal rows (timestamp, tid, message)
+            dummy (str) :
+                File name stem used as fallback Transaction ID
+
+        RETURNS:
+            list of dict :
+                Each dict contains:
+                - Transaction ID
+                - Start Time
+                - End Time
+                - Duration
+                - Transaction Type
+                - End State
+                - Transaction Log
+                - Source_File
+
+        RAISES:
+            None (all errors logged internally)
+        """
         logger.info("Finding all transactions in parsed data for %s", dummy)
         transactions_bounds = []
         i = 0
@@ -331,10 +429,33 @@ class TransactionAnalyzerService:
         return transactions
     
     def extract_actual_flows_from_txt_file(self, txt_file_path: str, selected_transaction_type: str) -> dict:
+        """
+        FUNCTION: extract_actual_flows_from_txt_file
+
+        DESCRIPTION:
+            Reads a pre-generated transaction_flows.txt file and extracts screen
+            flow sequences for a given transaction type.
+
+        USAGE:
+            flows = extract_actual_flows_from_txt_file("transaction_flows.txt", "Withdrawal")
+
+        PARAMETERS:
+            txt_file_path (str) :
+                Path to the flow file.
+            selected_transaction_type (str) :
+                Transaction type to filter flows.
+
+        RETURNS:
+            dict :
+                {
+                    "TXN_ID_1": { "screens": [...], "timestamp": "" },
+                    "TXN_ID_2": { ... }
+                }
+
+        RAISES:
+            None (all errors logged internally)
+        """
         logger.info("Extracting actual flows from %s for type '%s'", txt_file_path, selected_transaction_type)
-        """
-        Extract the actual flows from the transaction_flows.txt file for a specific transaction type
-        """
         flows = {}
         
         if not os.path.exists(txt_file_path):
@@ -385,15 +506,62 @@ class TransactionAnalyzerService:
     
     def create_side_by_side_flow_comparison_data(self, df: pd.DataFrame, txn1_id: str, txn2_id: str, txt_file_path: str) -> dict:
         """
-        Create side-by-side flow comparison data for two transactions
-        Uses Longest Common Subsequence (LCS) algorithm to find sequential matches
+        FUNCTION: create_side_by_side_flow_comparison_data
+
+        DESCRIPTION:
+            Generates comparison data for two transactions using the LCS algorithm
+            to find matching and non-matching screens.
+
+        USAGE:
+            data = create_side_by_side_flow_comparison_data(df, "TXN001", "TXN002", "flows.txt")
+
+        PARAMETERS:
+            df (pd.DataFrame) :
+                Full transaction DataFrame
+            txn1_id (str) :
+                First transaction ID
+            txn2_id (str) :
+                Second transaction ID
+            txt_file_path (str) :
+                Path to transaction_flows.txt
+
+        RETURNS:
+            dict : Comparison structure for UI rendering
+
+        RAISES:
+            None
         """
         
     
     def generate_data_based_comparison_analysis(self, txn1_data, txn2_data, txn1_id: str, txn2_id: str, flows_data: dict) -> str:
         """
-        Generate detailed comparison analysis based purely on transaction data without AI/LLM
-        Uses only absolute data from the transactions - no generated or assumed data
+        FUNCTION: generate_data_based_comparison_analysis
+
+        DESCRIPTION:
+            Generates detailed comparison analysis between two transactions using
+            only actual data (no AI/LLM). Includes duration, steps, screens,
+            source file info and uniqueness analysis.
+
+        USAGE:
+            analysis = generate_data_based_comparison_analysis(txn1, txn2, "ID1", "ID2", flows)
+
+        PARAMETERS:
+            txn1_data (dict or Series) :
+                Data for transaction 1
+            txn2_data (dict or Series) :
+                Data for transaction 2
+            txn1_id (str) :
+                Transaction ID 1
+            txn2_id (str) :
+                Transaction ID 2
+            flows_data (dict) :
+                Extracted flow mapping
+
+        RETURNS:
+            str : Formatted analysis output (markdown-style text)
+
+        RAISES:
+            Exception : Logged internally when errors occur
         """
         logger.info(f"Starting comparison analysis for transactions {txn1_id} and {txn2_id}")
 

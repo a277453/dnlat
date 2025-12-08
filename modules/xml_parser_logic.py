@@ -1,3 +1,15 @@
+"""
+XML Parser Logic Module
+
+This module provides utilities for parsing XML and XSD files, extracting
+documentation, cleaning embedded HTML, and converting XML structures into
+pandas DataFrames.
+
+Functions:
+    clean_html_content()     : Cleans and formats HTML documentation.
+    _parse_xsd_for_docs()    : Extracts documentation for elements from XSD content.
+    parse_xml_to_dataframe() : Parses XML and returns a structured DataFrame.
+"""
 from lxml import etree as ET
 import re
 import pandas as pd
@@ -8,10 +20,31 @@ import logging
 
 logger.info("Starting xml_parser_logic")
 
-
-
 def clean_html_content(content: str) -> str:
-    """Cleans and formats HTML content from documentation with proper spacing."""
+    """
+    FUNCTION:
+        clean_html_content
+
+    DESCRIPTION:
+        Cleans HTML or CDATA content from XML/XSD documentation by removing
+        HTML tags, decoding entities, converting structural tags into Markdown,
+        and normalizing whitespace.
+
+    USAGE:
+        cleaned = clean_html_content(html_text)
+
+    PARAMETERS:
+        content (str):
+            Raw HTML or CDATA text to be cleaned and converted into readable text.
+
+    RETURNS:
+        str:
+            Cleaned and formatted text output.
+
+    RAISES:
+        None:
+            All exceptions are internally handled and logged. Returns empty string on failure.
+    """
     logger.info("Cleaning HTML content started")
     try:
         if not content:
@@ -73,10 +106,35 @@ def clean_html_content(content: str) -> str:
 
 
 def _parse_xsd_for_docs(xsd_content: str) -> dict:
-    """Parses an XSD file to extract documentation for each element.
-    
-    Returns a dictionary mapping element names to their HTML documentation strings.
     """
+    FUNCTION:
+        _parse_xsd_for_docs
+
+    DESCRIPTION:
+        Parses XSD schema content to extract documentation for each defined
+        element. Extracts <xs:documentation> HTML content, cleans it, and maps
+        each element name to its documentation.
+
+    USAGE:
+        docs = _parse_xsd_for_docs(xsd_text)
+
+    PARAMETERS:
+        xsd_content (str):
+            The full textual content of an XSD file.
+
+    RETURNS:
+        dict:
+            A dictionary where:
+                key   = XML element name (str)
+                value = cleaned documentation text (str)
+
+    RAISES:
+        ET.ParseError:
+            When XSD parsing fails due to malformed XML.
+        Exception:
+            For any unexpected errors. All errors are logged, and {} is returned.
+    """
+
     logger.info("XSD parsing started")
     if not xsd_content:
         logger.debug("Empty XSD content received")
@@ -184,14 +242,38 @@ def _parse_xsd_for_docs(xsd_content: str) -> dict:
 
 
 def parse_xml_to_dataframe(xml_content: str, filename: str, xsd_content: str = None) -> pd.DataFrame:
-    """Parses XML content and returns a DataFrame with parameters and their details.
-    Args:
-        xml_content: The XML content to parse
-        filename: The source filename
-        xsd_content: Optional XSD content for documentation extraction
-        
-    Returns:
-        A pandas DataFrame with columns: Parameter, Value, Details, Source
+    """
+    FUNCTION:
+        parse_xml_to_dataframe
+
+    DESCRIPTION:
+        Parses XML content into a pandas DataFrame. Extracts element names,
+        values, and optionally merges documentation extracted from an XSD file.
+
+    USAGE:
+        df = parse_xml_to_dataframe(xml_text, "config.xml", xsd_text)
+
+    PARAMETERS:
+        xml_content (str):
+            Raw XML content to be parsed.
+        filename (str):
+            Source filename used for logging or identification.
+        xsd_content (str, optional):
+            Optional XSD schema text from which documentation will be extracted.
+
+    RETURNS:
+        pandas.DataFrame:
+            A DataFrame with the following columns:
+                - Parameter : XML element name
+                - Value     : Extracted text value
+                - Details   : Documentation text (if available)
+            Returns an empty DataFrame on failure.
+
+    RAISES:
+        ValueError:
+            If xml_content is empty or missing.
+        Exception:
+            Other parsing errors are logged, and an empty DataFrame is returned.
     """
     logger.info(f"XML to DataFrame parsing started for file: {filename}")
     

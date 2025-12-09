@@ -2971,7 +2971,7 @@ def render_acu_compare(): # MODIFIED
 
                 if resp.status_code == 200:
                     data = resp.json()
-                    all_files = data.get('files', {})
+                    all_files = data.get('acu_files', {})
 
                     st.write("🔍 DEBUG: Raw ACU files from Source A:", all_files)   #------added
                     if all_files:
@@ -3059,8 +3059,8 @@ def render_acu_compare(): # MODIFIED
         files1_list = sorted(comp_data['files1'].keys())
         files2_list = sorted(comp_data['files2'].keys())
 
-        st.write("🔍 DEBUG: Files1 list:", files1_list)  # DEBUG ADDED
-        st.write("🔍 DEBUG: Files2 list:", files2_list)  # DEBUG ADDED
+        #st.write("🔍 DEBUG: Files1 list:", files1_list)  # DEBUG ADDED
+        #st.write("🔍 DEBUG: Files2 list:", files2_list)  # DEBUG ADDED
         
         # Find common files
         common_files = set(os.path.basename(f) for f in files1_list) & set(os.path.basename(f) for f in files2_list)

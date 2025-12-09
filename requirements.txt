@@ -9,3 +9,5 @@ requests
 lxml
 xmltodict
 ollama
+pandas
+xmldict

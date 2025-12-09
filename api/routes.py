@@ -545,7 +545,22 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
             }
         
         # Filter out XSD files (they start with __xsd__)
+       
         xml_files = [f for f in acu_files if not f.startswith('__xsd__')]
+
+        logger.info(f"Found {len(xml_files)} ACU XML file(s) in session {session_id}")
+
+        # NEW FIX — return filename → content dict
+        xml_dict = {fname: acu_files[fname] for fname in xml_files}
+
+        return {
+            "acu_files": xml_dict,       # <-- What frontend expects!
+            "logs": acu_logs or [],
+            "count": len(xml_dict),
+            "message": f"Found {len(xml_dict)} ACU XML file(s)"
+        }
+
+        """xml_files = [f for f in acu_files if not f.startswith('__xsd__')]
 
         logger.info(f">> SP list {xml_files[:5]}")
         logger.info(f"Found {len(xml_files)} ACU XML file(s) in session {session_id}")
@@ -556,7 +571,7 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
             "logs": acu_logs or [],
             "count": len(xml_files),
             "message": f"Found {len(xml_files)} ACU XML file(s)"
-        }
+        }"""
         
     except HTTPException:
         raise

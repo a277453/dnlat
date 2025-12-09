@@ -2795,7 +2795,7 @@ def render_acu_single_parse(): # MODIFIED
         Exception    : Any unexpected errors during parsing or UI rendering 
                        are caught and shown via Streamlit error boxes.
     """
-    st.write("SESSION STATE DEBUG:", st.session_state)   # debug Added
+    #st.write("SESSION STATE DEBUG:", st.session_state)   # debug Added
 
     st.markdown("### ⚡ ACU Configuration Parser")
     st.info("Extract, parse, and analyze ACU configuration files with XSD documentation support.")
@@ -2815,8 +2815,8 @@ def render_acu_single_parse(): # MODIFIED
         with st.spinner("Loading ACU files from processed package..."):
             try:
                 resp = requests.get(f"{API_BASE_URL}/get-acu-files", timeout=30)
-                st.write("DEBUG BACKEND STATUS:", resp.status_code)      #add debug point 
-                st.write("DEBUG BACKEND RESPONSE:", resp.text)           #
+                #st.write("DEBUG BACKEND STATUS:", resp.status_code)      #add debug point 
+                #st.write("DEBUG BACKEND RESPONSE:", resp.text)           #
                 if resp.status_code == 200:
                     data = resp.json()
                     st.write("debug data printing the data:",data)
@@ -2959,14 +2959,25 @@ def render_acu_compare(): # MODIFIED
     if not comp_data.get('files1'):
         with st.spinner("Loading ACU files from main package for Source A..."):
             try:
+                st.write("🔍 DEBUG: Calling API for Source A:", f"{API_BASE_URL}/get-acu-files")       # added
                 resp = requests.get(f"{API_BASE_URL}/get-acu-files", timeout=30)
+                #----added
+                st.write("🔍 DEBUG: Source A status code:", resp.status_code)
+                try:
+                    st.write("🔍 DEBUG: Source A JSON keys:", list(resp.json().keys()))
+                except:
+                    st.write("❌ DEBUG: Source A returned non-JSON:", resp.text)
+                    #---------------
+
                 if resp.status_code == 200:
                     data = resp.json()
                     all_files = data.get('files', {})
-                    
+
+                    st.write("🔍 DEBUG: Raw ACU files from Source A:", all_files)   #------added
                     if all_files:
                         comp_data['zip1_name'] = "Main Package"
                         comp_data['files1'] = {k: v for k, v in all_files.items() if not k.startswith('__xsd__')}
+                        st.write("🔍 DEBUG: Filtered XML files for Source A:", comp_data['files1'])  # DEBUG ADDED
                         comp_data['files1_all'] = all_files
                         st.success(f"✓ **Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
                         st.rerun()
@@ -2997,16 +3008,19 @@ def render_acu_compare(): # MODIFIED
         if zip2 and st.button("Process Source B", key="acu_process_b", type="primary"):
             with st.spinner("Extracting from Source B..."):
                 try:
+                    st.write("🔍 DEBUG: Uploading ZIP for Source B:", zip2.name)  # DEBUG ADDED
                     files_payload = {'file': (zip2.name, zip2.getvalue(), 'application/zip')}
                     response = requests.post(
                         f"{API_BASE_URL}/extract-files/",
                         files=files_payload,
                         timeout=120
                     )
+                    st.write("🔍 DEBUG: Response status for Source B:", response.status_code)  # DEBUG ADDED
                     
                     if response.status_code == 200:
                         result = response.json()
                         all_files = result.get('files', {})
+                        st.write("🔍 DEBUG: Response JSON keys for Source B:", list(result.keys()))  # DEBUG ADDED
                         
                         if not all_files:
                             st.error("❌ No ACU files found in the uploaded ZIP.")
@@ -3014,6 +3028,7 @@ def render_acu_compare(): # MODIFIED
                             comp_data['zip2_name'] = zip2.name
                             comp_data['files2'] = {k: v for k, v in all_files.items() if not k.startswith('__xsd__')}
                             comp_data['files2_all'] = all_files
+                            st.write("🔍 DEBUG: Filtered XML files for Source B:", comp_data['files2'])  # DEBUG ADDED
                             st.success(f"✓ Source B: {len(comp_data['files2'])} XML files")
                             st.rerun()
                     else:
@@ -3043,6 +3058,9 @@ def render_acu_compare(): # MODIFIED
         
         files1_list = sorted(comp_data['files1'].keys())
         files2_list = sorted(comp_data['files2'].keys())
+
+        st.write("🔍 DEBUG: Files1 list:", files1_list)  # DEBUG ADDED
+        st.write("🔍 DEBUG: Files2 list:", files2_list)  # DEBUG ADDED
         
         # Find common files
         common_files = set(os.path.basename(f) for f in files1_list) & set(os.path.basename(f) for f in files2_list)
@@ -3073,6 +3091,7 @@ def render_acu_compare(): # MODIFIED
                 # Find full paths
                 file1 = next(f for f in files1_list if os.path.basename(f) == selected_basename)
                 file2 = next(f for f in files2_list if os.path.basename(f) == selected_basename)
+                
                 
                 with st.spinner("Comparing files..."):
                     try:

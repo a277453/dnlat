@@ -14,7 +14,61 @@ from fastapi.logger import logger
 
 def create_comparison_flow_plotly(txn1_id, txn1_state, txn1_flow_screens, txn1_matches,
                                    txn2_id, txn2_state, txn2_flow_screens, txn2_matches):
-    """Create a side-by-side Plotly visualization for transaction flow comparison"""
+    """
+    FUNCTION:
+        create_comparison_flow_plotly
+
+    DESCRIPTION:
+        Creates a side-by-side Plotly visualization that compares the screen-flow
+        of two transactions. Each screen is displayed as a colored box where:
+            - Blue  : Matched screen between both transactions
+            - Orange: Non-matched screen  
+        The function generates a subplot with Transaction 1 on the left and 
+        Transaction 2 on the right, showing the flow sequence visually.
+
+    USAGE:
+        fig = create_comparison_flow_plotly(
+                txn1_id="TXN001",
+                txn1_state="APPROVED",
+                txn1_flow_screens=["Home", "PIN", "Withdraw"],
+                txn1_matches=[True, False, True],
+                txn2_id="TXN002",
+                txn2_state="DECLINED",
+                txn2_flow_screens=["Home", "PIN", "Amount"],
+                txn2_matches=[True, False, False]
+        )
+
+    PARAMETERS:
+        txn1_id (str) :
+            Transaction 1 identifier.
+        txn1_state (str) :
+            Final state of Transaction 1 (e.g., APPROVED/DECLINED).
+        txn1_flow_screens (list) :
+            Ordered list of screen names representing Transaction 1 flow.
+        txn1_matches (list[bool]) :
+            List indicating whether each screen of Transaction 1 matches
+            the corresponding screen of Transaction 2.
+
+        txn2_id (str) :
+            Transaction 2 identifier.
+        txn2_state (str) :
+            Final state of Transaction 2.
+        txn2_flow_screens (list) :
+            Ordered list of screen names representing Transaction 2 flow.
+        txn2_matches (list[bool]) :
+            Match indicators for Transaction 2 screens.
+
+    RETURNS:
+        fig (plotly.graph_objs._figure.Figure) :
+            A Plotly figure object that renders a dual-column screen-flow
+            comparison plot, ready to display in Streamlit or any frontend.
+
+    RAISES:
+        ValueError :
+            If screen lists and match lists do not have equal lengths.
+        TypeError  :
+            If any parameter is passed with an incorrect data type.
+    """
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
     
@@ -451,6 +505,31 @@ API_BASE_URL = "http://localhost:8000/api/v1"
 
 # Initialize session state
 def init_session_state():
+    """
+    FUNCTION:
+        init_session_state
+
+    DESCRIPTION:
+        Initializes required Streamlit session state variables used across
+        the application. Ensures that essential session keys exist before
+        any processing or UI interactions take place.
+
+    USAGE:
+        init_session_state()
+
+    PARAMETERS:
+        None
+
+    RETURNS:
+        None :
+            This function modifies Streamlit's session_state directly and does
+            not return any value.
+
+    RAISES:
+        None :
+            No exceptions are raised explicitly. Streamlit handles any internal
+            session state issues.
+    """
     if 'zip_processed' not in st.session_state:
         st.session_state.zip_processed = False
     if 'processing_result' not in st.session_state:
@@ -465,7 +544,31 @@ init_session_state()
 # ============================================
 
 def safe_decode(blob: bytes) -> str:
-    """Safely decode bytes to string"""
+    """
+    FUNCTION:
+        safe_decode
+
+    DESCRIPTION:
+        Safely decodes a byte string into a readable text string by trying a
+        sequence of common encodings. Prevents decoding failures by falling back
+        to a safe replacement-based UTF-8 decode when all attempts fail.
+
+    USAGE:
+        text = safe_decode(byte_data)
+
+    PARAMETERS:
+        blob (bytes) :
+            Raw byte content that needs to be converted into a string.
+
+    RETURNS:
+        str :
+            A decoded text string. If no encoding works, characters that cannot
+            be decoded are replaced with safe placeholder symbols.
+
+    RAISES:
+        None :
+            All decoding errors are internally handled; no exceptions are raised.
+    """
     encs = ["utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "cp1252", "latin-1", "utf-8"]
     for e in encs:
         try:
@@ -475,9 +578,34 @@ def safe_decode(blob: bytes) -> str:
     return blob.decode("utf-8", errors="replace")
 
 def parse_registry_file(content: bytes) -> pd.DataFrame:
-    """Parse registry file content into DataFrame"""
+    """
+    FUNCTION:
+        parse_registry_file
+
+    DESCRIPTION:
+        Parses the raw byte content of a Windows Registry (.reg) file and converts
+        it into a structured pandas DataFrame. The parser extracts sections (paths),
+        keys, and corresponding values using pattern matching for registry syntax.
+
+    USAGE:
+        df = parse_registry_file(reg_file_bytes)
+
+    PARAMETERS:
+        content (bytes) :
+            Raw byte content of the registry file to be parsed.
+
+    RETURNS:
+        pd.DataFrame :
+            A DataFrame containing parsed registry entries in the format:
+                - Path  : Registry section header (e.g., HKEY_LOCAL_MACHINE\...\Run)
+                - Key   : Registry key name (or '@' for default value)
+                - Value : Raw string value assigned to the key
+
+    RAISES:
+        None :
+            All decoding errors are handled by safe_decode; invalid lines are skipped.
+    """
     lines = safe_decode(content).splitlines()
-    
     rows = []
     current_section = None
     section_re = re.compile(r"^\s*\[(.+?)\]\s*$")
@@ -508,7 +636,37 @@ def parse_registry_file(content: bytes) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 def detect_line_difference(line1: str, line2: str) -> str:
-    """Detect type of difference between two lines"""
+    """
+    FUNCTION:
+        detect_line_difference
+
+    DESCRIPTION:
+        Compares two text lines and determines the type of difference between them.
+        It classifies the difference as:
+            - "identical"  : Exact text match
+            - "whitespace" : Text matches after removing spaces and tabs
+            - "content"    : Actual text/content differs
+
+    USAGE:
+        diff_type = detect_line_difference("abc", "a b c")
+
+    PARAMETERS:
+        line1 (str) :
+            First line of text to compare.
+        line2 (str) :
+            Second line of text to compare.
+
+    RETURNS:
+        str :
+            A string describing the comparison result:
+                - "identical"
+                - "whitespace"
+                - "content"
+
+    RAISES:
+        None :
+            This function does not raise exceptions. All comparisons are safe.
+    """
     if line1 == line2:
         return "identical"
     if line1.replace(' ', '').replace('\t', '') == line2.replace(' ', '').replace('\t', ''):
@@ -516,7 +674,45 @@ def detect_line_difference(line1: str, line2: str) -> str:
     return "content"
 
 def render_side_by_side_diff(content1: str, content2: str, filename1: str, filename2: str):
-    """Render side-by-side diff with color coding"""
+    """    
+    FUNCTION:
+        render_side_by_side_diff
+
+    DESCRIPTION:
+        Renders a side-by-side visual comparison of two text files using Streamlit.
+        Each line is classified as:
+            - Content change
+            - Whitespace-only change
+            - Identical
+        The function color-codes differences and displays line numbers for easy
+        comparison between the two files.
+
+    USAGE:
+        render_side_by_side_diff(file1_text, file2_text, "old.txt", "new.txt")
+
+    PARAMETERS:
+        content1 (str) :
+            Text content of the first (original) file.
+
+        content2 (str) :
+            Text content of the second (modified) file.
+
+        filename1 (str) :
+            Display name for the first file.
+
+        filename2 (str) :
+            Display name for the second file.
+
+    RETURNS:
+        None :
+            This function renders UI components directly in Streamlit and
+            does not return any value.
+
+    RAISES:
+        None :
+            Any internal comparison is safely handled. No exceptions are raised
+            during diff rendering.
+    """
     lines1 = content1.splitlines()
     lines2 = content2.splitlines()
     
@@ -855,7 +1051,40 @@ def render_transaction_stats():
             st.code(traceback.format_exc())
 
 def render_individual_transaction_analysis():
-    """Render individual transaction analysis"""
+    """
+    FUNCTION:
+        render_transaction_stats
+
+    DESCRIPTION:
+        Renders transaction statistics and allows filtering by source files
+        using Streamlit. The function fetches statistics from an API, analyzes
+        customer journals if needed, and displays:
+            - Overall transaction statistics
+            - Source file filters
+            - Filtered transaction tables
+            - Metrics such as total, successful, unsuccessful, and success rate
+        Users can also download filtered transactions as a CSV file.
+
+    USAGE:
+        render_transaction_stats()
+
+    PARAMETERS:
+        None
+
+    RETURNS:
+        None :
+            This function renders UI elements directly in Streamlit and does
+            not return any value.
+
+    RAISES:
+        requests.exceptions.Timeout :
+            Raised internally if any API request times out.
+        requests.exceptions.ConnectionError :
+            Raised internally if API server is unreachable.
+        Exception :
+            Any unexpected error during analysis, statistics retrieval, or
+            filtering is caught and displayed via Streamlit.
+    """
     st.markdown("### Individual Transaction Analysis")
     
     if 'transaction_analysis' not in st.session_state:
@@ -913,7 +1142,35 @@ def render_individual_transaction_analysis():
             st.code(txn_data['Transaction Log'], language='log')
 
 def render_registry_single():
-    """Render single registry file viewer"""
+    """
+    FUNCTION:
+        render_registry_single
+
+    DESCRIPTION:
+        Renders a single registry file viewer in Streamlit. The function allows
+        users to:
+            - Select a registry file from the processed package
+            - View its parsed contents in a table
+            - See metrics such as total entries, unique paths, and unique keys
+            - Search within paths, keys, or values
+            - Download the displayed registry data as a CSV
+
+    USAGE:
+        render_registry_single()
+
+    PARAMETERS:
+        None
+
+    RETURNS:
+        None :
+            This function renders UI components directly in Streamlit and does
+            not return any value.
+
+    RAISES:
+        Exception :
+            Any unexpected error while reading or parsing the registry file is
+            caught and displayed via Streamlit.
+    """
     st.markdown("### Registry File Viewer")
 
     file_categories = st.session_state.processing_result['categories']
@@ -981,7 +1238,37 @@ def render_registry_single():
                 st.error(f"Error loading file: {str(e)}")
 
 def render_registry_compare():
-    """Render Registry File Comparison - Upload 2 ZIPs"""
+    """
+    FUNCTION:
+        render_registry_compare
+
+    DESCRIPTION:
+        Renders a side-by-side registry file comparison interface in Streamlit.
+        The function allows users to:
+            - View registry files from the first uploaded package (already loaded)
+            - Upload a second ZIP package containing registry files for comparison
+            - Automatically detect common registry files between the two packages
+            - Select a file to compare from the common files
+            - Render a side-by-side diff of the selected registry file using
+              color-coded highlights for changes
+        Supports downloading and visual inspection of differences.
+
+    USAGE:
+        render_registry_compare()
+
+    PARAMETERS:
+        None
+
+    RETURNS:
+        None :
+            This function renders UI components directly in Streamlit and does
+            not return any value.
+
+    RAISES:
+        Exception :
+            Any unexpected error during file upload, processing, or comparison
+            is caught and displayed via Streamlit.
+    """
     st.markdown("### Registry File Comparison")
     
     # Check if we have any registry files in current session
@@ -1117,7 +1404,37 @@ def render_registry_compare():
 
 def render_transaction_comparison():
     """
-    Render transaction comparison analysis with source file filter
+    FUNCTION:
+        render_transaction_comparison
+
+    DESCRIPTION:
+        Renders a comprehensive transaction comparison interface in Streamlit.
+        The function allows users to:
+            - Analyze customer journals if analysis is not yet performed
+            - Filter transactions based on source files, transaction type, and state
+            - Select two transactions for comparison
+            - Display side-by-side UI flow of both transactions with color-coded matches
+            - Show transaction logs for each selected transaction
+            - Provide detailed metrics, including duration differences and source file info
+            - Highlight unique and common screens between transactions
+        Supports visual exploration and side-by-side comparisons for better insight
+        into transaction flows and differences.
+
+    USAGE:
+        render_transaction_comparison()
+
+    PARAMETERS:
+        None
+
+    RETURNS:
+        None :
+            This function renders UI components directly in Streamlit and does
+            not return any value.
+
+    RAISES:
+        Exception :
+            Any unexpected error during API calls, analysis, or comparison is
+            caught and displayed via Streamlit.
     """
     st.markdown("### ⚖️ Transaction Comparison Analysis")
     
@@ -1575,7 +1892,38 @@ def render_transaction_comparison():
             st.code(traceback.format_exc())
 
 def render_ui_flow_individual():
-    """Render UI flow visualization for individual transaction"""
+    """
+    FUNCTION:
+        render_ui_flow_individual
+
+    DESCRIPTION:
+        Renders an interactive visualization of the UI flow for a single transaction
+        in Streamlit. The function performs the following steps:
+            - Checks if customer journals have been analyzed; performs analysis if needed
+            - Retrieves available source files and filters transactions by selected sources
+            - Allows optional filtering by transaction type and end state
+            - Lets the user select a specific transaction to visualize
+            - Fetches transaction UI flow and displays:
+                - Transaction metrics (Type, State, Start/End Time, Source File, UI Events)
+                - UI flow visualization (via Plotly flowchart or fallback list)
+                - Full transaction log
+        Provides an intuitive interface to explore and debug individual transaction flows.
+
+    USAGE:
+        render_ui_flow_individual()
+
+    PARAMETERS:
+        None
+
+    RETURNS:
+        None :
+            This function renders Streamlit UI elements directly and does not return a value.
+
+    RAISES:
+        Exception :
+            Any unexpected errors during API calls, analysis, filtering, or visualization
+            are caught and displayed via Streamlit.
+    """
     st.markdown("### 🖥️ UI Flow of Individual Transaction")
     
     need_analysis = False
@@ -1853,17 +2201,71 @@ def render_ui_flow_individual():
             st.code(traceback.format_exc())
 
 def render_under_construction(function_name: str):
-    """Render under construction message"""
+    """
+    FUNCTION:
+        render_under_construction
+
+    DESCRIPTION:
+        Displays an "Under Construction" message in Streamlit for a given feature or
+        function. Useful for indicating features that are planned but not yet implemented.
+
+    USAGE:
+        render_under_construction("Feature Name")
+
+    PARAMETERS:
+        function_name (str) : 
+            The name of the feature or function that is under development.
+
+    RETURNS:
+        None :
+            This function renders Streamlit UI elements directly and does not return a value.
+
+    NOTES:
+        - This is purely a UI placeholder and does not perform any backend operations.
+    """
     st.markdown(f"### {function_name}")
     st.warning("This feature is currently under development.")
 
 def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
-    """Create a Plotly visualization for individual transaction flow"""
+    """
+    FUNCTION:
+        create_individual_flow_plotly
+
+    DESCRIPTION:
+        Creates a Plotly visualization representing the UI flow of an individual transaction.
+        Each screen in the transaction flow is displayed as a colored box with arrows
+        indicating the sequence of screens. The color of the boxes can reflect the
+        transaction state.
+
+    USAGE:
+        fig = create_individual_flow_plotly(txn_id="TXN123", txn_state="Successful", flow_screens=["Login", "Main Menu", "Withdrawal"])
+
+    PARAMETERS:
+        txn_id (str) :
+            The unique identifier of the transaction.
+        
+        txn_state (str) :
+            The end state of the transaction (e.g., "Successful", "Unsuccessful").
+            This may influence the color of the boxes in the visualization.
+        
+        flow_screens (list of str) :
+            Ordered list of UI screens visited during the transaction.
+            Each element represents a screen or step in the transaction flow.
+
+    RETURNS:
+        plotly.graph_objects.Figure or None :
+            Returns a Plotly Figure object visualizing the transaction flow.
+            Returns None if the `flow_screens` list is empty or contains no valid flow data.
+
+    NOTES:
+        - The visualization uses rectangular boxes for screens and arrows to show the flow.
+        - The layout adapts its height based on the number of screens.
+        - Background is dark-themed to match Streamlit dark mode aesthetics.
+    """
     import plotly.graph_objects as go
     
     if not flow_screens or flow_screens[0] == 'No flow data':
         return None
-    
     # Color based on transaction state
     if txn_state == 'Successful':
         box_color = '#2563eb'
@@ -1947,7 +2349,53 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
     return fig
 
 def create_consolidated_flow_plotly(flow_data):
-    """Create consolidated flow visualization showing all transactions of a type"""
+    """
+    FUNCTION:
+        create_consolidated_flow_plotly
+
+    DESCRIPTION:
+        Generates a Plotly visualization representing the consolidated UI flow for all 
+        transactions of a specific type. Each screen is displayed as a colored box, 
+        with arrows showing transitions between screens. The number of transactions 
+        passing through each screen and transition is annotated for insight into usage patterns.
+
+    USAGE:
+        fig = create_consolidated_flow_plotly(flow_data)
+
+    PARAMETERS:
+        flow_data (dict) :
+            A dictionary containing transaction flow information with the following keys:
+            
+            - 'screens' (list of str) :
+                List of unique screens involved in the transaction type.
+            
+            - 'transitions' (list of dict) :
+                Each dictionary represents a transition with keys:
+                    'from' (str) : Source screen
+                    'to' (str)   : Destination screen
+                    'count' (int): Number of transactions that followed this transition
+            
+            - 'screen_transactions' (dict) :
+                Maps screen names to a list of transactions passing through that screen. 
+                Each transaction entry is a dictionary with keys like 'txn_id', 'start_time', and 'state'.
+            
+            - 'transaction_type' (str) :
+                The type of transactions being visualized.
+            
+            - 'transactions_with_flow' (int) :
+                Total number of transactions included in the flow visualization.
+
+    RETURNS:
+        plotly.graph_objects.Figure or None :
+            Returns a Plotly Figure visualizing the consolidated flow of transactions.
+            Returns None if there are no screens in the flow_data.
+
+    NOTES:
+        - Screens are color-coded: success/complete (green), error/failure (red), normal flow (blue).
+        - Arrows represent transitions, annotated with transaction counts.
+        - Layout adapts to the number of screens and columns.
+        - Hovering over a screen shows sample transactions passing through it.
+    """
     import plotly.graph_objects as go
     from collections import defaultdict
     
@@ -2102,7 +2550,39 @@ def create_consolidated_flow_plotly(flow_data):
     return fig
 
 def render_consolidated_flow():
-    """Render consolidated transaction flow analysis"""
+    """
+    FUNCTION:
+        render_consolidated_flow
+
+    DESCRIPTION:
+        Renders the consolidated UI flow analysis for a selected transaction type 
+        within a source file. Retrieves transaction data, allows filtering by source 
+        file and transaction type, and generates a Plotly visualization showing 
+        screens as colored boxes and transitions with transaction counts. Provides 
+        detailed metrics for successful and unsuccessful transactions and lists 
+        individual transaction flows.
+
+    USAGE:
+        render_consolidated_flow()
+
+    PARAMETERS:
+        None : Uses Streamlit widgets for user input (source file and transaction type).
+
+    RETURNS:
+        None : The function renders the UI and visualizations directly in Streamlit.
+
+    NOTES:
+        - Requires prior analysis of customer journals; will trigger analysis if not done.
+        - Screens in the consolidated flow are color-coded:
+            • Normal flow: light blue
+            • Successful/Complete screens: light green
+            • Error/Failed screens: light red
+        - Arrows represent transitions with transaction counts.
+        - Hovering over a screen shows sample transactions passing through it.
+        - Includes metrics for total, successful, and unsuccessful transactions.
+        - Detailed transaction flows can be expanded to review each transaction's UI path.
+    """
+
     st.markdown("### 🌐 Consolidated Transaction UI Flow and Analysis")
     
     need_analysis = False
@@ -2275,7 +2755,29 @@ def render_consolidated_flow():
             st.code(traceback.format_exc())
 
 def render_individual_transaction_analysis():
-    """Render individual transaction analysis with LLM"""
+    """
+FUNCTION: render_individual_transaction_analysis
+
+DESCRIPTION:
+    Renders a Streamlit interface for analyzing individual transactions using LLM-based insights.
+    Users can filter transactions by source file, type, and end state, select a transaction to view
+    details, preview logs, and request an AI-driven analysis. Feedback on the analysis can also
+    be submitted through a guided form with user authentication.
+
+USAGE:
+    render_individual_transaction_analysis()
+
+PARAMETERS:
+    None : Uses Streamlit widgets, session state, and API calls for interaction.
+
+RETURNS:
+    None : The function renders UI elements and handles API interactions directly.
+
+RAISES:
+    requests.exceptions.Timeout        : If API requests (analysis, feedback, or data retrieval) exceed the timeout.
+    requests.exceptions.ConnectionError: If the API server is unreachable.
+    Exception                         : For general errors during transaction retrieval, analysis, or feedback submission.
+"""
     st.markdown("### 🔍 Individual Transaction Analysis")
     
     need_analysis = False
@@ -2944,7 +3446,28 @@ def render_acu_single_parse(): # MODIFIED
 
 
 def render_acu_compare(): # MODIFIED
-    """Render ACU comparison for two ZIP archives"""
+    """
+FUNCTION: render_acu_compare
+
+DESCRIPTION:
+    Renders a Streamlit interface to compare ACU configuration XML files from two ZIP archives.
+    Source A is automatically loaded from the main processed package, and Source B can be uploaded
+    by the user. Users can select matching files from each source to view a side-by-side comparison.
+
+USAGE:
+    render_acu_compare()
+
+PARAMETERS:
+    None : Uses Streamlit widgets and session state for interaction.
+
+RETURNS:
+    None : The function renders UI elements directly and does not return a value.
+
+RAISES:
+    requests.exceptions.Timeout        : If API requests exceed the specified timeout.
+    requests.exceptions.ConnectionError: If the API server is unreachable.
+    Exception                         : For general errors during file loading, extraction, or comparison.
+"""
     st.markdown("### ⚖️ ACU Configuration Comparison")
     st.info("Compare ACU configuration files from two different ZIP archives.")
     
@@ -2959,25 +3482,25 @@ def render_acu_compare(): # MODIFIED
     if not comp_data.get('files1'):
         with st.spinner("Loading ACU files from main package for Source A..."):
             try:
-                st.write("🔍 DEBUG: Calling API for Source A:", f"{API_BASE_URL}/get-acu-files")       # added
+                #st.write("🔍 DEBUG: Calling API for Source A:", f"{API_BASE_URL}/get-acu-files")       # added
                 resp = requests.get(f"{API_BASE_URL}/get-acu-files", timeout=30)
-                #----added
+                """#----added
                 st.write("🔍 DEBUG: Source A status code:", resp.status_code)
                 try:
                     st.write("🔍 DEBUG: Source A JSON keys:", list(resp.json().keys()))
                 except:
                     st.write("❌ DEBUG: Source A returned non-JSON:", resp.text)
-                    #---------------
+                    #---------------"""
 
                 if resp.status_code == 200:
                     data = resp.json()
                     all_files = data.get('acu_files', {})
 
-                    st.write("🔍 DEBUG: Raw ACU files from Source A:", all_files)   #------added
+                    #st.write("🔍 DEBUG: Raw ACU files from Source A:", all_files)   #------added
                     if all_files:
                         comp_data['zip1_name'] = "Main Package"
                         comp_data['files1'] = {k: v for k, v in all_files.items() if not k.startswith('__xsd__')}
-                        st.write("🔍 DEBUG: Filtered XML files for Source A:", comp_data['files1'])  # DEBUG ADDED
+                        #st.write("🔍 DEBUG: Filtered XML files for Source A:", comp_data['files1'])  # DEBUG ADDED
                         comp_data['files1_all'] = all_files
                         st.success(f"✓ **Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
                         st.rerun()
@@ -3008,19 +3531,19 @@ def render_acu_compare(): # MODIFIED
         if zip2 and st.button("Process Source B", key="acu_process_b", type="primary"):
             with st.spinner("Extracting from Source B..."):
                 try:
-                    st.write("🔍 DEBUG: Uploading ZIP for Source B:", zip2.name)  # DEBUG ADDED
+                    #st.write("🔍 DEBUG: Uploading ZIP for Source B:", zip2.name)  # DEBUG ADDED
                     files_payload = {'file': (zip2.name, zip2.getvalue(), 'application/zip')}
                     response = requests.post(
                         f"{API_BASE_URL}/extract-files/",
                         files=files_payload,
                         timeout=120
                     )
-                    st.write("🔍 DEBUG: Response status for Source B:", response.status_code)  # DEBUG ADDED
+                    #st.write("🔍 DEBUG: Response status for Source B:", response.status_code)  # DEBUG ADDED
                     
                     if response.status_code == 200:
                         result = response.json()
                         all_files = result.get('files', {})
-                        st.write("🔍 DEBUG: Response JSON keys for Source B:", list(result.keys()))  # DEBUG ADDED
+                        #st.write("🔍 DEBUG: Response JSON keys for Source B:", list(result.keys()))  # DEBUG ADDED
                         
                         if not all_files:
                             st.error("❌ No ACU files found in the uploaded ZIP.")
@@ -3028,7 +3551,7 @@ def render_acu_compare(): # MODIFIED
                             comp_data['zip2_name'] = zip2.name
                             comp_data['files2'] = {k: v for k, v in all_files.items() if not k.startswith('__xsd__')}
                             comp_data['files2_all'] = all_files
-                            st.write("🔍 DEBUG: Filtered XML files for Source B:", comp_data['files2'])  # DEBUG ADDED
+                            #st.write("🔍 DEBUG: Filtered XML files for Source B:", comp_data['files2'])  # DEBUG ADDED
                             st.success(f"✓ Source B: {len(comp_data['files2'])} XML files")
                             st.rerun()
                     else:

@@ -3300,7 +3300,7 @@ def render_acu_single_parse(): # MODIFIED
     #st.write("SESSION STATE DEBUG:", st.session_state)   # debug Added
 
     st.markdown("### ⚡ ACU Configuration Parser")
-    st.info("Extract, parse, and analyze ACU configuration files with XSD documentation support.")
+    
     
     # Initialize session state
     if 'acu_extracted_files' not in st.session_state:
@@ -3321,22 +3321,27 @@ def render_acu_single_parse(): # MODIFIED
                 #st.write("DEBUG BACKEND RESPONSE:", resp.text)           #
                 if resp.status_code == 200:
                     data = resp.json()
-                    st.write("debug data printing the data:",data)
-                    print("DEBUG DATA PRINTING THE DATA :", data)
-                    xml_files = data.get('acu_files', [])
+                    xml_files = data.get('acu_files', {})
 
-                    if xml_files:
-                        st.session_state.acu_extracted_files = xml_files
-                        st.session_state.acu_files_loaded = True
-                        st.success(f"✓ Loaded {len(xml_files)} ACU XML files from processed package")
-                        st.rerun()
-                    else:
+                    # if no ACU files found → STOP UI here
+                    if not xml_files:
+                        st.error("❌ No ACU files found in the uploaded ZIP.")
+                        st.stop()  # <<< IMPORTANT: stops rendering the rest of the UI
+
+                        # ACU files exist → load normally
+                    st.session_state.acu_extracted_files = xml_files
+                    st.session_state.acu_files_loaded = True
+                    st.success(f"✓ Loaded {len(xml_files)} ACU XML files from processed package")
+                    st.rerun()
+
+                else:
                         st.warning("No ACU files found in the processed package.")
             except Exception as e:
                 st.error(f"Could not load ACU files from package: {e}")
     
     # File selection and parsing
     if st.session_state.get('acu_extracted_files'):
+        st.info("Extract, parse, and analyze ACU configuration files with XSD documentation support.")
         xml_files = st.session_state.acu_extracted_files
         
         if xml_files:
@@ -3484,13 +3489,13 @@ RAISES:
             try:
                 #st.write("🔍 DEBUG: Calling API for Source A:", f"{API_BASE_URL}/get-acu-files")       # added
                 resp = requests.get(f"{API_BASE_URL}/get-acu-files", timeout=30)
-                """#----added
-                st.write("🔍 DEBUG: Source A status code:", resp.status_code)
-                try:
-                    st.write("🔍 DEBUG: Source A JSON keys:", list(resp.json().keys()))
-                except:
-                    st.write("❌ DEBUG: Source A returned non-JSON:", resp.text)
-                    #---------------"""
+                
+                #st.write("🔍 DEBUG: Source A status code:", resp.status_code)
+                #try:
+                #    st.write("🔍 DEBUG: Source A JSON keys:", list(resp.json().keys()))
+                #except:
+                #   st.write("❌ DEBUG: Source A returned non-JSON:", resp.text)
+                    
 
                 if resp.status_code == 200:
                     data = resp.json()
@@ -3505,7 +3510,10 @@ RAISES:
                         st.success(f"✓ **Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
                         st.rerun()
                     else:
+                        comp_data['files1'] = None
+                        comp_data['no_files_found'] = True
                         st.warning("No ACU files found in the main package to use as Source A.")
+                        st.stop()
                 else:
                     st.error("Could not load ACU files from main package.")
             except Exception as e:

@@ -63,10 +63,16 @@ def xml_to_dict(xml_file):
         raise
     
     logger.debug("Extracting transaction mappings from XML")
-    real_name = {
-        txn['key']: txn['value']
-        for txn in config_dict['configuration']['transactionList']['transaction']
-    }
+    # Get transactions
+    txns = config_dict['configuration']['transactionList']['transaction']
+
+    # Ensure it is always a list
+    if isinstance(txns, dict):
+        txns = [txns]
+
+    # Now build the dictionary
+    real_name = {txn['key']: txn['value'] for txn in txns}
+
     logger.info(f"Extracted {len(real_name)} transaction mappings")
     
     start_time_list = config_dict['configuration']['customerJournalParsing']['starttransaction'].split(',')

@@ -208,7 +208,7 @@ def parse_ui_journal(file_path: Union[str, Path]) -> pd.DataFrame:
         logger.error(f"File {file_path} does not exist or is a directory.")
         return pd.DataFrame()
 
-    # Regex patterns...
+    # Regex patterns for parsing log entries
     pattern_no_date = re.compile(
         r'^(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(\w+)\s+([<>*])\s+\[(\d+)\]\s+-\s+(\w+)\s+(result|action):(.+)$'
     )
@@ -216,6 +216,7 @@ def parse_ui_journal(file_path: Union[str, Path]) -> pd.DataFrame:
         r'^(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(\w+)\s+([<>*])\s+\[(\d+)\]\s+-\s+(\w+)\s+(result|action):(.+)$'
     )
 
+    # Extract date from filename
     filename = file_path.stem
     date_match = re.search(r'(\d{8})', filename)
     if date_match:
@@ -227,6 +228,7 @@ def parse_ui_journal(file_path: Union[str, Path]) -> pd.DataFrame:
     else:
         file_date = filename
 
+    # First pass: clean and deduplicate lines
     cleaned_lines = []
     processed_lines = set()
 
@@ -235,23 +237,28 @@ def parse_ui_journal(file_path: Union[str, Path]) -> pd.DataFrame:
             line = line.strip()
             if not line:
                 continue
+
             match = pattern_no_date.match(line)
             if not match:
                 continue
 
             timestamp, log_id, module, direction, view_id, screen, event_type, event_data = match.groups()
 
+            # Filter for result and action events only
             if event_type not in ["result", "action"]:
                 continue
 
+            # Filter GUIDM module for DMAuthorization screen only
             if module == "GUIDM" and screen != "DMAuthorization":
                 continue
 
+            # Validate JSON data
             try:
                 json.loads(event_data)
             except json.JSONDecodeError:
                 continue
 
+            # Add date to line and deduplicate
             cleaned_line = f"{file_date} {timestamp}  {log_id} {module} {direction} [{view_id}] - {screen} {event_type}:{event_data}"
             if cleaned_line not in processed_lines:
                 processed_lines.add(cleaned_line)
@@ -260,12 +267,14 @@ def parse_ui_journal(file_path: Union[str, Path]) -> pd.DataFrame:
     if not cleaned_lines:
         logger.warning(f"No valid lines found in {file_path}")
         return pd.DataFrame()
-
+   
+    # Second pass: parse cleaned lines into structured data
     parsed_data = []
     for line in cleaned_lines:
         line = line.strip()
         if not line:
             continue
+
         m = pattern_with_date.match(line)
         has_date = True
         if not m:
@@ -275,17 +284,20 @@ def parse_ui_journal(file_path: Union[str, Path]) -> pd.DataFrame:
         if not m:
             continue
 
+        # Extract fields based on pattern match
         if has_date:
             date, timestamp, log_id, module, direction, view_id, screen, event_type, event_data = m.groups()
         else:
             timestamp, log_id, module, direction, view_id, screen, event_type, event_data = m.groups()
             date = None
 
+        # Parse JSON data
         try:
             json_data = json.loads(event_data)
         except json.JSONDecodeError:
             json_data = {}
 
+        # Build row dictionary
         row = {
             "date": date,
             "timestamp": timestamp,
@@ -298,6 +310,7 @@ def parse_ui_journal(file_path: Union[str, Path]) -> pd.DataFrame:
             "raw_json": event_data
         }
 
+        # Add formatted date fields
         if date:
             try:
                 date_obj = datetime.strptime(date, "%d/%m/%Y")
@@ -310,6 +323,7 @@ def parse_ui_journal(file_path: Union[str, Path]) -> pd.DataFrame:
             row["date_formatted"] = None
             row["day_of_week"] = None
 
+        # Flatten JSON fields into separate columns
         for k, v in json_data.items():
             if isinstance(v, (int, float)):
                 row[f"json_{k}"] = v
@@ -333,6 +347,150 @@ def parse_ui_journal(file_path: Union[str, Path]) -> pd.DataFrame:
     df = pd.DataFrame(parsed_data)
     logger.info(f"Parsed {len(df)} events from {file_path}")
     return df
+
+
+def map_transactions_and_generate_report(
+    transaction_df: pd.DataFrame, 
+    ui_df: pd.DataFrame, 
+    output_file: str = 'transaction_flows.txt'
+) -> str:
+    """
+    Map transactions to UI flows and generate a comprehensive flow analysis report.
+    
+    This function correlates transaction data with UI events based on timestamps,
+    extracts screen flows, and generates a detailed text report showing how
+    each transaction progressed through different UI screens.
+    
+    Args:
+        transaction_df: DataFrame with transaction data containing:
+            - Transaction ID: Unique transaction identifier
+            - Transaction Type: Type of transaction (e.g., Withdrawal, Balance)
+            - Start Time: Transaction start time
+            - End Time: Transaction end time
+        ui_df: DataFrame with UI events (from parse_ui_journal)
+        output_file: Path for the output report file (default: 'transaction_flows.txt')
+        
+    Returns:
+        str: Path to the generated report file
+        
+    Raises:
+        ValueError: If required columns are missing from input DataFrames
+        
+    Example:
+        >>> transaction_df = pd.read_csv('transactions.csv')
+        >>> ui_df = parse_ui_journal('ui_journal.jrn')
+        >>> report_path = map_transactions_and_generate_report(transaction_df, ui_df)
+        >>> print(f"Report generated: {report_path}")
+    """
+    # Validate required columns
+    required_transaction_cols = ['Transaction ID', 'Transaction Type', 'Start Time', 'End Time']
+    required_ui_cols = ['timestamp', 'screen', 'date', 'event_type', 'json_resultDetail', 'json_action']
+
+    missing_transaction_cols = [col for col in required_transaction_cols if col not in transaction_df.columns]
+    missing_ui_cols = [col for col in required_ui_cols if col not in ui_df.columns]
+
+    if missing_transaction_cols:
+        raise ValueError(f"Missing columns in transaction file: {missing_transaction_cols}")
+    if missing_ui_cols:
+        raise ValueError(f"Missing columns in UI file: {missing_ui_cols}")
+
+    # Ensure timestamp is datetime format
+    ui_df['timestamp'] = pd.to_datetime(ui_df['timestamp'], errors='coerce')
+    results = []
+
+    # Process each transaction
+    for idx, transaction in transaction_df.iterrows():
+        transaction_id = transaction['Transaction ID']
+        transaction_type = transaction['Transaction Type']
+        start_time = transaction['Start Time']
+        end_time = transaction['End Time']
+
+        # Skip transactions with missing times
+        if pd.isna(start_time) or pd.isna(end_time):
+            continue
+
+        # Filter UI events for this transaction's time range
+        ui_events = ui_df[
+            (ui_df['timestamp'].dt.time >= start_time) & 
+            (ui_df['timestamp'].dt.time <= end_time)
+        ].copy()
+
+        # Handle case with no UI events
+        if len(ui_events) == 0:
+            results.append({
+                'row_number': idx + 1,
+                'transaction_id': transaction_id,
+                'transaction_type': transaction_type,
+                'start_time': start_time,
+                'end_time': end_time,
+                'screen_flow': [],
+                'ui_events_count': 0,
+                'ui_dates': []
+            })
+            continue
+
+        # Build screen flow
+        ui_events = ui_events.sort_values('timestamp')
+        flow_parts = []
+        prev_screen = None
+
+        for _, row in ui_events.iterrows():
+            current_screen = row['screen']
+            timestamp_str = row['timestamp'].strftime('%H:%M:%S') if pd.notna(row['timestamp']) else ''
+            screen_with_time = f"{current_screen}[{timestamp_str}]"
+
+            # Determine transition detail based on event type
+            event_type = str(row['event_type']).lower() if pd.notna(row['event_type']) else ''
+            if event_type == 'result':
+                detail = row['json_resultDetail'] if pd.notna(row['json_resultDetail']) else 'RESULT'
+            elif event_type == 'action':
+                detail = row['json_action'] if pd.notna(row['json_action']) else 'ACTION'
+            else:
+                detail = 'OK'
+
+            # Add to flow if screen changed
+            if screen_with_time != prev_screen:
+                flow_parts.append(screen_with_time)
+                flow_parts.append(f"--{detail}-->")
+                prev_screen = screen_with_time
+
+        # Extract unique dates from UI events
+        ui_events['date'] = pd.to_datetime(ui_events['date'], errors='coerce')
+        ui_dates = ui_events['date'].dropna().dt.date.unique().tolist()
+
+        results.append({
+            'row_number': idx + 1,
+            'transaction_id': transaction_id,
+            'transaction_type': transaction_type,
+            'start_time': start_time,
+            'end_time': end_time,
+            'screen_flow': flow_parts,
+            'ui_events_count': len(ui_events),
+            'ui_dates': ui_dates
+        })
+
+    # Write report to file
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write("TRANSACTION UI FLOW ANALYSIS\n")
+        f.write("=" * 80 + "\n\n")
+    
+        for result in results:
+            f.write(f"Transaction ID: {result['transaction_id']}\n")
+            f.write(f"Transaction Type: {result['transaction_type']}\n")
+            f.write(f"Start Time: {result['start_time'].strftime('%H:%M:%S')}\n")
+            f.write(f"End Time: {result['end_time'].strftime('%H:%M:%S')}\n")
+            f.write(f"UI Events: {result['ui_events_count']}\n")
+        
+            if result['ui_dates']:
+                f.write(f"UI Dates: {', '.join(str(d) for d in result['ui_dates'])}\n")
+            else:
+                f.write("UI Dates: No date data available\n")
+
+            flow_text = " ".join(result['screen_flow']) if result['screen_flow'] else "No screen data available"
+            f.write(f"Flow: {flow_text}\n")
+            f.write("\n" + "-" * 60 + "\n\n")
+
+    return output_file
 
 
 def process_multiple_ui_journals(
@@ -372,15 +530,18 @@ def process_multiple_ui_journals(
             continue
         
         logger.info(f"Processing file: {file_path.name}")
+        # Parse the journal file
         df = parse_ui_journal(file_path)
         
         if df.empty:
             logger.warning(f"No data parsed from {file_path.name}")
             continue
         
+        # Store result
         file_key = file_path.stem
         results[file_key] = df
         
+        # Optionally save to CSV
         if output_dir:
             csv_path = output_dir / f"{file_key}_parsed.csv"
             df.to_csv(csv_path, index=False)
@@ -390,6 +551,7 @@ def process_multiple_ui_journals(
     return results
 
 
+# Example usage
 if __name__ == "__main__":
     # Example 1: Using the UIJournalProcessor class
     logger.info("Example 1: Using UIJournalProcessor class")

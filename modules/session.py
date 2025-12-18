@@ -76,8 +76,8 @@ RAISES:
     None
         """
         self._sessions[session_id] = {
-            'file_categories': file_categories or {},
-            'extraction_path': str(extraction_path) if extraction_path else None,
+            'file_categories': file_categories,
+            'extraction_path': str(extraction_path),
             'selected_type': None,
             'processed_data': {}
         }

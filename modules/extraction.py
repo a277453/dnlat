@@ -1,6 +1,6 @@
 """
 FAST ZIP Extraction - Optimized for Speed
-Extracts relevant DN diagnostic files and ACU configuration files.
+Extracts relevant DN diagnostic files while preserving folder structure for proper categorization.
 """
 import zipfile
 import io
@@ -22,6 +22,7 @@ logger.info("Extraction service initialized")
 # Low-level ZIP parsing constants
 CD_SIG = b'PK\x01\x02'
 LH_SIG = b'PK\x03\x04'
+
 
 class ZipExtractionService:
     """
@@ -45,7 +46,7 @@ class ZipExtractionService:
     RAISES:
         None
     """
-    
+
     def __init__(self):
         """
         FUNCTION: __init__
@@ -68,11 +69,11 @@ class ZipExtractionService:
         
         self.base_extract_path = Path(tempfile.gettempdir()) / "dn_extracts"
         self.base_extract_path.mkdir(exist_ok=True, parents=True)
-        
+
         # ONLY these patterns will be extracted - FAST!
         self.relevant_patterns = {
             'customerjournal',
-            'customer_journal', 
+            'customer_journal',
             'uijournal',
             'ui_journal',
             '.trc',
@@ -82,14 +83,13 @@ class ZipExtractionService:
             'reg.txt',
             'registry',
             'acu',
-            '.jrn', # Journal files
-            '.prn', # Trace files
-            'jdd',  # ACU files
-            'x3',   # ACU files
-            '.zip'  # CRITICAL: To extract nested archives
+            '.jrn',
+            '.prn',
+            'jdd',
+            'x3',
+            '.zip'
         }
-        
-        # Quick reject patterns - skip immediately
+
         self.skip_patterns = {
             '__macosx',
             '.ds_store',
@@ -99,9 +99,6 @@ class ZipExtractionService:
             '.svn'
         }
 
-        logger.debug(f"extraction base path: {self.base_extract_path}")
-        logger.debug(f"relevant patterns: {self.relevant_patterns}")
-        logger.debug(f"skip patterns: {self.skip_patterns}")
         logger.info(f"ZipExtractionService initialized at {self.base_extract_path}")
 
     def is_relevant_file(self, filename: str) -> bool:
@@ -125,28 +122,21 @@ class ZipExtractionService:
         """
         filename_lower = filename.lower()
         basename = os.path.basename(filename_lower)
-        
-        # Skip junk immediately
+
         for skip in self.skip_patterns:
             if skip in filename_lower:
-                logger.debug(f"Skipping irrelevant file (skip pattern match): {filename}")
                 return False
-        
-        # Skip hidden files
+
         if basename.startswith('.'):
-            logger.debug(f"Skipping hidden file: {filename}") 
             return False
-        
-        # Check if matches any relevant pattern
+
         for pattern in self.relevant_patterns:
             if pattern in filename_lower:
                 logger.debug(f"File is relevant: {filename}")
                 return True
-        
-        
-        logger.debug(f"File does not match relevant patterns: {filename}")
+
         return False
-    
+
     def _extract_nested_zips(self, extract_path: Path):
         """
         FUNCTION: _extract_nested_zips
@@ -168,34 +158,40 @@ class ZipExtractionService:
             None
         """
         processed_zips = set()
-        # Use a while loop to handle multiple layers of nesting
+
         while True:
-            # Find all .zip files that have not been processed yet
             nested_zips = [
-                p for p in extract_path.rglob("*.zip") 
+                p for p in extract_path.rglob("*.zip")
                 if p.is_file() and p not in processed_zips
             ]
-            
+
             if not nested_zips:
-                logger.debug("No more nested ZIP files found to extract.")
-                break  # No more new zips to extract
+                break
 
             for zip_path in nested_zips:
-                processed_zips.add(zip_path)  # Mark as processed immediately
-                logger.info(f"📦 Found nested ZIP: {zip_path.relative_to(self.base_extract_path)}. Extracting...")
-                
-                # Define a subdirectory for the contents of the nested ZIP to avoid name clashes
+                processed_zips.add(zip_path)
+                logger.info(
+                    f"Found nested ZIP: {zip_path.relative_to(self.base_extract_path)}. Extracting..."
+                )
+
                 nested_extract_dir = zip_path.parent / zip_path.stem
                 nested_extract_dir.mkdir(exist_ok=True)
 
                 try:
                     with zipfile.ZipFile(zip_path, 'r') as zf:
-                        zf.extractall(nested_extract_dir)
-                        logger.debug(f"Nested ZIP extracted to {nested_extract_dir}")
-                    zip_path.unlink()  # Remove the nested ZIP file after successful extraction
-                    logger.info(f"Removed nested ZIP file {zip_path.name} after extraction")
-                except (zipfile.BadZipFile, Exception) as e:
-                    logger.error(f"  ❌ Error extracting nested ZIP {zip_path.name}: {e}. Leaving file as is.")
+                        for member in zf.namelist():
+                            if self.is_relevant_file(member):
+                                try:
+                                    zf.extract(member, nested_extract_dir)
+                                except Exception:
+                                    continue
+
+                    zip_path.unlink()
+                    logger.info(f"Removed nested ZIP file {zip_path.name}")
+                except Exception as e:
+                    logger.error(
+                        f"Error extracting nested ZIP {zip_path.name}: {e}. Leaving file as is."
+                    )
 
     def extract_zip(self, zip_content: bytes) -> Path:
         """
@@ -220,83 +216,56 @@ class ZipExtractionService:
         """
 
         if not zip_content:
-            logger.warning("Empty ZIP content received")
             raise ValueError("Empty ZIP file")
-        
-        # Create extraction directory
+
         extract_dir = tempfile.mkdtemp(
-            prefix=f"dn_{int(time.time())}_", 
+            prefix=f"dn_{int(time.time())}_",
             dir=self.base_extract_path
         )
         extract_path = Path(extract_dir)
-        
+
         logger.info(f"Extracting to: {extract_path}")
 
-        
         try:
-            # Use BytesIO for speed
             with zipfile.ZipFile(io.BytesIO(zip_content), 'r') as zf:
                 all_files = zf.namelist()
                 logger.info(f"ZIP contains {len(all_files)} entries")
                 
-                # NEW STRATEGY: Extract ALL files first
-                # This avoids path separator mismatch issues
-                logger.info("Extracting all files to avoid path separator issues...")
-                zf.extractall(extract_path)
-                logger.info(f"Extraction complete. Now filtering for relevant files...")
+                # Filter ONLY relevant files - FAST
+                relevant_files = [
+                    f for f in all_files 
+                    if not f.endswith('/') and self.is_relevant_file(f)
+                ]
                 
-                # Now walk the extracted directory and remove irrelevant files
+                logger.info(f"Extracting {len(relevant_files)} relevant files (skipping {len(all_files) - len(relevant_files)} irrelevant)")
+                
+                if not relevant_files:
+                    raise ValueError("No relevant diagnostic files found in ZIP")
+                
+                # Extract only relevant files - FAST
                 extracted = 0
-                removed = 0
+                for filename in relevant_files:
+                    try:
+                        zf.extract(filename, extract_path)
+                        extracted += 1
+                    except Exception as e:
+                        logger.warning(f"Skip {filename}: {e}")
+                        continue
                 
-                for root, dirs, files in os.walk(extract_path):
-                    for file in files:
-                        file_path = Path(root) / file
-                        relative_path = file_path.relative_to(extract_path)
-                        
-                        if self.is_relevant_file(str(relative_path)):
-                            extracted += 1
-                        else:
-                            # Remove irrelevant file
-                            try:
-                                file_path.unlink()
-                                removed += 1
-                                logger.debug(f"Removed irrelevant file: {relative_path}") 
-                            except:
-                                logger.warning(f"Failed to remove irrelevant file: {relative_path}") 
-                
-                # Clean up empty directories
-                for root, dirs, files in os.walk(extract_path, topdown=False):
-                    for dir_name in dirs:
-                        dir_path = Path(root) / dir_name
-                        try:
-                            if not any(dir_path.iterdir()):
-                                logger.debug(f"Removed empty directory: {dir_path}")
-                                dir_path.rmdir()
-                        except:
-                            logger.warning(f"Failed to remove empty directory: {dir_path}")
-                
-                logger.info(f"Kept {extracted} relevant files, removed {removed} irrelevant files")
+                logger.info(f"Extracted {extracted} files successfully")
                 
                 if extracted == 0:
-                    logger.error("No relevant diagnostic files found in ZIP") 
-                    raise ValueError("No relevant diagnostic files found in ZIP")
-
-                # --- NEW: Handle nested ZIPs ---
-                logger.debug(f"handle nested zip in extraction path: {extract_path}")
-                self._extract_nested_zips(extract_path)
+                    raise ValueError("Failed to extract any files")
                 
                 return extract_path
-        
+
         except zipfile.BadZipFile:
-            logger.error(f"Bad ZIP file: extraction failed for {extract_path}") 
             shutil.rmtree(extract_path, ignore_errors=True)
             raise ValueError("Invalid ZIP file")
         except Exception as e:
-            logger.error(f"Extraction failed: {str(e)}")
             shutil.rmtree(extract_path, ignore_errors=True)
             raise Exception(f"Extraction failed: {str(e)}")
-    
+
     def cleanup_old_extracts(self, max_age_hours: int = 24):
         """
         FUNCTION: cleanup_old_extracts
@@ -331,7 +300,7 @@ class ZipExtractionService:
             logger.error(f"error cleaning up old extractions")
             
 
-# --- ACU Parser Specific Extraction Logic ---
+# --- ACU Parser Specific Extraction Logic (UNCHANGED) ---
 
 def _decode_bytes_to_text(b: bytes) -> str:
     """
@@ -423,21 +392,17 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
         ValueError : When ZIP is empty or contains no relevant files
         Exception   : For general parsing or decompression errors
     """
-    logger.info(f"starting low-level zip extraction . zip size: {len(zip_content)} bytes")
+    logger.info(f"Starting low-level ACU ZIP extraction. ZIP size: {len(zip_content)} bytes")
     found: Dict[str, str] = {}
     data = zip_content
     size = len(data)
     pos = 0
-    
 
-     # >>> ADDED SUMMARY COUNTERS
     total_entries = 0
     total_xml = 0
     total_xsd = 0
     total_nested = 0
     total_errors = 0
-    #logs.append(f"Starting extraction. ZIP size: {size} bytes")
-    #entry_count = 0
 
     cd_struct_fmt = '<IHHHHHHIIIHHHHHII'
     cd_struct_size = struct.calcsize(cd_struct_fmt)
@@ -447,12 +412,12 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
         if pos == -1:
             break
         try:
-            logger.debug(f"parsing cd entry at position {pos}")
-            total_entries += 1  # >>> ADDED SUMMARY COUNTER
+            logger.debug(f"Parsing CD entry at position {pos}")
+            total_entries += 1
 
             if pos + cd_struct_size > size:
                 logs.append(f"Central dir header truncated at {pos}.")
-                total_errors += 1  # >>> ADDED SUMMARY COUNTER
+                total_errors += 1
                 break
 
             header = struct.unpack_from(cd_struct_fmt, data, pos)
@@ -464,7 +429,7 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
             fname_end = fname_start + fname_len
             if fname_end > size:
                 logs.append(f"CD filename truncated at {pos}.")
-                total_errors += 1  # >>> ADDED SUMMARY COUNTER
+                total_errors += 1
                 pos += 4
                 continue
 
@@ -496,7 +461,7 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
 
                 if lh_off + 30 > size:
                     logs.append(f"Local header truncated at {lh_off} for {fname}; skipping.")
-                    total_errors += 1  # >>> ADDED COUNTER
+                    total_errors += 1
                     continue
 
                 if data[lh_off:lh_off + 4] != LH_SIG:
@@ -504,7 +469,7 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
                     found_lh = data.find(LH_SIG, search_from, min(size, lh_off + 64))
                     if found_lh == -1:
                         logs.append(f"No local header found near {lh_off} for {fname}; skipping.")
-                        total_errors += 1  # >>> ADDED
+                        total_errors += 1
                         pos += 4
                         continue
                     else:
@@ -519,9 +484,7 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
                 read_comp_size = comp_size if comp_size != 0 else (lh_comp_size or 0)
 
                 if data_start + read_comp_size > size:
-                    logs.append(f"Compressed data window overruns buffer for {fname}. Trimming read size.")
-                    logger.warning(f"compressed data window overruns buffer for {fname}")
-                    total_errors += 1  # >>> ADDED
+                    logger.warning(f"Compressed data window overruns buffer for {fname}. Trimming read size.")
                     read_comp_size = max(0, min(read_comp_size, size - data_start))
 
                 comp_bytes = data[data_start:data_start + read_comp_size]
@@ -533,50 +496,42 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
                         file_bytes = zlib.decompress(comp_bytes, -zlib.MAX_WBITS)
                     else:
                         logs.append(f"Unsupported compression method {comp_method} for {fname}; skipping.")
-                        logger.error(f"unsupported compression method {comp_method} for {fname}")
-                        total_errors += 1  # >>> ADDED
+                        logger.error(f"Unsupported compression method {comp_method} for {fname}")
+                        total_errors += 1
                         pos += 4
                         continue
                 except Exception as e:
                     logs.append(f"Decompression failed for {fname}: {e}")
                     logger.error(f"Decompression failed for {fname}: {e}")
-                    total_errors += 1  # >>> ADDED
+                    total_errors += 1
                     pos += 4
                     continue
-                # --- FILE TYPE COUNTS ---
+                
+                # File type counts
                 if is_nested_zip:
-                    total_nested += 1  # >>> ADDED 
+                    total_nested += 1
                 elif is_target_xsd:
-                    total_xsd += 1  # >>> ADDED  COUNTER
+                    total_xsd += 1
                 elif is_target_xml:
-                    total_xml += 1  # >>> ADDED  COUNTER
-
-                #entry_count += 1
-                #if entry_count % 5 == 0:
-                #   logger.debug(f"Processed {entry_count} files so far...")
-                #   #logs.append(f"Processed {entry_count} files so far...")
+                    total_xml += 1
                     
                 if is_nested_zip:
                     logs.append(f"Found nested zip entry {norm_fname}, attempting in-memory extraction.")
-                    logger.info(f"found nested zip entry {norm_fname}, attempting in-memory extraction.")
+                    logger.info(f"Found nested zip entry {norm_fname}, attempting in-memory extraction.")
                     nested_found = extract_from_zip_bytes(file_bytes, logs, target_prefixes=target_prefixes)
-                    # Add files from nested zip, ensuring keys are just basenames to avoid long paths
                     for k, v in nested_found.items():
-                        if k not in found: # Avoid overwriting
+                        if k not in found:
                             found[k] = v
                 elif is_target_xsd:
-                    # Store XSD content with special prefix for easy matching
-                    # Key format: __xsd__<basename_without_extension>
                     xsd_basename = os.path.splitext(base)[0].lower()
                     xsd_key = f'__xsd__{xsd_basename}'
                     found[xsd_key] = _decode_bytes_to_text(file_bytes)
                     logs.append(f"Extracted XSD: {norm_fname} -> {xsd_key}")
-                    logger.info(f"extracted xsd: {norm_fname} -> {xsd_key}")   
+                    logger.info(f"Extracted XSD: {norm_fname} -> {xsd_key}")   
                 else:  # Regular XML file
                     text = _decode_bytes_to_text(file_bytes)
-                    # Render HTML content if present
                     rendered_text = render_html_documentation(text)
-                    key = base  # Use only the basename for the key
+                    key = base
                     basekey = key
                     i = 1
                     while key in found:
@@ -584,7 +539,7 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
                         i += 1
                     found[key] = rendered_text
                     logs.append(f"Extracted XML: {norm_fname} (size={len(rendered_text)} chars)")
-                    logger.info(f"extracted xml: {norm_fname} (size={len(rendered_text)} chars)")
+                    logger.info(f"Extracted XML: {norm_fname} (size={len(rendered_text)} chars)")
             
             pos += 4
 
@@ -593,9 +548,8 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
             logger.error(f"Error parsing CD entry at {pos}: {e}")
             pos += 4
     
-     # >>> ADDED SUMMARY LOG
     logger.info(
-        f"Summary: entries={total_entries}, xml={total_xml}, xsd={total_xsd}, nested={total_nested}, errors={total_errors}"
+        f"ACU extraction summary: entries={total_entries}, xml={total_xml}, xsd={total_xsd}, nested={total_nested}, errors={total_errors}"
     )
     logs.append(
         f"Summary: entries={total_entries}, xml={total_xml}, xsd={total_xsd}, nested={total_nested}, errors={total_errors}"
@@ -603,7 +557,7 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
 
     xml_count = sum(1 for k in found if not k.startswith('__xsd__'))
     logs.append(f"Extraction complete: Found {xml_count} ACU configuration files.")
-    logger.info(f"extraction complete: found {xml_count} acu configuration files")
+    logger.info(f"ACU extraction complete: found {xml_count} configuration files")
     
     return found
 
@@ -638,7 +592,7 @@ def extract_from_directory(base_path: Union[str, Path], logs: List[str], target_
 
         if item.suffix.lower() == '.zip':
             logs.append(f"Found ZIP archive: {item.relative_to(base_path)}")
-            logger.info(f"found zip archive: {item.relative_to(base_path)}")
+            logger.info(f"Found ZIP archive: {item.relative_to(base_path)}")
             try:
                 with open(item, 'rb') as f:
                     zip_content = f.read()
@@ -647,7 +601,7 @@ def extract_from_directory(base_path: Union[str, Path], logs: List[str], target_
                     all_files[f"{item.name}/{fname}"] = content
             except Exception as e:
                 logs.append(f"Error reading ZIP {item.name}: {e}")
-                logger.error(f"error reading zip {item.name}: {e}")
+                logger.error(f"Error reading ZIP {item.name}: {e}")
 
         # Check for standalone XML files matching prefixes
         is_standalone_xml = item.suffix.lower() == '.xml' and \
@@ -658,21 +612,21 @@ def extract_from_directory(base_path: Union[str, Path], logs: List[str], target_
 
         if is_standalone_xml:
             logs.append(f"Found standalone XML: {item.relative_to(base_path)}")
-            logger.info(f"found standalone xml: {item.relative_to(base_path)}")
+            logger.info(f"Found standalone XML: {item.relative_to(base_path)}")
             try:
                 all_files[str(item.relative_to(base_path))] = item.read_text(encoding='utf-8', errors='ignore')
             except Exception as e:
                 logs.append(f"Error reading file {item.name}: {e}")
-                logger.error(f"error reading file {item.name}: {e}")
+                logger.error(f"Error reading file {item.name}: {e}")
         elif is_standalone_xsd:
             logs.append(f"Found standalone XSD: {item.relative_to(base_path)}")
-            logger.info(f"found standalone xsd: {item.relative_to(base_path)}")
+            logger.info(f"Found standalone XSD: {item.relative_to(base_path)}")
             try:
                 xsd_basename = os.path.splitext(item.name)[0].lower()
                 xsd_key = f'__xsd__{xsd_basename}'
                 all_files[xsd_key] = item.read_text(encoding='utf-8', errors='ignore')
             except Exception as e:
                 logs.append(f"Error reading file {item.name}: {e}")
-                logger.error(f"error reading file {item.name}: {e}")
+                logger.error(f"Error reading file {item.name}: {e}")
 
     return all_files

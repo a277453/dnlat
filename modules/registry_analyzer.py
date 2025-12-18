@@ -305,6 +305,7 @@ class RegistryAnalyzerService:
                 "identical_count": 0
             }
 
+        # Merge dataframes to find differences
         merged = df_a.merge(
             df_b, 
             on=["Device Path", "Key"], 
@@ -313,19 +314,26 @@ class RegistryAnalyzerService:
             indicator=True
         )
 
+        # Entries only in File A (removed)
         removed_df = merged[merged["_merge"] == "left_only"]
         removed_list = removed_df[["Device Path", "Key", "Value_A"]].rename(columns={"Value_A": "Value"}).to_dict('records')
 
+        # Entries only in File B (added)
         added_df = merged[merged["_merge"] == "right_only"]
         added_list = added_df[["Device Path", "Key", "Value_B"]].rename(columns={"Value_B": "Value"}).to_dict('records')
 
+        # Entries in both files
         both_df = merged[merged["_merge"] == "both"].copy()
+        
+        # Fill NaN to handle cases where a value is present in one but not the other
         both_df['Value_A'] = both_df['Value_A'].fillna('')
         both_df['Value_B'] = both_df['Value_B'].fillna('')
 
+        # Find changed values
         changed_df = both_df[both_df["Value_A"] != both_df["Value_B"]]
         changed_list = changed_df[["Device Path", "Key", "Value_A", "Value_B"]].to_dict('records')
 
+        # Find identical entries
         identical_count = len(both_df[both_df["Value_A"] == both_df["Value_B"]])
 
         logger.info(f"Comparison completed: changed={len(changed_list)}, added={len(added_list)}, removed={len(removed_list)}, identical={identical_count}")

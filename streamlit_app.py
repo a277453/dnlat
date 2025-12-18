@@ -9,6 +9,7 @@ import re
 import plotly.express as px
 import os  
 from datetime import datetime  
+import numpy as np
 from fastapi.logger import logger
 
 
@@ -497,14 +498,80 @@ st.markdown("""
         background: linear-gradient(135deg, #047857 0%, #065f46 100%);
         transform: translateY(-1px);
     }
+            
+    .stSelectbox option[value*="Not available"] {
+        color: #666666 !important;
+        background-color: #2a2a2a !important;
+        font-style: italic !important;
+    }
+            
+    /* Center align all dataframe cells */
+    .dataframe tbody tr td {
+        text-align: center !important;
+    }
+
+    .dataframe thead tr th {
+        text-align: center !important;
+    }
+
+    .stSelectbox select option:disabled {
+        color: #666666 !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
 # API Configuration
 API_BASE_URL = "http://localhost:8000/api/v1"
 
-# Initialize session state
-def init_session_state():
+# ============================================
+# CACHE HELPER FUNCTIONS
+# ============================================
+
+def init_cache():
+    """Initialize cache in session state"""
+    if 'api_cache' not in st.session_state:
+        st.session_state.api_cache = {}
+    if 'cache_hits' not in st.session_state:
+        st.session_state.cache_hits = 0
+    if 'cache_misses' not in st.session_state:
+        st.session_state.cache_misses = 0
+
+def get_cache_key(endpoint: str, **params) -> str:
+    """Generate a unique cache key from endpoint and parameters"""
+    import hashlib
+    import json
+    
+    # Sort parameters for consistent keys
+    sorted_params = json.dumps(params, sort_keys=True)
+    cache_string = f"{endpoint}:{sorted_params}"
+    
+    # Create hash for the key
+    return hashlib.md5(cache_string.encode()).hexdigest()
+
+def get_from_cache(cache_key: str):
+    """Get data from cache if it exists"""
+    init_cache()
+    
+    if cache_key in st.session_state.api_cache:
+        st.session_state.cache_hits += 1
+        return st.session_state.api_cache[cache_key]
+    
+    st.session_state.cache_misses += 1
+    return None
+
+def save_to_cache(cache_key: str, data: dict):
+    """Save data to cache"""
+    init_cache()
+    st.session_state.api_cache[cache_key] = data
+
+def clear_cache():
+    """Clear all cached data"""
+    if 'api_cache' in st.session_state:
+        st.session_state.api_cache = {}
+        st.session_state.cache_hits = 0
+        st.session_state.cache_misses = 0
+
+def cached_request(method: str, url: str, cache_enabled: bool = True, **kwargs):
     """
     FUNCTION:
         init_session_state
@@ -530,6 +597,47 @@ def init_session_state():
             No exceptions are raised explicitly. Streamlit handles any internal
             session state issues.
     """
+    # Generate cache key
+    cache_params = {
+        'url': url,
+        'json': kwargs.get('json', {}),
+        'params': kwargs.get('params', {})
+    }
+    cache_key = get_cache_key(method, **cache_params)
+    
+    # Check cache first (if enabled)
+    if cache_enabled:
+        cached_data = get_from_cache(cache_key)
+        if cached_data is not None:
+            # Return a mock response object with cached data
+            class CachedResponse:
+                def __init__(self, data):
+                    self.status_code = data['status_code']
+                    self.headers = data.get('headers', {})
+                    self._json = data['json']
+                
+                def json(self):
+                    return self._json
+            
+            return CachedResponse(cached_data)
+    
+    # Make fresh request
+    request_func = getattr(requests, method.lower())
+    response = request_func(url, **kwargs)
+    
+    # Cache the response (if enabled and successful)
+    if cache_enabled and response.status_code == 200:
+        cache_data = {
+            'status_code': response.status_code,
+            'headers': dict(response.headers),
+            'json': response.json()
+        }
+        save_to_cache(cache_key, cache_data)
+    
+    return response
+
+# Initialize session state
+def init_session_state():
     if 'zip_processed' not in st.session_state:
         st.session_state.zip_processed = False
     if 'processing_result' not in st.session_state:
@@ -852,14 +960,12 @@ def render_transaction_stats():
             
             if 'statistics' in data:
                 stats_df = pd.DataFrame(data['statistics'])
-                
-                # Display the statistics table
+
                 st.dataframe(
                     stats_df,
                     use_container_width=True,
                     hide_index=True
                 )
-            
             # ========================================
             # SECTION 2: Source File Filter
             # ========================================
@@ -939,16 +1045,12 @@ def render_transaction_stats():
                                         )
                                     
                                     with col3:
-                                        # Get unique source files from filtered data
-                                        unique_sources = sorted(txn_df['Source File'].unique().tolist())
-                                        if len(unique_sources) > 1:
-                                            filter_source = st.selectbox(
-                                                "Source File",
-                                                options=['All'] + unique_sources,
-                                                key="stats_source_filter"
-                                            )
-                                        else:
-                                            filter_source = 'All'
+                                        # Transaction ID search
+                                        search_txn_id = st.text_input(
+                                            "Transaction ID",
+                                            placeholder="Search ID...",
+                                            key="stats_txn_id_search"
+                                        )
                                     
                                     # Apply filters
                                     display_df = txn_df.copy()
@@ -958,13 +1060,29 @@ def render_transaction_stats():
                                     
                                     if filter_state != 'All':
                                         display_df = display_df[display_df['State'] == filter_state]
-                                    
-                                    if filter_source != 'All':
-                                        display_df = display_df[display_df['Source File'] == filter_source]
+
+                                    if search_txn_id:
+                                        display_df = display_df[display_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
                                     
                                     # Display filtered count
                                     if len(display_df) != len(txn_df):
                                         st.info(f"Filtered to {len(display_df)} transaction(s)")
+                                    
+                            # Transaction ID search
+                                    st.markdown("---")
+                                    search_txn_id = st.text_input(
+                                        "🔍 Search Transaction ID",
+                                        placeholder="Enter Transaction ID to search...",
+                                        key="ui_flow_txn_search"
+                                    )
+                                    
+                                    if search_txn_id:
+                                        display_df = display_df[display_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
+                                        if len(display_df) == 0:
+                                            st.warning("⚠️ No transactions match the search term")
+                                            return
+                                        st.info(f"Search filtered to {len(display_df)} transaction(s)")
+                                    
                                     
                                     # Display the transactions table
                                     st.dataframe(
@@ -1307,13 +1425,8 @@ def render_registry_compare():
                     import requests
                     API_BASE_URL = "http://localhost:8000/api/v1"
                     
-                    # Define the endpoint with the mode parameter for optimization
-                    url = f"{API_BASE_URL}/process-zip?mode=registry"
-                    
                     files = {"file": (uploaded_file_b.name, uploaded_file_b.getvalue(), "application/zip")}
-                    
-                    # Make the request to the optimized endpoint
-                    response = requests.post(url, files=files, timeout=120)
+                    response = requests.post(f"{API_BASE_URL}/process-zip", files=files, timeout=120)
                     
                     if response.status_code == 200:
                         result_b = response.json()
@@ -1509,11 +1622,16 @@ def render_transaction_comparison():
         
         sources_data = sources_response.json()
         available_sources = sources_data.get('source_files', [])
+        all_txns_df = pd.DataFrame(sources_data.get('all_transactions', []))
         
         if not available_sources:
             st.warning("⚠️ No source files available. Please ensure customer journals were analyzed.")
             return
         
+        if not all_txns_df.empty:
+            sources_with_txns = all_txns_df['Source File'].unique().tolist()
+            available_sources = [src for src in available_sources if src in sources_with_txns]
+                        
         # Multi-select dropdown for source files
         selected_sources = st.multiselect(
             "Choose source files containing transactions to compare",
@@ -1597,7 +1715,51 @@ def render_transaction_comparison():
                         return
         
         # ========================================
-        # SECTION 3: Transaction Selection
+        # SECTION 3: Transaction ID Search
+        # ========================================
+        st.markdown("---")
+        st.markdown("#### 🔍 Search Transactions by ID")
+        
+        search_col1, search_col2 = st.columns(2)
+        
+        with search_col1:
+            search_txn1_id = st.text_input(
+                "Search Transaction 1 ID",
+                placeholder="Enter Transaction ID to search...",
+                key="compare_search_txn1",
+                help="Filter first transaction dropdown by ID"
+            )
+        
+        with search_col2:
+            search_txn2_id = st.text_input(
+                "Search Transaction 2 ID",
+                placeholder="Enter Transaction ID to search...",
+                key="compare_search_txn2",
+                help="Filter second transaction dropdown by ID"
+            )
+        
+        # Apply search filters
+        filtered_txn1_list = filtered_transactions.copy() if isinstance(filtered_transactions, list) else filtered_transactions
+        filtered_txn2_list = filtered_transactions.copy() if isinstance(filtered_transactions, list) else filtered_transactions
+        
+        if search_txn1_id:
+            filtered_txn1_list = [
+                txn for txn in filtered_txn1_list 
+                if search_txn1_id.lower() in str(txn.get('Transaction ID', '')).lower()
+            ]
+            if len(filtered_txn1_list) == 0:
+                st.warning("⚠️ No transactions match Transaction 1 search term")
+        
+        if search_txn2_id:
+            filtered_txn2_list = [
+                txn for txn in filtered_txn2_list 
+                if search_txn2_id.lower() in str(txn.get('Transaction ID', '')).lower()
+            ]
+            if len(filtered_txn2_list) == 0:
+                st.warning("⚠️ No transactions match Transaction 2 search term")
+        
+        # ========================================
+        # SECTION 4: Transaction Selection
         # ========================================
         st.markdown("---")
         st.markdown("#### 🔄 Select Two Transactions to Compare")
@@ -1607,10 +1769,16 @@ def render_transaction_comparison():
         # Transaction 1 selector
         with col1:
             st.markdown("##### First Transaction")
+            
+            # Use filtered list for Transaction 1
             txn1_options = [
                 f"{txn['Transaction ID']} - {txn['Transaction Type']} ({txn['End State']})"
-                for txn in filtered_transactions
+                for txn in filtered_txn1_list
             ]
+            
+            if not txn1_options:
+                st.warning("No transactions available after filtering")
+                return
             
             txn1_selection = st.selectbox(
                 "Transaction 1",
@@ -1622,7 +1790,7 @@ def render_transaction_comparison():
             if txn1_selection:
                 txn1_id = txn1_selection.split(' - ')[0]
                 txn1_data = next(
-                    (txn for txn in filtered_transactions if txn['Transaction ID'] == txn1_id),
+                    (txn for txn in filtered_txn1_list if txn['Transaction ID'] == txn1_id),
                     None
                 )
                 
@@ -1639,9 +1807,12 @@ def render_transaction_comparison():
         with col2:
             st.markdown("##### Second Transaction")
             
-            # Filter out the first selected transaction
+            # Use filtered list for Transaction 2 AND exclude selected txn1
             txn2_options = [
-                opt for opt in txn1_options
+                opt for opt in [
+                    f"{txn['Transaction ID']} - {txn['Transaction Type']} ({txn['End State']})"
+                    for txn in filtered_txn2_list
+                ]
                 if opt.split(' - ')[0] != (txn1_id if txn1_selection else None)
             ]
             
@@ -1659,7 +1830,7 @@ def render_transaction_comparison():
             if txn2_selection:
                 txn2_id = txn2_selection.split(' - ')[0]
                 txn2_data = next(
-                    (txn for txn in filtered_transactions if txn['Transaction ID'] == txn2_id),
+                    (txn for txn in filtered_txn2_list if txn['Transaction ID'] == txn2_id),
                     None
                 )
                 
@@ -1685,9 +1856,11 @@ def render_transaction_comparison():
         
         with st.spinner(f"Comparing {txn1_id} and {txn2_id}..."):
             try:
-                # Call comparison API
-                comparison_response = requests.post(
+                # Call comparison API with caching
+                comparison_response = cached_request(
+                    'post',
                     f"{API_BASE_URL}/compare-transactions-flow",
+                    cache_enabled=True,
                     json={
                         "txn1_id": txn1_id,
                         "txn2_id": txn2_id
@@ -1697,13 +1870,17 @@ def render_transaction_comparison():
                 
                 if comparison_response.status_code == 200:
                     comparison_data = comparison_response.json()
+
+                    if hasattr(comparison_response, '_json'):  # This means it came from cache
+                        st.caption("⚡ Loaded from cache")
                     
                     # Create tabs for different views
                     tab1, tab2, tab3 = st.tabs([
                         "📊 Side-by-Side Flow",
                         "📝 Transaction Logs",
                         "📈 Detailed Analysis"
-                    ])          
+                    ])
+                    
                     # ========================================
                     # TAB 1: Side-by-Side Flow Comparison
                     # ========================================
@@ -1724,10 +1901,21 @@ def render_transaction_comparison():
                             st.caption(f"{len(txn1_flow)} screen(s)")
                             
                             for i, (screen, is_match) in enumerate(zip(txn1_flow, txn1_matches), 1):
-                                if is_match:
-                                    st.success(f"**{i}.** {screen}")
+                                # Handle both dict and string formats
+                                if isinstance(screen, dict):
+                                    screen_name = screen.get('screen', 'Unknown')
+                                    duration = screen.get('duration')
+                                    if duration is not None:
+                                        screen_display = f"{screen_name} ({duration:.1f}s)"
+                                    else:
+                                        screen_display = screen_name
                                 else:
-                                    st.warning(f"**{i}.** {screen}")
+                                    screen_display = str(screen)
+                                
+                                if is_match:
+                                    st.success(f"**{i}.** {screen_display}")
+                                else:
+                                    st.warning(f"**{i}.** {screen_display}")
                         
                         with flow_col2:
                             st.markdown(f"##### Transaction 2: {txn2_id}")
@@ -1735,10 +1923,21 @@ def render_transaction_comparison():
                             st.caption(f"{len(txn2_flow)} screen(s)")
                             
                             for i, (screen, is_match) in enumerate(zip(txn2_flow, txn2_matches), 1):
-                                if is_match:
-                                    st.success(f"**{i}.** {screen}")
+                                # Handle both dict and string formats
+                                if isinstance(screen, dict):
+                                    screen_name = screen.get('screen', 'Unknown')
+                                    duration = screen.get('duration')
+                                    if duration is not None:
+                                        screen_display = f"{screen_name} ({duration:.1f}s)"
+                                    else:
+                                        screen_display = screen_name
                                 else:
-                                    st.warning(f"**{i}.** {screen}")
+                                    screen_display = str(screen)
+                                
+                                if is_match:
+                                    st.success(f"**{i}.** {screen_display}")
+                                else:
+                                    st.warning(f"**{i}.** {screen_display}")
                         
                         # Legend
                         st.markdown("---")
@@ -1752,8 +1951,21 @@ def render_transaction_comparison():
                         st.markdown("---")
                         st.markdown("##### 🎯 Flow Similarity Metrics")
                         
-                        common_screens = len(set(txn1_flow) & set(txn2_flow))
-                        total_unique_screens = len(set(txn1_flow) | set(txn2_flow))
+                        # Extract screen names for comparison
+                        def get_screen_names(flow):
+                            screens = []
+                            for item in flow:
+                                if isinstance(item, dict):
+                                    screens.append(item.get('screen', str(item)))
+                                else:
+                                    screens.append(str(item))
+                            return screens
+                        
+                        txn1_screens = get_screen_names(txn1_flow)
+                        txn2_screens = get_screen_names(txn2_flow)
+                        
+                        common_screens = len(set(txn1_screens) & set(txn2_screens))
+                        total_unique_screens = len(set(txn1_screens) | set(txn2_screens))
                         similarity = (common_screens / total_unique_screens * 100) if total_unique_screens > 0 else 0
                         
                         metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
@@ -1837,8 +2049,21 @@ def render_transaction_comparison():
                         # Screen-by-screen comparison
                         st.markdown("##### 🔍 Screen-by-Screen Breakdown")
                         
+                        # Extract screen names for comparison
+                        def get_screen_names(flow):
+                            screens = []
+                            for item in flow:
+                                if isinstance(item, dict):
+                                    screens.append(item.get('screen', str(item)))
+                                else:
+                                    screens.append(str(item))
+                            return screens
+                        
+                        txn1_screens = get_screen_names(txn1_flow)
+                        txn2_screens = get_screen_names(txn2_flow)
+                        
                         # Unique to Transaction 1
-                        unique_to_txn1 = set(txn1_flow) - set(txn2_flow)
+                        unique_to_txn1 = set(txn1_screens) - set(txn2_screens)
                         if unique_to_txn1:
                             with st.expander(f"Screens unique to {txn1_id} ({len(unique_to_txn1)})"):
                                 for screen in sorted(unique_to_txn1):
@@ -1847,7 +2072,7 @@ def render_transaction_comparison():
                             st.info(f"No screens unique to {txn1_id}")
                         
                         # Unique to Transaction 2
-                        unique_to_txn2 = set(txn2_flow) - set(txn1_flow)
+                        unique_to_txn2 = set(txn2_screens) - set(txn1_screens)
                         if unique_to_txn2:
                             with st.expander(f"Screens unique to {txn2_id} ({len(unique_to_txn2)})"):
                                 for screen in sorted(unique_to_txn2):
@@ -1856,7 +2081,7 @@ def render_transaction_comparison():
                             st.info(f"No screens unique to {txn2_id}")
                         
                         # Common screens
-                        common = set(txn1_flow) & set(txn2_flow)
+                        common = set(txn1_screens) & set(txn2_screens)
                         if common:
                             with st.expander(f"Common screens ({len(common)})", expanded=True):
                                 for screen in sorted(common):
@@ -2088,6 +2313,21 @@ def render_ui_flow_individual():
         # Display filtered count
         if len(display_df) != len(txn_df):
             st.info(f"Filtered to {len(display_df)} transaction(s)")
+
+        # Transaction ID search
+        st.markdown("---")
+        search_txn_id = st.text_input(
+            "🔍 Search Transaction ID",
+            placeholder="Enter Transaction ID to search...",
+            key="ui_flow_txn_search"
+        )
+        
+        if search_txn_id:
+            display_df = display_df[display_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
+            if len(display_df) == 0:
+                st.warning("⚠️ No transactions match the search term")
+                return
+            st.info(f"Search filtered to {len(display_df)} transaction(s)")
         
         # Create options for selectbox
         transaction_options = []
@@ -2116,8 +2356,10 @@ def render_ui_flow_individual():
         
         with st.spinner(f"Loading UI flow for transaction {selected_txn_id}..."):
             try:
-                viz_response = requests.post(
+                viz_response = cached_request(
+                    'post',
                     f"{API_BASE_URL}/visualize-individual-transaction-flow",
+                    cache_enabled=True,
                     json={"transaction_id": selected_txn_id},
                     timeout=60
                 )
@@ -2266,6 +2508,10 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
     
     if not flow_screens or flow_screens[0] == 'No flow data':
         return None
+    
+    # Check if we have detailed flow data (dict) or simple flow (string)
+    has_details = isinstance(flow_screens[0], dict)
+    
     # Color based on transaction state
     if txn_state == 'Successful':
         box_color = '#2563eb'
@@ -2279,8 +2525,24 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
     max_screens = len(flow_screens)
     
     # Add boxes for each screen
-    for i, screen in enumerate(flow_screens):
+    for i, screen_data in enumerate(flow_screens):
         y_pos = max_screens - 1 - i
+        
+        # Extract screen name and duration
+        if has_details:
+            screen_name = screen_data.get('screen', 'Unknown')
+            timestamp = screen_data.get('timestamp', '')
+            duration = screen_data.get('duration')
+            
+            # Format the text with duration
+            if duration is not None:
+                text_label = f"{i+1}. {screen_name}\n({duration:.2f}s)"
+            else:
+                text_label = f"{i+1}. {screen_name}"
+        else:
+            # Old format: just screen name
+            screen_name = screen_data
+            text_label = f"{i+1}. {screen_name}"
         
         # Add box
         fig.add_shape(
@@ -2290,10 +2552,10 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
             line=dict(color=box_color, width=2)
         )
         
-        # Add text
+        # Add text with duration
         fig.add_annotation(
             x=0.5, y=y_pos + 0.35,
-            text=f"{i+1}. {screen}",
+            text=text_label,
             showarrow=False,
             font=dict(color="white", size=11, family="Arial"),
             xanchor="center", yanchor="middle"
@@ -2425,11 +2687,13 @@ def create_consolidated_flow_plotly(flow_data):
     # Sort screens by hierarchy
     screens_list = sorted(screens, key=lambda x: (screen_hierarchy.get(x, 99), x))
     
-    # Calculate grid layout
+    # Calculate grid layout with more spacing
     cols = 3
     rows = (len(screens_list) + cols - 1) // cols
     
-    cell_width, cell_height = 20, 12
+    cell_width, cell_height = 25, 16
+    box_width, box_height = 16, 10
+    
     positions = {}
     
     for i, screen in enumerate(screens_list):
@@ -2441,81 +2705,187 @@ def create_consolidated_flow_plotly(flow_data):
     
     fig = go.Figure()
     
-    # Add screen boxes
-    for screen in screens_list:
-        x, y = positions[screen]
-        txn_list = screen_transactions.get(screen, [])
-        
-        # Create hover text
-        hover_text = f"<b>{screen}</b><br><br><b>{len(txn_list)} transactions</b><br>"
-        for i, txn_info in enumerate(txn_list[:5]):
-            hover_text += f"• {txn_info['txn_id']} - {txn_info['start_time']} ({txn_info['state']})<br>"
-        if len(txn_list) > 5:
-            hover_text += f"...and {len(txn_list) - 5} more"
-        
-        # Determine color based on screen type
-        if any(term in screen.lower() for term in ['error', 'fail', 'cancel', 'timeout']):
-            color = '#ffb3b3'  # Light red
-        elif any(term in screen.lower() for term in ['receipt', 'complete', 'success', 'end', 'thankyou']):
-            color = '#b3ffb3'  # Light green
-        else:
-            color = '#b3d9ff'  # Light blue
-        
-        # Add rectangle
-        fig.add_shape(
-            type="rect",
-            x0=x - 8, x1=x + 8,
-            y0=y - 6, y1=y + 6,
-            line=dict(color='black', width=2),
-            fillcolor=color,
-            layer="below"
-        )
-        
-        # Add text
-        fig.add_trace(go.Scatter(
-            x=[x], y=[y],
-            text=[f"<b>{screen}</b>"],
-            mode='text',
-            textfont=dict(size=10, family='Arial', color='black'),
-            hovertemplate=hover_text + '<extra></extra>',
-            showlegend=False
-        ))
+    # Build a map of outgoing transitions for each screen
+    outgoing_transitions = defaultdict(list)
+    for transition in transitions:
+        from_screen = transition['from']
+        to_screen = transition['to']
+        count = transition['count']
+        outgoing_transitions[from_screen].append({
+            'to': to_screen,
+            'count': count
+        })
     
-    # Add transitions (arrows with counts)
+    # Helper function to create curved path between two points
+    def create_curved_arrow_path(x0, y0, x1, y1):
+        """Create a smooth curved path using bezier curve"""
+        dx = x1 - x0
+        dy = y1 - y0
+        
+        # Determine curve direction based on relative position
+        if abs(dx) > abs(dy):  # Horizontal connection
+            cx1 = x0 + dx * 0.5
+            cy1 = y0
+            cx2 = x0 + dx * 0.5
+            cy2 = y1
+        else:  # Vertical connection
+            cx1 = x0
+            cy1 = y0 + dy * 0.5
+            cx2 = x1
+            cy2 = y0 + dy * 0.5
+        
+        # Generate points along bezier curve
+        t = np.linspace(0, 1, 50)
+        curve_x = (1-t)**3 * x0 + 3*(1-t)**2*t * cx1 + 3*(1-t)*t**2 * cx2 + t**3 * x1
+        curve_y = (1-t)**3 * y0 + 3*(1-t)**2*t * cy1 + 3*(1-t)*t**2 * cy2 + t**3 * y1
+        
+        return curve_x, curve_y
+    
+    # Helper function to get anchor points
+    def get_anchor_points(screen_name):
+        """Get the anchor points for a screen box"""
+        x, y = positions[screen_name]
+        return {
+            'top': (x, y + box_height / 2 + 0.5),
+            'bottom': (x, y - box_height / 2 - 0.5),
+            'left': (x - box_width / 2 - 0.5, y),
+            'right': (x + box_width / 2 + 0.5, y)
+        }
+    
+    # Add transitions with curved arrows
     for transition in transitions:
         from_screen = transition['from']
         to_screen = transition['to']
         count = transition['count']
         
         if from_screen in positions and to_screen in positions:
-            x0, y0 = positions[from_screen]
-            x1, y1 = positions[to_screen]
+            from_anchors = get_anchor_points(from_screen)
+            to_anchors = get_anchor_points(to_screen)
             
-            # Add arrow
-            fig.add_annotation(
-                x=x1, y=y1, ax=x0, ay=y0,
-                xref='x', yref='y',
-                axref='x', ayref='y',
-                showarrow=True,
-                arrowhead=2,
-                arrowsize=1.2,
-                arrowwidth=2.5,
-                arrowcolor='green'
-            )
+            from_x, from_y = positions[from_screen]
+            to_x, to_y = positions[to_screen]
             
-            # Add count label
-            fig.add_annotation(
-                x=(x0 + x1)/2,
-                y=(y0 + y1)/2,
-                text=f"<b>{count}</b>",
-                showarrow=False,
-                font=dict(size=12, color="black", family="Arial Black"),
-                align="center",
-                bordercolor="black",
-                borderwidth=1,
-                bgcolor="white",
-                opacity=1
-            )
+            # Determine best connection points
+            start_point = from_anchors['bottom']
+            end_point = to_anchors['top']
+            
+            # If on same row, use horizontal connections
+            if abs(to_y - from_y) < 2:
+                if to_x > from_x:
+                    start_point = from_anchors['right']
+                    end_point = to_anchors['left']
+                else:
+                    start_point = from_anchors['left']
+                    end_point = to_anchors['right']
+            elif to_y > from_y:  # Going up
+                start_point = from_anchors['top']
+                end_point = to_anchors['bottom']
+            
+            x0, y0 = start_point
+            x1, y1 = end_point
+            
+            # Create curved path
+            curve_x, curve_y = create_curved_arrow_path(x0, y0, x1, y1)
+            
+            # Draw the curved line
+            fig.add_trace(go.Scatter(
+                x=curve_x,
+                y=curve_y,
+                mode='lines',
+                line=dict(color='#2E7D32', width=3.5),
+                showlegend=False,
+                hoverinfo='skip'
+            ))
+            
+            # Calculate arrow direction from last few points
+            dx = x1 - curve_x[-5]
+            dy = y1 - curve_y[-5]
+            angle = np.arctan2(dy, dx)
+            
+            # Create larger arrowhead using SVG path
+            arrow_length = 1.2
+            arrow_width = 0.8
+            
+            # Calculate arrowhead points
+            tip_x = x1
+            tip_y = y1
+            
+            # Base points of the triangle
+            base_left_x = tip_x - arrow_length * np.cos(angle) - arrow_width * np.sin(angle)
+            base_left_y = tip_y - arrow_length * np.sin(angle) + arrow_width * np.cos(angle)
+            
+            base_right_x = tip_x - arrow_length * np.cos(angle) + arrow_width * np.sin(angle)
+            base_right_y = tip_y - arrow_length * np.sin(angle) - arrow_width * np.cos(angle)
+            
+            # Draw filled triangle arrowhead
+            fig.add_trace(go.Scatter(
+                x=[tip_x, base_left_x, base_right_x, tip_x],
+                y=[tip_y, base_left_y, base_right_y, tip_y],
+                fill='toself',
+                fillcolor='#2E7D32',
+                line=dict(color='#2E7D32', width=0),
+                mode='lines',
+                showlegend=False,
+                hoverinfo='skip'
+            ))
+    
+    # Add screen boxes
+    for screen in screens_list:
+        x, y = positions[screen]
+        txn_list = screen_transactions.get(screen, [])
+        
+        # Create hover text with outgoing transition counts
+        hover_text = f"<b>{screen}</b><br><br><b>{len(txn_list)} transactions</b><br><br>"
+        
+        # Add outgoing transitions info
+        if screen in outgoing_transitions and outgoing_transitions[screen]:
+            hover_text += "<b>Next screens:</b><br>"
+            for out_trans in outgoing_transitions[screen]:
+                hover_text += f"→ {out_trans['to']}: {out_trans['count']} time(s)<br>"
+            hover_text += "<br>"
+        
+        # Add transaction IDs
+        hover_text += "<b>Transactions:</b><br>"
+        for i, txn_info in enumerate(txn_list[:5]):
+            hover_text += f"• {txn_info['txn_id']} ({txn_info['state']})<br>"
+        if len(txn_list) > 5:
+            hover_text += f"...and {len(txn_list) - 5} more"
+        
+        # All boxes same color
+        box_color = '#B3D9FF'
+        
+        # Add rectangle
+        fig.add_shape(
+            type="rect",
+            x0=x - box_width / 2, 
+            x1=x + box_width / 2,
+            y0=y - box_height / 2, 
+            y1=y + box_height / 2,
+            line=dict(color='#1976D2', width=2),
+            fillcolor=box_color,
+            layer="above"
+        )
+        
+        # Add screen name
+        fig.add_annotation(
+            x=x,
+            y=y,
+            text=f"<b>{screen}</b>",
+            showarrow=False,
+            font=dict(size=10, family='Arial', color='black'),
+            xref='x',
+            yref='y'
+        )
+        
+        # Add invisible hover point
+        fig.add_trace(go.Scatter(
+            x=[x], 
+            y=[y],
+            mode='markers',
+            marker=dict(size=0.1, opacity=0),
+            hovertemplate=hover_text + '<extra></extra>',
+            showlegend=False
+        ))
     
     # Update layout
     all_x = [p[0] for p in positions.values()]
@@ -2532,19 +2902,22 @@ def create_consolidated_flow_plotly(flow_data):
             showgrid=False, 
             zeroline=False, 
             showticklabels=False, 
-            range=[min(all_x)-15, max(all_x)+15]
+            range=[min(all_x) - cell_width / 2, max(all_x) + cell_width / 2]
         ),
         yaxis=dict(
             showgrid=False, 
             zeroline=False, 
             showticklabels=False, 
-            range=[min(all_y)-15, max(all_y)+15]
+            range=[min(all_y) - cell_height, max(all_y) + cell_height / 2],
+            scaleanchor="x",
+            scaleratio=1
         ),
-        height=rows * 200 + 100,
-        width=cols * 300 + 100,
+        height=rows * 260 + 120,
+        width=cols * 380 + 120,
         plot_bgcolor='white',
         paper_bgcolor='white',
-        margin=dict(t=120, l=50, r=50, b=50)
+        margin=dict(t=120, l=60, r=60, b=60),
+        hovermode='closest'
     )
     
     return fig
@@ -2899,6 +3272,20 @@ RAISES:
             st.warning("⚠️ No transactions match the selected filters")
             return
         
+        # Transaction ID search
+        st.markdown("---")
+        search_txn_id = st.text_input(
+            "🔍 Search Transaction ID",
+            placeholder="Enter Transaction ID to search...",
+            key="indiv_analysis_txn_search"
+        )
+        
+        if search_txn_id and not filtered_df.empty:
+            filtered_df = filtered_df[filtered_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
+            if filtered_df.empty:
+                st.warning("⚠️ No transactions match the search term")
+                return
+        
         # STEP 5: Transaction selection
         st.markdown("---")
         st.markdown("#### 📋 Select a Transaction to Analyze")
@@ -2978,10 +3365,12 @@ RAISES:
         if analyze_button:
             with st.spinner("🤖 DN Analyzer is analyzing the transaction log... This may take a moment."):
                 try:
-                    response = requests.post(
+                    response = cached_request(
+                        'post',
                         f"{API_BASE_URL}/analyze-transaction-llm",
+                        cache_enabled=True,
                         json={"transaction_id": selected_txn_id},
-                        timeout=120  # LLM can take time
+                        timeout=120
                     )
                     
                     if response.status_code == 200:
@@ -3111,12 +3500,11 @@ RAISES:
                 # User Authentication (only if questions answered)
                 user_name = ""
                 user_email = ""
-                passcode_verified = False
-                
+
                 if questions_answered > 0:
                     st.markdown("---")
-                    st.markdown("#### 👤 User Authentication Required")
-                    st.info("Please identify yourself and enter your passcode to submit feedback.")
+                    st.markdown("#### 👤 User Selection Required")
+                    st.info("Please select your name to submit feedback.")
                     
                     selected_user = st.selectbox(
                         "Select your name and email:",
@@ -3127,38 +3515,18 @@ RAISES:
                     if selected_user != "Select User":
                         user_name = selected_user.split(" (")[0]
                         user_email = users[selected_user]["email"]
-                        
-                        st.markdown("#### 🔐 Enter Your 4-Digit Passcode")
-                        entered_passcode = st.text_input(
-                            "Passcode:",
-                            type="password",
-                            max_chars=4,
-                            key=f"{feedback_key_prefix}_passcode"
-                        )
-                        
-                        if entered_passcode:
-                            if len(entered_passcode) == 4 and entered_passcode.isdigit():
-                                correct_passcode = users[selected_user]["passcode"]
-                                if entered_passcode == correct_passcode:
-                                    passcode_verified = True
-                                    st.success("✅ Passcode verified! You can now submit feedback.")
-                                else:
-                                    st.error("❌ Incorrect passcode. Please try again.")
-                            else:
-                                st.warning("⚠️ Passcode must be exactly 4 digits.")
+                        st.success(f"✅ Selected: {user_name}")
                     
                     if selected_user == "Select User":
                         st.warning("⚠️ Please select your name and email to continue.")
-                    elif not passcode_verified and selected_user != "Select User":
-                        st.warning("⚠️ Please enter your correct 4-digit passcode to submit feedback.")
                 
                 # Submit Feedback
                 st.markdown("---")
                 col1, col2, col3 = st.columns([2, 2, 3])
                 
                 with col1:
-                    can_submit = questions_answered > 0 and selected_user != "Select User" and passcode_verified
-                    
+                    can_submit = questions_answered > 0 and selected_user != "Select User"
+
                     if st.button("Submit Feedback", 
                             key=f"{feedback_key_prefix}_submit",
                             disabled=not can_submit,
@@ -3169,8 +3537,6 @@ RAISES:
                             st.error("Please answer at least one question before submitting.")
                         elif selected_user == "Select User":
                             st.error("Please select your name and email.")
-                        elif not passcode_verified:
-                            st.error("Please enter the correct passcode.")
                         else:
                             # Submit feedback to API
                             with st.spinner("Submitting feedback..."):
@@ -3203,8 +3569,7 @@ RAISES:
                                             f"{feedback_key_prefix}_rating",
                                             f"{feedback_key_prefix}_alternative",
                                             f"{feedback_key_prefix}_comment",
-                                            f"{feedback_key_prefix}_user_select",
-                                            f"{feedback_key_prefix}_passcode"
+                                            f"{feedback_key_prefix}_user_select"
                                         ]
                                         for key in keys_to_clear:
                                             if key in st.session_state:
@@ -3236,37 +3601,505 @@ RAISES:
                                 del st.session_state[key]
                         st.rerun()
 
-            # Display previous feedback
-            try:
-                feedback_response = requests.get(
-                    f"{API_BASE_URL}/get-feedback/{selected_txn_id}",
-                    timeout=30
-                )
-                
-                if feedback_response.status_code == 200:
-                    feedback_data = feedback_response.json()
-                    previous_feedback = feedback_data.get('feedback', [])
-                    
-                    if previous_feedback:
-                        with st.expander(f"📊 Previous Feedback ({len(previous_feedback)})", expanded=False):
-                            for i, feedback in enumerate(previous_feedback, 1):
-                                st.markdown(f"**Feedback #{i} - {feedback['timestamp']}**")
-                                st.write(f"**Submitted by:** {feedback['user_name']} ({feedback['user_email']})")
-                                st.write(f"**Model:** {feedback.get('model_version', 'Unknown')}")
-                                st.write(f"**Rating:** {feedback['rating']}/5")
-                                if feedback.get('alternative_cause') and feedback['alternative_cause'] != "No alternative needed - AI analysis was correct":
-                                    st.write(f"**Alternative Cause:** {feedback['alternative_cause']}")
-                                if feedback.get('comment'):
-                                    st.write(f"**Comment:** {feedback['comment']}")
-                                st.markdown("---")
-            except:
-                pass  # Silently fail if can't retrieve feedback
+
     
     except Exception as e:
         st.error(f"❌ Error: {str(e)}")
         import traceback
         with st.expander("🐛 Debug Information"):
             st.code(traceback.format_exc())
+
+def render_counters_analysis():
+    """Render counters analysis functionality"""
+    st.markdown("### 📊 Counters Analysis")
+    
+    need_analysis = False
+    
+    try:
+        # Check if analysis is needed
+        try:
+            sources_response = requests.get(
+                f"{API_BASE_URL}/get-transactions-with-sources",
+                timeout=30
+            )
+            
+            if sources_response.status_code == 200:
+                sources_data = sources_response.json()
+                available_sources = sources_data.get('source_files', [])
+                
+                if not available_sources:
+                    need_analysis = True
+            else:
+                need_analysis = True
+                
+        except Exception as e:
+            need_analysis = True
+        
+        # Perform analysis if needed
+        if need_analysis:
+            st.info("📊 Customer journals need to be analyzed first...")
+            
+            with st.spinner("Analyzing customer journals..."):
+                try:
+                    analyze_response = requests.post(
+                        f"{API_BASE_URL}/analyze-customer-journals",
+                        timeout=120
+                    )
+                    
+                    if analyze_response.status_code == 200:
+                        st.success("✓ Analysis complete!")
+                        import time
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        error_detail = analyze_response.json().get('detail', 'Analysis failed')
+                        st.error(f"❌ {error_detail}")
+                        return
+                except Exception as e:
+                    st.error(f"❌ Error during analysis: {str(e)}")
+                    return
+        
+        # Get source files and transactions
+        sources_response = requests.get(
+            f"{API_BASE_URL}/get-transactions-with-sources",
+            timeout=30
+        )
+        
+        if sources_response.status_code != 200:
+            st.error("Failed to retrieve transaction data")
+            return
+        
+        sources_data = sources_response.json()
+        available_sources = sources_data.get('source_files', [])
+        all_transactions = sources_data.get('all_transactions', [])
+        
+        if not available_sources:
+            st.warning("⚠️ No source files available")
+            return
+        
+        if not all_transactions:
+            st.warning("⚠️ No transactions available")
+            return
+        
+        # Get TRC trace files to filter source files
+        try:
+            file_categories_response = requests.get(
+                f"{API_BASE_URL}/debug-session",
+                params={"session_id": "current_session"},
+                timeout=30
+            )
+            
+            if file_categories_response.status_code == 200:
+                debug_data = file_categories_response.json()
+                
+                # Get matching sources (check which sources have corresponding TRC trace files)
+                matching_sources_response = requests.get(
+                    f"{API_BASE_URL}/get-matching-sources-for-trc",
+                    timeout=30
+                )
+                
+                if matching_sources_response.status_code == 200:
+                    matching_data = matching_sources_response.json()
+                    filtered_sources = matching_data.get('matching_sources', [])
+                    
+                    if not filtered_sources:
+                        st.warning("⚠️ No source files found that match TRC trace files")
+                        return
+                    
+                    available_sources = filtered_sources
+                else:
+                    st.warning("⚠️ Could not filter sources by TRC trace files")
+        except Exception as e:
+            print(f"⚠️ Error filtering sources: {e}")
+        
+        # Source file selection with unique display
+        st.markdown("#### 📂 Select Source File")
+        
+        # Create unique identifiers for each source
+        txn_df = pd.DataFrame(all_transactions)
+        source_summary = {}
+        
+        for source in available_sources:
+            source_txns = txn_df[txn_df['Source File'] == source]
+            if len(source_txns) > 0:
+                txn_count = len(source_txns)
+                first_txn_time = source_txns.iloc[0]['Start Time']
+                display_name = f"{source} (starts at {first_txn_time})"
+                source_summary[display_name] = source
+        
+        if not source_summary:
+            st.warning("⚠️ No transactions found in matching sources")
+            return
+        
+        selected_display = st.selectbox(
+            "Choose source file",
+            options=list(source_summary.keys()),
+            key="counters_source_select"
+        )
+        
+        selected_source = source_summary[selected_display]
+        
+        # Filter transactions from this source
+        source_transactions = txn_df[txn_df['Source File'] == selected_source]
+        
+        if len(source_transactions) == 0:
+            st.warning(f"⚠️ No transactions found in source '{selected_source}'")
+            return
+        
+        # Transaction selection
+        st.markdown("---")
+        st.markdown("#### 🔍 Select Transaction")
+
+        # Filter to only transactions from this specific source file
+        source_only_transactions = txn_df[txn_df['Source File'] == selected_source].copy()
+
+        # Count CIN/CI and COUT/GA transactions
+        cin_cout_count = len(source_only_transactions[source_only_transactions['Transaction Type'].isin(['CIN/CI', 'COUT/GA'])])
+        other_count = len(source_only_transactions) - cin_cout_count
+
+        # Build transaction options - only CIN/COUT are selectable
+        transaction_options = {}
+
+        for _, txn in source_only_transactions.iterrows():
+            txn_id = txn['Transaction ID']
+            txn_type = txn['Transaction Type']
+            display = f"{txn_id} | {txn_type} | {txn['End State']} | {txn['Start Time']}"
+            
+            if txn_type in ['CIN/CI', 'COUT/GA']:
+                transaction_options[display] = txn_id
+            else:
+                # Add to options but mark as disabled with "(Not available)" suffix
+                disabled_key = f"{display} (Not available)"
+                transaction_options[disabled_key] = None
+
+        # Show info message if there are disabled transactions
+        if other_count > 0:
+            st.info(f"ℹ️ Counter analysis is only available for CIN/CI and COUT/GA transactions.")
+
+        selected_display = st.selectbox(
+            "Transaction",
+            options=list(transaction_options.keys()),
+            key="counters_txn_select",
+            help="Only CIN/CI and COUT/GA transactions are available for counter analysis"
+        )
+
+        # Check if selected option is disabled
+        if "(Not available)" in selected_display:
+            st.warning("⚠️ This transaction type is not supported for counter analysis. Please select a CIN/CI or COUT/GA transaction.")
+            return
+
+        selected_txn_id = transaction_options[selected_display]
+        
+        selected_txn_id = transaction_options[selected_display]
+        selected_txn_data = source_transactions[source_transactions['Transaction ID'] == selected_txn_id].iloc[0]
+        
+        st.markdown("---")
+        
+        # Call API to get counter data
+        with st.spinner("Loading counter data..."):
+            try:
+                response = cached_request(
+                    'post',
+                    f"{API_BASE_URL}/get-counter-data",
+                    cache_enabled=True,
+                    json={
+                        "transaction_id": selected_txn_id,
+                        "source_file": selected_source
+                    },
+                    timeout=60
+                )
+                
+                if response.status_code == 200:
+                    counter_data = response.json()
+                    
+                    # Display START counter (static - first counter in file)
+                    from datetime import datetime
+                    
+                    start_date = counter_data['start_counter']['date']
+                    start_time = counter_data['start_counter']['timestamp']
+                    
+                    # Format date as "DD Month YYYY"
+                    try:
+                        if len(start_date) == 6:  # YYMMDD format
+                            dt = datetime.strptime(start_date, '%y%m%d')
+                            formatted_start_date = dt.strftime('%d %B %Y')
+                        else:
+                            formatted_start_date = start_date
+                    except:
+                        formatted_start_date = start_date
+                    
+                    st.markdown(f"#### 🕐 First Counter - {formatted_start_date} {start_time}")
+                    st.caption("This counter represents the first transaction in the source file")
+                    
+                    start_df = pd.DataFrame(counter_data['start_counter']['counter_data'])
+
+                    # Get column descriptions
+                    col_descriptions = counter_data.get('column_descriptions', {})
+
+                    # Create column config with tooltips
+                    column_config = {}
+                    for col in start_df.columns:
+                        if col in col_descriptions:
+                            column_config[col] = st.column_config.TextColumn(
+                                col,
+                                help=col_descriptions[col],
+                                width="small"
+                            )
+
+                    st.dataframe(
+                        start_df, 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config=column_config
+                    )
+                    
+                    st.markdown("---")
+                    
+                    # Display first counter
+                    first_date = counter_data['first_counter']['date']
+                    first_time = counter_data['first_counter']['timestamp']
+                    
+                    # Format date as "DD Month YYYY"
+                    try:
+                        if len(first_date) == 6:  # YYMMDD format
+                            dt = datetime.strptime(first_date, '%y%m%d')
+                            formatted_first_date = dt.strftime('%d %B %Y')
+                        else:
+                            formatted_first_date = first_date
+                    except:
+                        formatted_first_date = first_date
+                    
+                    st.markdown(f"#### 🕐 Start Counter - {formatted_first_date} {first_time}")
+                    st.caption("This counter represents the first transaction from in the TRCTrace file based on the selected Transaction")
+                    
+                    first_df = pd.DataFrame(counter_data['first_counter']['counter_data'])
+
+                    # Get column descriptions
+                    col_descriptions = counter_data.get('column_descriptions', {})
+
+                    # Create column config with tooltips
+                    column_config = {}
+                    for col in first_df.columns:
+                        if col in col_descriptions:
+                            column_config[col] = st.column_config.TextColumn(
+                                col,
+                                help=col_descriptions[col],
+                                width="small"
+                            )
+
+                    st.dataframe(
+                        first_df, 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config=column_config
+                    )
+                    
+                    st.markdown("---")
+                    
+                    st.markdown("#### 📊 Counter per Transaction")
+
+                    if 'counter_per_transaction' in counter_data and counter_data['counter_per_transaction']:
+                        txn_table_data = []
+                        
+                        for txn_entry in counter_data['counter_per_transaction']:
+                            txn_table_data.append({
+                                'Date Timestamp': txn_entry['date_timestamp'],
+                                'Transaction ID': txn_entry['transaction_id'],
+                                'Transaction Type': txn_entry['transaction_type'],
+                                'Transaction Summary with Result': txn_entry['transaction_summary'],
+                                'Count': txn_entry['count'],
+                                'Counter Summary': txn_entry['counter_summary'],
+                                'Comment': txn_entry['comment']
+                            })
+                        
+                        txn_df = pd.DataFrame(txn_table_data)
+                        
+                        # Create column config with tooltips for transaction table
+                        txn_column_config = {
+                            'Date Timestamp': st.column_config.TextColumn('Date Timestamp', help='Transaction date and time'),
+                            'Transaction ID': st.column_config.TextColumn('Transaction ID', help='Unique transaction identifier'),
+                            'Transaction Type': st.column_config.TextColumn('Transaction Type', help='Type of transaction (CIN/CI or COUT/GA)'),
+                            'Transaction Summary with Result': st.column_config.TextColumn('Transaction Summary with Result', help='Success or failure status'),
+                            'Count': st.column_config.TextColumn('Count', help='Denomination and count information'),
+                            'Counter Summary': st.column_config.TextColumn('Counter Summary', help='Click to view detailed counter data'),
+                            'Comment': st.column_config.TextColumn('Comment', help='Additional notes')
+                        }
+                        
+                        # Apply styling for success/failure
+                        def highlight_state(row):
+                            summary = str(row['Transaction Summary with Result']).strip().lower()
+                            
+                            # Create a list of styles for each column
+                            styles = ['color: white'] * len(row)  # Default all columns to white
+                            
+                            # Find the index of 'Transaction Summary with Result' column
+                            summary_col_idx = row.index.get_loc('Transaction Summary with Result')
+                            
+                            # Apply color only to the summary column
+                            if summary == 'successful':
+                                styles[summary_col_idx] = 'color: green; font-weight: bold'
+                            elif summary == 'unsuccessful':
+                                styles[summary_col_idx] = 'color: red; font-weight: bold'
+                            else:
+                                styles[summary_col_idx] = 'color: white'
+                            
+                            return styles
+                        
+                        styled_df = txn_df.style.apply(highlight_state, axis=1)
+                        
+                        # Add click handling for View Counters
+                        st.dataframe(
+                            styled_df, 
+                            use_container_width=True, 
+                            hide_index=True,
+                            on_select="rerun",
+                            selection_mode="single-row",
+                            key="counter_txn_table",
+                            column_config=txn_column_config
+                        )
+                        
+                        # Get selected row
+                        if st.session_state.get("counter_txn_table") and st.session_state["counter_txn_table"].get("selection"):
+                            selected_rows = st.session_state["counter_txn_table"]["selection"].get("rows", [])
+                            
+                            if selected_rows:
+                                selected_idx = selected_rows[0]
+                                selected_row = txn_df.iloc[selected_idx]
+                                
+                                if selected_row['Counter Summary'] == 'View Counters':
+                                    st.markdown("---")
+                                    st.markdown(f"#### 📊 Counters for Transaction: {selected_row['Transaction ID']}")
+                                    st.caption(f"Time: {selected_row['Date Timestamp']}")
+                                    
+                                    # Extract matching counters from all_blocks
+                                    logical_counters = []
+                                    
+                                    if 'all_blocks' in counter_data:
+                                        for block in counter_data['all_blocks']:
+                                            for counter in block.get('data', []):
+                                                if counter.get('Record_Type') == 'Logical':
+                                                    logical_counters.append({
+                                                        'Name (PName)': counter.get('UnitName', ''),
+                                                        'Value (Val)': counter.get('Val', ''),
+                                                        'Cur': counter.get('Cur', ''),
+                                                        'Ini': counter.get('Ini', ''),
+                                                        'Retr': counter.get('Retr', ''),
+                                                        'Disp': counter.get('Disp', ''),
+                                                        'RCNT (Reject Count)': counter.get('RCnt', ''),
+                                                        'Pres': counter.get('Pres', ''),
+                                                        'Cnt': counter.get('Cnt', ''),
+                                                        'Status (St)': counter.get('St', ''),
+                                                        'NrPCU': counter.get('No', '')
+                                                    })
+                                    
+                                    if logical_counters:
+                                        counter_display_df = pd.DataFrame(logical_counters)
+                                        
+                                        # Get column descriptions
+                                        col_descriptions = counter_data.get('column_descriptions', {})
+                                        
+                                        # Column config with descriptions
+                                        detail_column_config = {}
+                                        for col in counter_display_df.columns:
+                                            # Map display column names to description keys
+                                            col_key_map = {
+                                                'Name (PName)': 'UnitName',
+                                                'Value (Val)': 'Val',
+                                                'Cur': 'Cur',
+                                                'Ini': 'Ini',
+                                                'Retr': 'Retr',
+                                                'Disp': 'Disp',
+                                                'RCNT (Reject Count)': 'RCnt',
+                                                'Pres': 'Pres',
+                                                'Cnt': 'Cnt',
+                                                'Status (St)': 'St',
+                                                'NrPCU': 'HWsens'
+                                            }
+                                            
+                                            desc_key = col_key_map.get(col, col)
+                                            if desc_key in col_descriptions:
+                                                detail_column_config[col] = st.column_config.TextColumn(
+                                                    col,
+                                                    help=col_descriptions[desc_key],
+                                                    width="small"
+                                                )
+                                        
+                                        st.dataframe(
+                                            counter_display_df, 
+                                            use_container_width=True, 
+                                            hide_index=True,
+                                            column_config=detail_column_config
+                                        )
+                                        
+                                        if st.button("✕ Close Counters View", key="close_counters"):
+                                            st.session_state["counter_txn_table"]["selection"]["rows"] = []
+                                            st.rerun()
+                                    else:
+                                        st.info("No logical counters found for this transaction timeframe")
+                    else:
+                        st.info("No transaction data available")
+                    
+                    st.markdown("---")
+                    
+                    # Display last counter
+                    last_date = counter_data['last_counter']['date']
+                    last_time = counter_data['last_counter']['timestamp']
+                    
+                    # Format date as "DD Month YYYY"
+                    try:
+                        if len(last_date) == 6:  # YYMMDD format
+                            dt = datetime.strptime(last_date, '%y%m%d')
+                            formatted_last_date = dt.strftime('%d %B %Y')
+                        else:
+                            formatted_last_date = last_date
+                    except:
+                        formatted_last_date = last_date
+                    
+                    st.markdown(f"#### 🕐 Last Counter - {formatted_last_date} {last_time}")
+                    st.caption("This counter represents the last transaction in the source file")
+
+                    last_df = pd.DataFrame(counter_data['last_counter']['counter_data'])
+
+                    # Get column descriptions
+                    col_descriptions = counter_data.get('column_descriptions', {})
+
+                    # Create column config with tooltips
+                    column_config = {}
+                    for col in last_df.columns:
+                        if col in col_descriptions:
+                            column_config[col] = st.column_config.TextColumn(
+                                col,
+                                help=col_descriptions[col],
+                                width="small"
+                            )
+
+                    st.dataframe(
+                        last_df, 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config=column_config
+                    )
+                
+                else:
+                    error_detail = response.json().get('detail', 'Failed to get counter data')
+                    st.error(f"❌ {error_detail}")
+                    
+            except requests.exceptions.Timeout:
+                st.error("⏱️ Request timeout. Please try again.")
+            except requests.exceptions.ConnectionError:
+                st.error("🔌 Connection error. Ensure the API server is running.")
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+                import traceback
+                with st.expander("🐛 Debug Information"):
+                    st.code(traceback.format_exc())
+    
+    except Exception as e:
+        st.error(f"❌ Error: {str(e)}")
+        import traceback
+        with st.expander("🐛 Debug Information"):
+            st.code(traceback.format_exc())
+
 def render_acu_single_parse(): # MODIFIED
     """
     FUNCTION:
@@ -3659,7 +4492,7 @@ uploaded_file = st.file_uploader(
     help="Upload a ZIP file containing diagnostic files (max 500 MB)",
     key="zip_uploader"
 )
-print()
+
 # Only process if file exists AND it's different from the last processed file
 if uploaded_file is not None:
     # Check if this is a new file or the same file we just processed
@@ -3687,7 +4520,10 @@ if uploaded_file is not None:
                     result = response.json()
                     st.session_state.zip_processed = True
                     st.session_state.processing_result = result
-                    st.session_state.last_processed_file = current_file_id  # Store the file ID
+                    st.session_state.last_processed_file = current_file_id
+                    
+                    # Clear cache when new ZIP is uploaded
+                    clear_cache()
                     
                     st.success("Package processed successfully.")
                     st.rerun()
@@ -3773,6 +4609,12 @@ if st.session_state.zip_processed:
             "description": "Compare differences between two registry files",
             "status": "ready",
             "requires": ["registry_files"]
+        },
+        "counters_analysis": {
+            "name": "📊 Counters Analysis",
+            "description": "Analyze counter data from TRC Trace files mapped to transactions",
+            "status": "ready",
+            "requires": ["customer_journals", "trc_trace"]
         },
         "acu_single_parse": {
             "name": "⚡ ACU Parser - Single Archive",
@@ -3860,6 +4702,8 @@ if st.session_state.zip_processed:
                 render_ui_flow_individual()
             elif selected_func_id == "consolidated_flow":
                 render_consolidated_flow()
+            elif selected_func_id == "counters_analysis":
+                render_counters_analysis()
             elif selected_func_id == "acu_single_parse":
                 render_acu_single_parse()
             elif selected_func_id == "acu_compare":

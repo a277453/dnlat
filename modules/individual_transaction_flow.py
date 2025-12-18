@@ -163,57 +163,70 @@ def create_individual_transaction_flow_plotly(
             if timestamp:
                 screen_text += f" [{timestamp}]"
 
+        fig.add_annotation(
+            x=350,
+            y=y_position + 15,
+            text=screen_text,
+            showarrow=False,
+            font=dict(size=14, color='#0d47a1', family='Arial'),
+            xanchor='center'
+        )
+        
+        # Add result detail
+        if result_detail:
             fig.add_annotation(
                 x=350,
-                y=y_position + 15,
-                text=screen_text,
+                y=y_position - 15,
+                text=f"<i>Result: {result_detail}</i>",
                 showarrow=False,
-                font=dict(size=14, color='#0d47a1', family='Arial'),
+                font=dict(size=10, color='#2e7d32', family='Arial'),
                 xanchor='center'
             )
-
-            # Add result detail
-            if result_detail:
-                fig.add_annotation(
-                    x=350,
-                    y=y_position - 15,
-                    text=f"<i>Result: {result_detail}</i>",
-                    showarrow=False,
-                    font=dict(size=10, color='#2e7d32', family='Arial'),
-                    xanchor='center'
-                )
-
-            # Add connecting arrow (except for last step)
-            if i < len(screens_with_details) - 1:
-                arrow_y_start = y_position - box_height//2 - 5
-                arrow_y_end = arrow_y_start - spacing + 10
-
-                fig.add_annotation(
-                    x=350,
-                    y=arrow_y_end,
-                    ax=350,
-                    ay=arrow_y_start,
-                    xref='x', yref='y',
-                    axref='x', ayref='y',
-                    showarrow=True,
-                    arrowhead=2,
-                    arrowsize=1.5,
-                    arrowwidth=2.5,
-                    arrowcolor='#2e7d32'
-                )
-
-        total_height = abs(y_position) + 150
-        fig.update_layout(
-            width=700,
-            height=min(total_height, 2000),
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-50, 650]),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[y_position - 100, y_start + 150]),
-            plot_bgcolor='white',
-            paper_bgcolor='white',
-            margin=dict(t=20, l=20, r=20, b=20),
-            hovermode='closest'
-        )
-
+        
+        # Add connecting arrow (except for last step)
+        if i < len(screens_with_details) - 1:
+            arrow_y_start = y_position - box_height//2 - 5
+            arrow_y_end = arrow_y_start - spacing + 10
+            
+            fig.add_annotation(
+                x=350,
+                y=arrow_y_end,
+                ax=350,
+                ay=arrow_y_start,
+                xref='x', yref='y',
+                axref='x', ayref='y',
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1.5,
+                arrowwidth=2.5,
+                arrowcolor='#2e7d32'
+            )
+    
+    # Calculate total height
+    total_height = abs(y_position) + 150
+    
+    # Update layout for clean look
+    fig.update_layout(
+        width=700,
+        height=min(total_height, 2000),  # Cap at 2000px
+        xaxis=dict(
+            showgrid=False,
+            zeroline=False,
+            showticklabels=False,
+            range=[-50, 650]
+        ),
+        yaxis=dict(
+            showgrid=False,
+            zeroline=False,
+            showticklabels=False,
+            range=[y_position - 100, y_start + 150]
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(t=20, l=20, r=20, b=20),
+        hovermode='closest'
+    )
+    
         logger.info(f"Transaction flow figure created successfully for ID: {transaction_id}")
         return fig
 
@@ -289,7 +302,7 @@ def _extract_screens_from_log(transaction_log: str, ui_flow: List[str]) -> List[
                     result_detail = "TIMEOUT"
 
                 screens_with_details.append((screen, timestamp, result_detail))
-                screen_set.remove(screen)
+                screen_set.remove(screen)  # Remove to avoid duplicates
                 logger.debug(f"Screen matched: {screen}, Result: {result_detail}, Timestamp: {timestamp}")
                 break
 

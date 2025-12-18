@@ -287,7 +287,6 @@ RAISES:
     ValidationError
     """
     transaction_id: str = Field(..., description="The ID of the transaction to visualize")
-
 class ParseFilesRequest(BaseModel):
     """
     CLASS: ParseFilesRequest
@@ -312,7 +311,6 @@ RAISES:
     filename: str
     xml_content: str
     xsd_content: Optional[str] = None
-
 class PathRequest(BaseModel):
     """
     CLASS: PathRequest
@@ -336,71 +334,3 @@ RAISES:
     """
     path: str = Field(..., description="The base directory path to search for ACU files.")
     prefixes: List[str] = Field(['jdd', 'x3', 'agilis_acuexport_', 'acuexport_', 'agilis_', 'acu_'], description="List of prefixes to search for in filenames.") # Default prefixes
-
-class TransactionAnalysisRequest(BaseModel):
-    """
-    CLASS: TransactionAnalysisRequest
-
-DESCRIPTION:
-    Request model for analyzing a transaction by its ID.
-
-USAGE:
-    req = TransactionAnalysisRequest(transaction_id="T123")
-
-PARAMETERS:
-    transaction_id (str) : ID of the transaction.
-
-RETURNS:
-    TransactionAnalysisRequest instance
-
-RAISES:
-    ValidationError
-    """
-    transaction_id: str
-
-class FeedbackSubmission(BaseModel):
-    """
-    CLASS: FeedbackSubmission
-
-DESCRIPTION:
-    Model for collecting feedback related to transaction analysis.
-
-USAGE:
-    fb = FeedbackSubmission(
-             transaction_id="T1",
-             rating=5,
-             alternative_cause="...",
-             comment="...",
-             user_name="John",
-             user_email="j@x.com",
-             model_version="v1",
-             original_llm_response="..."
-         )
-
-PARAMETERS:
-    transaction_id (str)
-    rating (int)
-    alternative_cause (str)
-    comment (str)
-    user_name (str)
-    user_email (str)
-    model_version (str)
-    original_llm_response (str)
-
-RETURNS:
-    FeedbackSubmission instance
-
-RAISES:
-    ValidationError
-    """
-    transaction_id: str
-    rating: int
-    alternative_cause: str
-    comment: str
-    user_name: str
-    user_email: str
-    model_version: str
-    original_llm_response: str
-
-    class Config:
-        protected_namespaces = ()

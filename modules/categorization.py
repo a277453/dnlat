@@ -8,11 +8,11 @@ import logging
 
 class CategorizationService:
     """
-    Categorize extracted files by type using fast filename-based patterns only.
-    NOTE: ACU files are extracted separately via extract_from_zip_bytes() and 
+    Categorize extracted files by type using folder hierarchy and filename patterns.
+    NOTE: ACU files are extracted separately via extract_from_zip_bytes() and
     merged into the result by the API endpoint.
     """
-    
+
     def __init__(self):
         """
         FUNCTION: __init__
@@ -43,7 +43,13 @@ class CategorizationService:
             'unidentified': []
         }
 
-    def categorize_files(self, extract_path: Path, file_categories: Dict[str, List[str]], exclude_files: set = None, mode: Optional[str] = None) -> Dict[str, List[str]]:
+    def categorize_files(
+        self,
+        extract_path: Path,
+        file_categories: Dict[str, List[str]],
+        exclude_files: set = None,
+        mode: Optional[str] = None
+    ) -> Dict[str, List[str]]:
         """
         FUNCTION: categorize_files
 
@@ -65,48 +71,49 @@ class CategorizationService:
         RAISES:
             None
         """
-        logger.info(f"Starting file categorization in: {extract_path}")         
-        logger.debug(f"Initial exclude_files: {exclude_files}")                
+        logger.info(f"Starting file categorization in: {extract_path}")
+        logger.debug(f"Initial exclude_files: {exclude_files}")
         logger.debug(f"Initial file_categories keys: {list(file_categories.keys())}")
 
         processed_files = set()
-        
+
         if exclude_files is None:
             exclude_files = set()
 
-        print(f"\n🔍 Starting file categorization in: {extract_path}")
-        print(f"📋 Excluding {len(exclude_files)} ACU files from disk scan")
-        
+        print(f"\n[INFO] Starting file categorization in: {extract_path}")
+        print(f"[INFO] Excluding {len(exclude_files)} ACU files from disk scan")
+
         if file_categories.get('acu_files'):
-            print(f"✓ Pre-loaded {len(file_categories['acu_files'])} ACU files from memory extraction")
-            logger.info(' >> SP categorization done.')
+            print(f"[OK] Pre-loaded {len(file_categories['acu_files'])} ACU files from memory extraction")
+            logger.info("Pre-loaded ACU files from memory extraction")
 
         for file_path in extract_path.rglob("*"):
             if not file_path.is_file():
                 continue
-            
+
             if file_path.name in exclude_files:
                 logger.debug(f"Skipping excluded file (ACU): {file_path.name}")
                 continue
-            
+
             if str(file_path) in processed_files:
                 logger.debug(f"Skipping already processed file: {file_path.name}")
                 continue
-            
+
             category = self._detect_category(file_path, mode=mode)
+
             if category and category != 'unidentified':
                 file_categories[category].append(str(file_path))
                 processed_files.add(str(file_path))
                 logger.debug(f"File categorized: {file_path.name} -> {category}")
-                print(f"✓ [{category}] {file_path.name}")
+                print(f"[OK] [{category}] {file_path.name}")
             else:
                 file_categories['unidentified'].append(str(file_path))
                 processed_files.add(str(file_path))
                 logger.debug(f"File could not be identified: {file_path.name}")
-                # print(f"❓ [unidentified] {file_path.name}")
 
-        logger.info(f"\n >> SP Categorization Summary:")
-        print(f"\n📊 Categorization Summary:")
+        logger.info("Categorization Summary:")
+        print("\n[INFO] Categorization Summary:")
+
         for category, files in file_categories.items():
             if files:
                 if category == 'acu_files':
@@ -117,13 +124,13 @@ class CategorizationService:
                 else:
                     logger.info(f"{category}: {len(files)} files")
                     print(f"   {category}: {len(files)} files")
-        
+
         total = sum(len(v) for v in file_categories.values())
         logger.info(f"Total files categorized: {total}")
-        print(f"\n✓ Total: {total} files categorized\n")
-        
+        print(f"\n[OK] Total: {total} files categorized\n")
+
         return file_categories
-    
+
     def _detect_category(self, file_path: Path, mode: Optional[str] = None) -> str:
         """
         FUNCTION: _detect_category
@@ -145,24 +152,80 @@ class CategorizationService:
             None
         """
         file_name_lower = file_path.name.lower()
-        
-        if 'reg.txt' in file_name_lower or (file_name_lower.startswith('reg') and file_name_lower.endswith('.txt')):
+        all_parents = [p.lower() for p in file_path.parts]
+        normalized_path = str(file_path).replace('\\', '/').lower()
+
+        logger.debug(f"Analyzing file: {file_path.name}")
+        logger.debug(f"Path hierarchy: {' > '.join(file_path.parts[:-1])}")
+        logger.debug(f"Normalized path: {normalized_path}")
+
+        # === REGISTRY FILES ===
+        has_registry_folder = any('registry' in parent or 'reg' in parent for parent in all_parents)
+
+        if has_registry_folder:
+            if file_name_lower.endswith(('.reg', '.txt', '.ini', '.cfg', '.conf')):
+                logger.debug("MATCH: Found in REGISTRY folder -> registry_files")
+                return 'registry_files'
+
+        if file_name_lower.endswith('.reg'):
+            logger.debug("MATCH: .reg extension -> registry_files")
+            return 'registry_files'
+
+        if file_name_lower.endswith('.txt') and 'reg' in file_name_lower:
+            logger.debug("MATCH: .txt with 'reg' in name -> registry_files")
             return 'registry_files'
 
         if mode == 'registry':
             return 'unidentified'
 
+        # === CUSTOMER JOURNALS ===
+        has_customer_folder = any(
+            'customer' in parent and ('journal' in parent or parent == 'customer')
+            for parent in all_parents
+        )
+
+        if has_customer_folder and file_name_lower.endswith('.jrn'):
+            logger.debug("MATCH: Found in CUSTOMER folder -> customer_journals")
+            return 'customer_journals'
+
+        # === UI JOURNALS ===
+        has_ui_folder = any('ui' in parent and 'journal' in parent for parent in all_parents)
+
+        if has_ui_folder and file_name_lower.endswith('.jrn'):
+            logger.debug("MATCH: Found in UI JOURNAL folder -> ui_journals")
+            return 'ui_journals'
+
+        # === TRC TRACE FILES ===
+        has_trace_folder = any('trace' in parent for parent in all_parents)
+
+        if has_trace_folder and file_name_lower.endswith('.prn'):
+            logger.debug("MATCH: Found in TRACE folder -> trc_trace")
+            return 'trc_trace'
+
+        # === TRC ERROR FILES ===
+        has_error_folder = any('error' in parent for parent in all_parents)
+
+        if has_error_folder and file_name_lower.endswith('.prn'):
+            logger.debug("MATCH: Found in ERROR folder -> trc_error")
+            return 'trc_error'
+
+        # === CONTENT-BASED DETECTION ===
         if file_name_lower.endswith(('.jrn', '.prn')):
+            logger.debug("Running content-based detection...")
             file_type = self._detect_file_type_by_content(str(file_path))
+            logger.debug(f"Content type detected: {file_type}")
+
             if "Customer Journal" in file_type:
-                return 'customer_journals'
-            if "UI Journal" in file_type:
+                if not has_ui_folder:
+                    return 'unidentified'
+            elif "UI Journal" in file_type:
                 return 'ui_journals'
-            if "TRC Trace" in file_type:
+            elif "TRC Trace" in file_type:
                 return 'trc_trace'
-            if "TRC Error" in file_type:
+            elif "TRC Error" in file_type:
                 return 'trc_error'
-        
+
+        logger.debug("NO MATCH: File will be unidentified")
         return 'unidentified'
 
     def _detect_file_type_by_content(self, file_path: str) -> str:

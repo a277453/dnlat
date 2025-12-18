@@ -532,6 +532,74 @@ class TransactionAnalyzerService:
             None
         """
         
+        # Get transaction data
+        txn1_data = df[df['Transaction ID'] == txn1_id].iloc[0]
+        txn2_data = df[df['Transaction ID'] == txn2_id].iloc[0]
+        
+        # Get the transaction type (should be same for both in comparison)
+        transaction_type = txn1_data['Transaction Type']
+        
+        # Extract flows from txt file
+        flows_data = self.extract_actual_flows_from_txt_file(txt_file_path, transaction_type)
+        
+        # Get flows for both transactions
+        txn1_flow = flows_data.get(txn1_id, {'screens': ['No flow data'], 'timestamp': ''})
+        txn2_flow = flows_data.get(txn2_id, {'screens': ['No flow data'], 'timestamp': ''})
+        
+        # Function to find the longest common subsequence (LCS) between two flows
+        def find_lcs_matches(flow1, flow2):
+            """Find screens that appear in the same relative order in both flows using LCS"""
+            m, n = len(flow1), len(flow2)
+            lcs_table = [[0] * (n + 1) for _ in range(m + 1)]
+            
+            # Fill LCS table
+            for i in range(1, m + 1):
+                for j in range(1, n + 1):
+                    if flow1[i-1] == flow2[j-1]:
+                        lcs_table[i][j] = lcs_table[i-1][j-1] + 1
+                    else:
+                        lcs_table[i][j] = max(lcs_table[i-1][j], lcs_table[i][j-1])
+            
+            # Backtrack to find which screens are part of LCS
+            matches1 = [False] * m
+            matches2 = [False] * n
+            
+            i, j = m, n
+            while i > 0 and j > 0:
+                if flow1[i-1] == flow2[j-1]:
+                    matches1[i-1] = True
+                    matches2[j-1] = True
+                    i -= 1
+                    j -= 1
+                elif lcs_table[i-1][j] > lcs_table[i][j-1]:
+                    i -= 1
+                else:
+                    j -= 1
+            
+            return matches1, matches2
+        
+        # Get sequential matches using LCS
+        txn1_matches, txn2_matches = find_lcs_matches(txn1_flow['screens'], txn2_flow['screens'])
+        
+        # Build comparison data
+        comparison_data = {
+            'txn1_id': txn1_id,
+            'txn2_id': txn2_id,
+            'txn1_type': str(txn1_data['Transaction Type']),
+            'txn2_type': str(txn2_data['Transaction Type']),
+            'txn1_state': str(txn1_data['End State']),
+            'txn2_state': str(txn2_data['End State']),
+            'txn1_flow': {
+                'screens': txn1_flow['screens'],
+                'matches': txn1_matches
+            },
+            'txn2_flow': {
+                'screens': txn2_flow['screens'],
+                'matches': txn2_matches
+            }
+        }
+        
+        return comparison_data
     
     def generate_data_based_comparison_analysis(self, txn1_data, txn2_data, txn1_id: str, txn2_id: str, flows_data: dict) -> str:
         """

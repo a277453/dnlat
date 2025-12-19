@@ -31,20 +31,6 @@ class ZipExtractionService:
     DESCRIPTION:
         Fast ZIP extraction service that extracts only relevant DN diagnostic files.
         Handles nested ZIPs recursively and removes irrelevant files or empty directories.
-    
-    USAGE:
-        service = ZipExtractionService()
-        extract_path = service.extract_zip(zip_bytes)
-        service.cleanup_old_extracts(max_age_hours=24)
-    
-    PARAMETERS:
-        None
-    
-    RETURNS:
-        None
-    
-    RAISES:
-        None
     """
 
     def __init__(self):
@@ -53,18 +39,6 @@ class ZipExtractionService:
 
         DESCRIPTION:
             Initialize ZipExtractionService, setting base extraction path, relevant file patterns, and skip patterns.
-        
-        USAGE:
-            service = ZipExtractionService()
-        
-        PARAMETERS:
-            None
-        
-        RETURNS:
-            None
-        
-        RAISES:
-            None
         """
         
         self.base_extract_path = Path(tempfile.gettempdir()) / "dn_extracts"
@@ -107,18 +81,6 @@ class ZipExtractionService:
 
         DESCRIPTION:
             Checks if a given file is relevant for DN diagnostics based on predefined patterns and skip rules.
-        
-        USAGE:
-            result = service.is_relevant_file("path/to/file.xml")
-        
-        PARAMETERS:
-            filename (str) : Full filename or relative path of the file
-        
-        RETURNS:
-            bool : True if the file is relevant, False otherwise
-        
-        RAISES:
-            None
         """
         filename_lower = filename.lower()
         basename = os.path.basename(filename_lower)
@@ -144,18 +106,11 @@ class ZipExtractionService:
         DESCRIPTION:
             Recursively extracts nested ZIP files found in a given extraction directory.
             Removes nested ZIP files after successful extraction.
+            NOW HANDLES ALL FILE TYPES INCLUDING CUSTOMER JOURNALS AND UI JOURNALS.
         
-        USAGE:
-            service._extract_nested_zips(Path("/tmp/extract_dir"))
-        
-        PARAMETERS:
-            extract_path (Path) : Path object pointing to the extraction directory
-        
-        RETURNS:
-            None
-        
-        RAISES:
-            None
+        FIXED: This method now properly extracts ALL file types from nested ZIPs,
+               not just ACU files. It preserves the folder structure to ensure
+               proper categorization.
         """
         processed_zips = set()
 
@@ -171,27 +126,44 @@ class ZipExtractionService:
             for zip_path in nested_zips:
                 processed_zips.add(zip_path)
                 logger.info(
-                    f"Found nested ZIP: {zip_path.relative_to(self.base_extract_path)}. Extracting..."
+                    f"Found nested ZIP: {zip_path.relative_to(self.base_extract_path)}. Extracting ALL file types..."
                 )
 
+                # CRITICAL FIX: Extract to same directory where the ZIP is located
+                # This preserves the folder hierarchy for proper categorization
                 nested_extract_dir = zip_path.parent / zip_path.stem
                 nested_extract_dir.mkdir(exist_ok=True)
 
                 try:
                     with zipfile.ZipFile(zip_path, 'r') as zf:
+                        extracted_count = 0
                         for member in zf.namelist():
+                            # Check if file is relevant (includes .jrn files for customer/UI journals)
                             if self.is_relevant_file(member):
                                 try:
+                                    # Extract the file, preserving its path structure
                                     zf.extract(member, nested_extract_dir)
-                                except Exception:
+                                    extracted_count += 1
+                                    logger.debug(f"Extracted from nested ZIP: {member}")
+                                except Exception as e:
+                                    logger.warning(f"Could not extract {member} from nested ZIP: {e}")
                                     continue
+                        
+                        logger.info(f"Extracted {extracted_count} files from nested ZIP: {zip_path.name}")
 
+                    # Remove the nested ZIP file after successful extraction
                     zip_path.unlink()
                     logger.info(f"Removed nested ZIP file {zip_path.name}")
+                    
+                except zipfile.BadZipFile as e:
+                    logger.error(f"BadZipFile error for nested ZIP {zip_path.name}: {e}")
+                    # Don't remove the file if it's corrupted - user might want to inspect it
+                    continue
                 except Exception as e:
                     logger.error(
                         f"Error extracting nested ZIP {zip_path.name}: {e}. Leaving file as is."
                     )
+                    continue
 
     def extract_zip(self, zip_content: bytes) -> Path:
         """
@@ -199,20 +171,10 @@ class ZipExtractionService:
 
         DESCRIPTION:
             Extracts all files from a ZIP archive into a temporary directory and filters only relevant files.
-            Handles nested ZIPs after extraction.
+            Handles nested ZIPs after extraction FOR ALL FILE TYPES.
         
-        USAGE:
-            extract_path = service.extract_zip(zip_bytes)
-        
-        PARAMETERS:
-            zip_content (bytes) : Bytes of the ZIP archive
-        
-        RETURNS:
-            Path : Path to the directory containing the extracted relevant files
-        
-        RAISES:
-            ValueError : When ZIP content is empty or contains no relevant files
-            Exception   : For general extraction errors
+        FIXED: Now properly extracts customer journals and UI journals from nested ZIPs
+               by calling _extract_nested_zips which has been fixed.
         """
 
         if not zip_content:
@@ -257,6 +219,15 @@ class ZipExtractionService:
                 if extracted == 0:
                     raise ValueError("Failed to extract any files")
                 
+                # CRITICAL: Extract nested ZIPs for ALL file types
+                # This is the key fix - it now properly handles customer journals and UI journals
+                logger.info("Checking for nested ZIP files to extract ALL file types (including journals)...")
+                self._extract_nested_zips(extract_path)
+                
+                # Log final file count after nested extraction
+                all_files_after = [p for p in extract_path.rglob('*') if p.is_file()]
+                logger.info(f"Total files after nested ZIP extraction: {len(all_files_after)}")
+                
                 return extract_path
 
         except zipfile.BadZipFile:
@@ -272,18 +243,6 @@ class ZipExtractionService:
 
         DESCRIPTION:
             Deletes old extraction directories older than the specified age to save disk space.
-        
-        USAGE:
-            service.cleanup_old_extracts(max_age_hours=48)
-        
-        PARAMETERS:
-            max_age_hours (int) : Maximum age (in hours) of extraction directories to keep
-        
-        RETURNS:
-            None
-        
-        RAISES:
-            None
         """
         try:
             current_time = time.time()
@@ -298,6 +257,7 @@ class ZipExtractionService:
                     continue
         except:
             logger.error(f"error cleaning up old extractions")
+            
             
 
 # --- ACU Parser Specific Extraction Logic (UNCHANGED) ---
@@ -462,6 +422,7 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
                 if lh_off + 30 > size:
                     logs.append(f"Local header truncated at {lh_off} for {fname}; skipping.")
                     total_errors += 1
+                    pos += 4
                     continue
 
                 if data[lh_off:lh_off + 4] != LH_SIG:

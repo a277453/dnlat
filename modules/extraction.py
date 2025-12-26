@@ -2,6 +2,7 @@
 FAST ZIP Extraction - Optimized for Speed
 Extracts relevant DN diagnostic files while preserving folder structure for proper categorization.
 """
+from enum import member
 import zipfile
 import io
 from pathlib import Path
@@ -96,7 +97,7 @@ class ZipExtractionService:
             if pattern in filename_lower:
                 logger.debug(f"File is relevant: {filename}")
                 return True
-
+        
         return False
 
     def _extract_nested_zips(self, extract_path: Path):
@@ -104,77 +105,163 @@ class ZipExtractionService:
         FUNCTION: _extract_nested_zips
 
         DESCRIPTION:
-            Recursively extracts nested ZIP files found in a given extraction directory.
-            Removes nested ZIP files after successful extraction.
-            NOW HANDLES ALL FILE TYPES INCLUDING CUSTOMER JOURNALS AND UI JOURNALS.
+            Extracts ONLY first-level nested ZIP files found in the extraction directory.
+            Does NOT recurse deeper than one level.
+            Does NOT remove nested ZIP files after extraction.
         
-        FIXED: This method now properly extracts ALL file types from nested ZIPs,
-               not just ACU files. It preserves the folder structure to ensure
-               proper categorization.
+        FIXED: 
+            - Only processes first-level nested ZIPs (no deeper recursion)
+            - Preserves nested ZIP files after extraction
+            - Handles Windows-style backslash paths in ZIP files
         """
-        processed_zips = set()
+        # Find nested ZIPs at FIRST LEVEL ONLY (not recursive)
+        # Using glob() instead of rglob() to avoid finding deeply nested ZIPs
+        nested_zips = [
+            p for p in extract_path.glob("**/*.zip")  # First level subdirectories only
+            if p.is_file() and p.parent != extract_path  # Skip ZIPs in root
+        ]
+        
+        # Also check root directory for ZIPs
+        root_zips = [
+            p for p in extract_path.glob("*.zip")
+            if p.is_file()
+        ]
+        
+        # Combine both lists
+        nested_zips.extend(root_zips)
+        
+        nested_zip_count = len(nested_zips)
 
-        while True:
-            nested_zips = [
-                p for p in extract_path.rglob("*.zip")
-                if p.is_file() and p not in processed_zips
-            ]
+        if nested_zip_count == 0:
+            logger.info("No first-level nested ZIP files found")
+            return
 
-            if not nested_zips:
-                break
+        zip_names = [str(p.relative_to(extract_path)) for p in nested_zips]
+        logger.info(
+            f"Found {nested_zip_count} first-level nested ZIP file(s): {', '.join(zip_names)}"
+        )
 
-            for zip_path in nested_zips:
-                processed_zips.add(zip_path)
-                logger.info(
-                    f"Found nested ZIP: {zip_path.relative_to(self.base_extract_path)}. Extracting ALL file types..."
-                )
+        # Process each nested ZIP ONCE (no recursion)
+        for index, zip_path in enumerate(nested_zips, start=1):
+            logger.info(
+                f"Extracting nested ZIP ({index}/{nested_zip_count}): "
+                f"{zip_path.relative_to(extract_path)}"
+            )
 
-                # CRITICAL FIX: Extract to same directory where the ZIP is located
-                # This preserves the folder hierarchy for proper categorization
-                nested_extract_dir = zip_path.parent / zip_path.stem
-                nested_extract_dir.mkdir(exist_ok=True)
+            # Extract to subdirectory with same name as ZIP (preserves hierarchy)
+            nested_extract_dir = zip_path.parent / zip_path.stem
+            nested_extract_dir.mkdir(exist_ok=True)
+            logger.debug(f"zip_path.parent directory: {zip_path.parent}")
+            logger.debug(f"zip_path.stem directory: {zip_path.stem}")
+            logger.debug(f"Nested extract directory: {nested_extract_dir}")
 
-                try:
-                    with zipfile.ZipFile(zip_path, 'r') as zf:
-                        extracted_count = 0
-                        for member in zf.namelist():
-                            # Check if file is relevant (includes .jrn files for customer/UI journals)
-                            if self.is_relevant_file(member):
-                                try:
-                                    # Extract the file, preserving its path structure
-                                    zf.extract(member, nested_extract_dir)
-                                    extracted_count += 1
-                                    logger.debug(f"Extracted from nested ZIP: {member}")
-                                except Exception as e:
-                                    logger.warning(f"Could not extract {member} from nested ZIP: {e}")
-                                    continue
-                        
-                        logger.info(f"Extracted {extracted_count} files from nested ZIP: {zip_path.name}")
-
-                    # Remove the nested ZIP file after successful extraction
-                    zip_path.unlink()
-                    logger.info(f"Removed nested ZIP file {zip_path.name}")
+            try:
+                logger.debug(f"Opening nested ZIP: {zip_path}")
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    extracted_count = 0
+                    failed_count = 0
                     
-                except zipfile.BadZipFile as e:
-                    logger.error(f"BadZipFile error for nested ZIP {zip_path.name}: {e}")
-                    # Don't remove the file if it's corrupted - user might want to inspect it
-                    continue
-                except Exception as e:
-                    logger.error(
-                        f"Error extracting nested ZIP {zip_path.name}: {e}. Leaving file as is."
+                    all_members = zf.namelist()
+                    logger.debug(f"Nested ZIP contains {len(all_members)} total entries")
+                    
+                    for member in all_members:
+                        # Check if file is relevant
+                        if not self.is_relevant_file(member):
+                            logger.debug(f"Skipping irrelevant file: {member}")
+                            continue
+                        
+                        try:
+                            logger.debug(f"NKS Extracting: {member}")
+                            #normalized_member = zip_path / member
+                            
+                            # Read file data from ZIP
+                            #file_data = zf.read(normalized_member)
+                            #file_data = zf.read(member)
+                            file_data = zf.read(member)
+                            # if member.count('CUSTOMER/20250311.jrn') > 0:
+                            #     logger.debug("Found test file CUSTOMER/20250311.jrn in nested ZIP")
+                            #     member = member.replace('/', '\\')
+                            #     logger.debug(f"NKS Extracting 2: {member}")
+                            #     file_data = zf.read(member)
+                            # else:
+                            #     member = member.replace('/', '\\')
+                            #     logger.debug(f"NKS Extracting 3: {member}")
+                            #     file_data = zf.read(member)
+                            #     continue
+                            
+                            #     file_data = f.read()
+
+                            
+                            
+                            # Normalize path (convert backslashes to forward slashes)
+                            #normalized_member = member.replace('\\', '/')
+                            #normalized_member = member
+                            logger.debug(f">>sp Extracting: {member}")
+                            
+                            # Create target path
+                            #target_path = nested_extract_dir / normalized_member
+                            target_path = nested_extract_dir / member
+                            
+                            # Create parent directories
+                            target_path.parent.mkdir(parents=True, exist_ok=True)
+                            
+                            # Write file
+                            with open(target_path, 'wb') as f:
+                                f.write(file_data)
+                            
+                            extracted_count += 1
+                            logger.debug(f"  ✓ Successfully extracted: {member}")
+                            
+                        except KeyError as e:
+                            logger.error(f"  ✗ File not found in ZIP: {member}")
+                            failed_count += 1
+                            continue
+                            
+                        except Exception as e:
+                            logger.error(f"  ✗ Failed to extract {member}: {e}", exc_info=True)
+                            failed_count += 1
+                            continue
+                    
+                    logger.info(
+                        f"Nested ZIP extraction complete: "
+                        f"{extracted_count} files extracted, "
+                        f"{failed_count} files failed"
                     )
-                    continue
+                    
+                    if extracted_count == 0 and failed_count > 0:
+                        logger.error(
+                            f"Failed to extract any files from nested ZIP: {zip_path.name}. "
+                            f"This may indicate a corrupted or incompatible ZIP file."
+                        )
+
+                # IMPORTANT: Do NOT delete nested ZIP file
+                # User wants to keep nested ZIPs after extraction
+                logger.info(f"✓ Keeping nested ZIP file: {zip_path.name}")
+                
+            except zipfile.BadZipFile as e:
+                logger.error(f"BadZipFile error for nested ZIP {zip_path.name}: {e}")
+                continue
+            except Exception as e:
+                logger.error(
+                    f"Error extracting nested ZIP {zip_path.name}: {e}",
+                    exc_info=True
+                )
+                continue
+        
+        logger.info(
+            f"First-level nested ZIP extraction complete. "
+            f"Processed {nested_zip_count} ZIP file(s). "
+            f"No deeper recursion performed."
+        )
 
     def extract_zip(self, zip_content: bytes) -> Path:
         """
         FUNCTION: extract_zip
 
         DESCRIPTION:
-            Extracts all files from a ZIP archive into a temporary directory and filters only relevant files.
-            Handles nested ZIPs after extraction FOR ALL FILE TYPES.
-        
-        FIXED: Now properly extracts customer journals and UI journals from nested ZIPs
-               by calling _extract_nested_zips which has been fixed.
+            Extracts all relevant files from a ZIP archive into a temporary directory.
+            Handles ONLY first-level nested ZIPs (no deeper recursion).
+            Keeps nested ZIP files after extraction.
         """
 
         if not zip_content:
@@ -193,25 +280,44 @@ class ZipExtractionService:
                 all_files = zf.namelist()
                 logger.info(f"ZIP contains {len(all_files)} entries")
                 
-                # Filter ONLY relevant files - FAST
+                # Filter ONLY relevant files
                 relevant_files = [
                     f for f in all_files 
                     if not f.endswith('/') and self.is_relevant_file(f)
                 ]
                 
-                logger.info(f"Extracting {len(relevant_files)} relevant files (skipping {len(all_files) - len(relevant_files)} irrelevant)")
+                logger.info(
+                    f"Extracting {len(relevant_files)} relevant files "
+                    f"(skipping {len(all_files) - len(relevant_files)} irrelevant)"
+                )
                 
                 if not relevant_files:
                     raise ValueError("No relevant diagnostic files found in ZIP")
                 
-                # Extract only relevant files - FAST
+                # Extract only relevant files
                 extracted = 0
                 for filename in relevant_files:
                     try:
+                        logger.info(f"NKS 1: {filename}")
+                        logger.info(f"NKS 2: {extract_path}")
+                        # #filename = filename.replace('\\', '/')
+                        # #if filename.count('CUSTOMER/20250311.jrn') > 0:
+                        # if filename.count('.jrn') > 0:
+                                
+                        #         filename = filename.replace('/', '\\')
+                        #         logger.info(f"NKS 3: {filename}")
+                        #         continue
+                        
+                        # finalppath = extract_path / filename
+                        
+                        # if finalppath.exists():
+                        #     logger.info(f"NKS 3: {finalppath}")
+                        # else:
+                        #     zf.extract(filename, extract_path)
                         zf.extract(filename, extract_path)
                         extracted += 1
                     except Exception as e:
-                        logger.warning(f"Skip {filename}: {e}")
+                        logger.warning(f"NKS Skip {filename}: {e}")
                         continue
                 
                 logger.info(f"Extracted {extracted} files successfully")
@@ -219,14 +325,16 @@ class ZipExtractionService:
                 if extracted == 0:
                     raise ValueError("Failed to extract any files")
                 
-                # CRITICAL: Extract nested ZIPs for ALL file types
-                # This is the key fix - it now properly handles customer journals and UI journals
-                logger.info("Checking for nested ZIP files to extract ALL file types (including journals)...")
+                # Extract ONLY first-level nested ZIPs (no recursion)
+                logger.info("Scanning for first-level nested ZIP files...")
                 self._extract_nested_zips(extract_path)
                 
-                # Log final file count after nested extraction
+                # Log final file count
                 all_files_after = [p for p in extract_path.rglob('*') if p.is_file()]
-                logger.info(f"Total files after nested ZIP extraction: {len(all_files_after)}")
+                logger.info(
+                    f"Total files after first-level nested ZIP extraction: "
+                    f"{len(all_files_after)}"
+                )
                 
                 return extract_path
 
@@ -236,7 +344,6 @@ class ZipExtractionService:
         except Exception as e:
             shutil.rmtree(extract_path, ignore_errors=True)
             raise Exception(f"Extraction failed: {str(e)}")
-
     def cleanup_old_extracts(self, max_age_hours: int = 24):
         """
         FUNCTION: cleanup_old_extracts
@@ -257,9 +364,6 @@ class ZipExtractionService:
                     continue
         except:
             logger.error(f"error cleaning up old extractions")
-            
-            
-
 # --- ACU Parser Specific Extraction Logic (UNCHANGED) ---
 
 def _decode_bytes_to_text(b: bytes) -> str:

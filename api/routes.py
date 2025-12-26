@@ -145,6 +145,7 @@ async def debug_zip_members(file: UploadFile = File(...)):
         # Try to open as standard ZIP
         try:
             with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                logger.info("zip opened successfully  :%s,file.filename")
                 for info in zf.infolist():
                     member_info = {
                         "path": info.filename,
@@ -155,7 +156,8 @@ async def debug_zip_members(file: UploadFile = File(...)):
                         "compress_type": info.compress_type
                     }
                     members.append(member_info)
-                    logger.debug(f"ZIP member found: {member_info}")  
+                    logger.debug(f"ZIP member found: {member_info}") 
+                    
         except zipfile.BadZipFile as e:
             logger.error(f"BadZipFile encountered for {file.filename}: {e}")  
             return {

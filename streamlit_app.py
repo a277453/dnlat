@@ -18,7 +18,6 @@ def create_comparison_flow_plotly(txn1_id, txn1_state, txn1_flow_screens, txn1_m
     """
     FUNCTION:
         create_comparison_flow_plotly
-
     DESCRIPTION:
         Creates a side-by-side Plotly visualization that compares the screen-flow
         of two transactions. Each screen is displayed as a colored box where:
@@ -4620,13 +4619,13 @@ if st.session_state.zip_processed:
             "name": "⚡ ACU Parser - Single Archive",
             "description": "Extract and parse ACU configuration files from a single ZIP",
             "status": "ready",
-            "requires": []  # No specific file types required, uses its own upload
+            "requires": ["acu_files"]  #fixed
         },
         "acu_compare": {
             "name": "⚖️ ACU Parser - Compare Archives", 
             "description": "Compare ACU configuration files from two ZIP archives",
             "status": "ready",
-            "requires": []  # No specific file types required, uses its own upload
+            "requires": ["acu_files"]  #fixed
         }
     }
 
@@ -4649,7 +4648,8 @@ if st.session_state.zip_processed:
                 'ui_journals': 'UI Journals',
                 'trc_trace': 'TRC Trace',
                 'trc_error': 'TRC Error',
-                'registry_files': 'Registry Files'
+                'registry_files': 'Registry Files',
+                'acu_files': 'ACU XML Files',
             }
             missing_str = ", ".join([req_labels.get(m, m) for m in missing])
             dropdown_options.append(f"{func_data['name']} (Missing: {missing_str})")

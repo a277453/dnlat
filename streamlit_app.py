@@ -12,6 +12,212 @@ from datetime import datetime
 import numpy as np
 from fastapi.logger import logger
 
+# Import authentication functions
+from login import (
+    initialize_session,
+    is_logged_in,
+    authenticate_user,
+    logout_user,
+    get_current_user
+)
+
+# ============================================
+# PAGE CONFIGURATION (MUST BE FIRST!)
+# ============================================
+st.set_page_config(
+    page_title="DN Diagnostics Platform",
+    page_icon="⚙️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ============================================
+# CSS STYLES
+# ============================================
+st.markdown("""
+    <style>
+    /* Global Styles */
+    .main {
+        background-color: #0a0a0a;
+        color: #e0e0e0;
+    }
+    
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+        max-width: 1400px;
+    }
+    
+    /* Sidebar Styles */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1a1a1a 0%, #0f0f0f 100%);
+        border-right: 1px solid #2a2a2a;
+    }
+    
+    /* Typography */
+    h1 {
+        color: #ffffff !important;
+        font-size: 2.5rem !important;
+        font-weight: 700 !important;
+        margin-bottom: 0.5rem !important;
+    }
+    
+    h2 {
+        color: #ffffff !important;
+        font-size: 1.75rem !important;
+        font-weight: 600 !important;
+        margin: 2rem 0 1rem 0 !important;
+        border-bottom: 2px solid #2563eb;
+        padding-bottom: 0.5rem;
+    }
+    
+    h3 {
+        color: #e0e0e0 !important;
+        font-size: 1.25rem !important;
+        font-weight: 600 !important;
+    }
+    
+    /* Button Styles */
+    .stButton > button {
+        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+        color: #ffffff;
+        border: none;
+        padding: 0.75rem 2rem;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.95rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
+        width: 100%;
+        height: 48px;
+    }
+    
+    .stButton > button:hover {
+        background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+        box-shadow: 0 6px 12px rgba(37, 99, 235, 0.35);
+        transform: translateY(-1px);
+    }
+    
+    /* File Uploader */
+    [data-testid="stFileUploader"] {
+        background-color: #1a1a1a;
+        border: 2px dashed #404040;
+        border-radius: 12px;
+        padding: 2rem;
+        transition: all 0.3s ease;
+    }
+    
+    [data-testid="stFileUploader"]:hover {
+        border-color: #2563eb;
+        background-color: #1f1f1f;
+    }
+    
+    /* Select Box */
+    .stSelectbox > div > div {
+        background-color: #1a1a1a;
+        border: 1px solid #404040;
+        border-radius: 8px;
+        color: #e0e0e0;
+        height: 48px;
+    }
+    
+    /* Text Input */
+    .stTextInput > div > div > input {
+        background-color: #1a1a1a;
+        border: 1px solid #404040;
+        border-radius: 8px;
+        color: #e0e0e0;
+        height: 48px;
+        padding: 0 1rem;
+    }
+    
+    /* Metric Cards */
+    [data-testid="stMetricValue"] {
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: #ffffff;
+    }
+    
+    [data-testid="stMetricLabel"] {
+        font-size: 0.875rem;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-weight: 500;
+    }
+    
+    /* Data Tables */
+    .dataframe {
+        border: 1px solid #2a2a2a !important;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    
+    .dataframe thead tr th {
+        background-color: #1a1a1a !important;
+        color: #ffffff !important;
+        font-weight: 600 !important;
+        text-transform: uppercase;
+        font-size: 0.75rem;
+        padding: 1rem !important;
+    }
+    
+    .dataframe tbody tr:hover {
+        background-color: #1f1f1f !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# ============================================
+# GLOBAL VARIABLES
+# ============================================
+API_BASE_URL = "http://localhost:8000/api/v1"
+
+# ============================================
+# LOGIN PAGE UI
+# ============================================
+
+def show_login_page():
+    """
+    Display login page UI
+    """
+    # Center the login form
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col2:
+        st.markdown(
+            "<h2 style='text-align:center; margin-top:100px;'>🔒 DN Diagnostics Login</h2>", 
+            unsafe_allow_html=True
+        )
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Login form
+        with st.form("login_form"):
+            username = st.text_input(
+                "Username", 
+                placeholder="Enter your username",
+                key="login_username"
+            )
+            password = st.text_input(
+                "Password", 
+                type="password",
+                placeholder="Enter your password",
+                key="login_password"
+            )
+            submit = st.form_submit_button("Login", use_container_width=True)
+
+        # Handle login
+        if submit:
+            if not username or not password:
+                st.error("⚠️ Please enter username and password")
+            else:
+                with st.spinner("Authenticating..."):
+                    if authenticate_user(username, password):
+                        user = get_current_user()
+                        st.success(f"✅ Welcome {user['name']}!")
+                        st.rerun()  # Reload to show main app
+                    else:
+                        st.error("❌ Invalid username or password")
 
 def create_comparison_flow_plotly(txn1_id, txn1_state, txn1_flow_screens, txn1_matches,
                                    txn2_id, txn2_state, txn2_flow_screens, txn2_matches):
@@ -4476,242 +4682,301 @@ RAISES:
                     
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
+
 # ============================================
-# MAIN APPLICATION
+# MAIN APPLICATION UI
 # ============================================
 
-st.title("DN Diagnostics Platform")
-st.caption("Comprehensive analysis tool for Diebold Nixdorf diagnostic files.")
-
-st.markdown("## Upload Zip Package")
-
-uploaded_file = st.file_uploader(
-    "Select ZIP Archive",
-    type=['zip'],
-    help="Upload a ZIP file containing diagnostic files (max 500 MB)",
-    key="zip_uploader"
-)
-
-# Only process if file exists AND it's different from the last processed file
-if uploaded_file is not None:
-    # Check if this is a new file or the same file we just processed
-    current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+def show_main_app():
+    """
+    Display main application UI (shown after login)
+    """
+    # Get current user
+    user = get_current_user()
     
-    if 'last_processed_file' not in st.session_state:
-        st.session_state.last_processed_file = None
+    # Header with welcome message and logout button
+    col1, col2 = st.columns([5, 1])
     
-    # Only process if it's a new file
-    if st.session_state.last_processed_file != current_file_id:
-        file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
-        st.info(f"File: {uploaded_file.name} ({file_size_mb:.2f} MB)")
-        
-        with st.spinner("Processing package..."):
-            try:
-                files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/zip")}
-                
-                response = requests.post(
-                    f"{API_BASE_URL}/process-zip", 
-                    files=files,
-                    timeout=300  # Increased to 5 minutes for larger files
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    st.session_state.zip_processed = True
-                    st.session_state.processing_result = result
-                    st.session_state.last_processed_file = current_file_id
-                    
-                    # Clear cache when new ZIP is uploaded
-                    clear_cache()
-                    
-                    st.success("Package processed successfully.")
-                    st.rerun()
-                else:
-                    error_detail = response.json().get('detail', 'Unknown error occurred.')
-                    st.error(f"Error: {error_detail}")
-                    
-            except requests.exceptions.Timeout:
-                st.error("Request timeout. The file may be too large or the server is not responding.")
-            except requests.exceptions.ConnectionError:
-                st.error("Connection error. Please ensure the FastAPI server is running on localhost:8000.")
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-    else:
-        # File already processed, show info
-        file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
-
-if st.session_state.zip_processed:
-    st.markdown("---")
-    result = st.session_state.processing_result
-    categories = result['categories']
+    with col1:
+        st.markdown(f"**👤 Welcome, {user['name'] or user['username']}**")
     
-    st.markdown("## Detected Files")
-    cols = st.columns(6)
-    
-    category_display = {
-        'customer_journals': ('Customer Journals', '📋'),
-        'ui_journals': ('UI Journals', '🖥️'),
-        'trc_trace': ('TRC Trace', '📝'),
-        'trc_error': ('TRC Error', '⚠️'),
-        'registry_files': ('Registry Files', '📄'),
-        'acu_files': ('ACU XML Files', '⚡')
-    }
-    
-    for idx, (category, (label, icon)) in enumerate(category_display.items()):
-        count = categories.get(category, {}).get('count', 0)
-        with cols[idx]:
-            st.metric(label, count)
+    with col2:
+        if st.button("🚪 Logout", use_container_width=True, key="logout_btn"):
+            logout_user()
+            st.rerun()
     
     st.markdown("---")
     
-    st.markdown("## Analysis Functions")
+    # Initialize app session state
+    if 'zip_processed' not in st.session_state:
+        st.session_state.zip_processed = False
+    if 'processing_result' not in st.session_state:
+        st.session_state.processing_result = None
+    if 'selected_function' not in st.session_state:
+        st.session_state.selected_function = None
 
-    functionalities = {
-        "transaction_stats": {
-            "name": "📊 Transaction Type Statistics",
-            "description": "View statistics for different transaction types",
-            "status": "ready",
-            "requires": ["customer_journals"]
-        },
-        "individual_transaction": {
-            "name": "🔍 Individual Transaction Analysis",
-            "description": "Analyze a specific transaction in detail",
-            "status": "ready",
-            "requires": ["customer_journals"]
-        },
-        "ui_flow_individual": {
-            "name": "🖥️ UI Flow of Individual Transaction",
-            "description": "Visualize UI flow for a specific transaction",
-            "status": "ready",
-            "requires": ["customer_journals", "ui_journals"]
-        },
-        "consolidated_flow": {
-            "name": "🌐 Consolidated Transaction UI Flow and Analysis",
-            "description": "View consolidated flow across multiple transactions",
-            "status": "ready",
-            "requires": ["customer_journals", "ui_journals"]
-        },
-        "transaction_comparison": {
-            "name": "⚖️ Transaction Comparison Analysis",
-            "description": "Compare two transactions side by side",
-            "status": "ready",
-            "requires": ["customer_journals", "ui_journals"]
-        },
-        "registry_single": {
-            "name": "📝 Single View of Registry Files",
-            "description": "View and analyze a single registry file",
-            "status": "ready",
-            "requires": ["registry_files"]
-        },
-        "registry_compare": {
-            "name": "🔄 Compare Two Registry Files",
-            "description": "Compare differences between two registry files",
-            "status": "ready",
-            "requires": ["registry_files"]
-        },
-        "counters_analysis": {
-            "name": "📊 Counters Analysis",
-            "description": "Analyze counter data from TRC Trace files mapped to transactions",
-            "status": "ready",
-            "requires": ["customer_journals", "trc_trace"]
-        },
-        "acu_single_parse": {
-            "name": "⚡ ACU Parser - Single Archive",
-            "description": "Extract and parse ACU configuration files from a single ZIP",
-            "status": "ready",
-            "requires": ["acu_files"]  #fixed
-        },
-        "acu_compare": {
-            "name": "⚖️ ACU Parser - Compare Archives", 
-            "description": "Compare ACU configuration files from two ZIP archives",
-            "status": "ready",
-            "requires": ["acu_files"]  #fixed
-        }
-    }
+    # ============================================
+    # MAIN APPLICATION
+    # ============================================
 
-    available_file_types = [cat for cat, data in categories.items() if data.get('count', 0) > 0]
+    st.title("DN Diagnostics Platform")
+    st.caption("Comprehensive analysis tool for Diebold Nixdorf diagnostic files.")
 
-    # Build dropdown options in the order defined in functionalities
-    dropdown_options = ["Select a function"]
+    st.markdown("## Upload Zip Package")
 
-    for func_id, func_data in functionalities.items():
-        requirements_met = all(req in available_file_types for req in func_data['requires'])
-        
-        if requirements_met:
-            # Add the function name as-is
-            dropdown_options.append(func_data['name'])
-        else:
-            # Add with missing requirements indicator
-            missing = [req for req in func_data['requires'] if req not in available_file_types]
-            req_labels = {
-                'customer_journals': 'Customer Journals',
-                'ui_journals': 'UI Journals',
-                'trc_trace': 'TRC Trace',
-                'trc_error': 'TRC Error',
-                'registry_files': 'Registry Files',
-                'acu_files': 'ACU XML Files',
-            }
-            missing_str = ", ".join([req_labels.get(m, m) for m in missing])
-            dropdown_options.append(f"{func_data['name']} (Missing: {missing_str})")
-
-    selected_option = st.selectbox(
-        "Select Analysis Function",
-        options=dropdown_options,
-        key="function_selector"
+    uploaded_file = st.file_uploader(
+        "Select ZIP Archive",
+        type=['zip'],
+        help="Upload a ZIP file containing diagnostic files (max 500 MB)",
+        key="zip_uploader"
     )
 
-    selected_func_id = None
-    selected_func_data = None
-
-    if selected_option != "Select a function":
-        clean_option = selected_option.split(" (Missing:")[0]
+    # Only process if file exists AND it's different from the last processed file
+    if uploaded_file is not None:
+        # Check if this is a new file or the same file we just processed
+        current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
         
-        for func_id, func_data in functionalities.items():
-            if func_data['name'] == clean_option:
-                selected_func_id = func_id
-                selected_func_data = func_data
-                break
+        if 'last_processed_file' not in st.session_state:
+            st.session_state.last_processed_file = None
+        
+        # Only process if it's a new file
+        if st.session_state.last_processed_file != current_file_id:
+            file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
+            st.info(f"File: {uploaded_file.name} ({file_size_mb:.2f} MB)")
+            
+            with st.spinner("Processing package..."):
+                try:
+                    files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/zip")}
+                    
+                    response = requests.post(
+                        f"{API_BASE_URL}/process-zip", 
+                        files=files,
+                        timeout=300  # Increased to 5 minutes for larger files
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        st.session_state.zip_processed = True
+                        st.session_state.processing_result = result
+                        st.session_state.last_processed_file = current_file_id
+                        
+                        # Clear cache when new ZIP is uploaded
+                        clear_cache()
+                        
+                        st.success("Package processed successfully.")
+                        st.rerun()
+                    else:
+                        error_detail = response.json().get('detail', 'Unknown error occurred.')
+                        st.error(f"Error: {error_detail}")
+                        
+                except requests.exceptions.Timeout:
+                    st.error("Request timeout. The file may be too large or the server is not responding.")
+                except requests.exceptions.ConnectionError:
+                    st.error("Connection error. Please ensure the FastAPI server is running on localhost:8000.")
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+        else:
+            # File already processed, show info
+            file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
 
-    if selected_func_data:
+    if st.session_state.zip_processed:
+        st.markdown("---")
+        result = st.session_state.processing_result
+        categories = result['categories']
+        
+        st.markdown("## Detected Files")
+        cols = st.columns(6)
+        
+        category_display = {
+            'customer_journals': ('Customer Journals', '📋'),
+            'ui_journals': ('UI Journals', '🖥️'),
+            'trc_trace': ('TRC Trace', '📝'),
+            'trc_error': ('TRC Error', '⚠️'),
+            'registry_files': ('Registry Files', '📄'),
+            'acu_files': ('ACU XML Files', '⚡')
+        }
+        
+        for idx, (category, (label, icon)) in enumerate(category_display.items()):
+            count = categories.get(category, {}).get('count', 0)
+            with cols[idx]:
+                st.metric(label, count)
+        
         st.markdown("---")
         
-        requirements_met = all(req in available_file_types for req in selected_func_data['requires'])
-        
-        if not requirements_met:
-            missing = [req for req in selected_func_data['requires'] if req not in available_file_types]
-            missing_str = ", ".join([req_labels.get(m, m) for m in missing])
-            st.error(f"Cannot proceed. Missing required files: {missing_str}")
-            st.info("Please upload a package containing the required file types.")
-        
-        elif selected_func_data['status'] == 'construction':
-            render_under_construction(selected_func_data['name'])
-        
-        else:
-            # Ready functionalities - show their content
-            if selected_func_id == "transaction_stats":
-                render_transaction_stats()           
-            elif selected_func_id == "individual_transaction":
-                render_individual_transaction_analysis()
-            elif selected_func_id == "registry_single":
-                render_registry_single()
-            elif selected_func_id == "registry_compare":
-                render_registry_compare()
-            elif selected_func_id == "transaction_comparison":
-                render_transaction_comparison()
-            elif selected_func_id == "ui_flow_individual":
-                render_ui_flow_individual()
-            elif selected_func_id == "consolidated_flow":
-                render_consolidated_flow()
-            elif selected_func_id == "counters_analysis":
-                render_counters_analysis()
-            elif selected_func_id == "acu_single_parse":
-                render_acu_single_parse()
-            elif selected_func_id == "acu_compare":
-                render_acu_compare()
+        st.markdown("## Analysis Functions")
 
-st.markdown("---")
-st.markdown("""
-    <div style='text-align: center; color: #666666; font-size: 0.875rem;'>
-        © 2025 Diebold Nixdorf Analysis Tools
-    </div>
-""", unsafe_allow_html=True)
+        functionalities = {
+            "transaction_stats": {
+                "name": "📊 Transaction Type Statistics",
+                "description": "View statistics for different transaction types",
+                "status": "ready",
+                "requires": ["customer_journals"]
+            },
+            "individual_transaction": {
+                "name": "🔍 Individual Transaction Analysis",
+                "description": "Analyze a specific transaction in detail",
+                "status": "ready",
+                "requires": ["customer_journals"]
+            },
+            "ui_flow_individual": {
+                "name": "🖥️ UI Flow of Individual Transaction",
+                "description": "Visualize UI flow for a specific transaction",
+                "status": "ready",
+                "requires": ["customer_journals", "ui_journals"]
+            },
+            "consolidated_flow": {
+                "name": "🌐 Consolidated Transaction UI Flow and Analysis",
+                "description": "View consolidated flow across multiple transactions",
+                "status": "ready",
+                "requires": ["customer_journals", "ui_journals"]
+            },
+            "transaction_comparison": {
+                "name": "⚖️ Transaction Comparison Analysis",
+                "description": "Compare two transactions side by side",
+                "status": "ready",
+                "requires": ["customer_journals", "ui_journals"]
+            },
+            "registry_single": {
+                "name": "📝 Single View of Registry Files",
+                "description": "View and analyze a single registry file",
+                "status": "ready",
+                "requires": ["registry_files"]
+            },
+            "registry_compare": {
+                "name": "🔄 Compare Two Registry Files",
+                "description": "Compare differences between two registry files",
+                "status": "ready",
+                "requires": ["registry_files"]
+            },
+            "counters_analysis": {
+                "name": "📊 Counters Analysis",
+                "description": "Analyze counter data from TRC Trace files mapped to transactions",
+                "status": "ready",
+                "requires": ["customer_journals", "trc_trace"]
+            },
+            "acu_single_parse": {
+                "name": "⚡ ACU Parser - Single Archive",
+                "description": "Extract and parse ACU configuration files from a single ZIP",
+                "status": "ready",
+                "requires": ["acu_files"]  #fixed
+            },
+            "acu_compare": {
+                "name": "⚖️ ACU Parser - Compare Archives", 
+                "description": "Compare ACU configuration files from two ZIP archives",
+                "status": "ready",
+                "requires": ["acu_files"]  #fixed
+            }
+        }
+
+        available_file_types = [cat for cat, data in categories.items() if data.get('count', 0) > 0]
+
+        # Build dropdown options in the order defined in functionalities
+        dropdown_options = ["Select a function"]
+
+        for func_id, func_data in functionalities.items():
+            requirements_met = all(req in available_file_types for req in func_data['requires'])
+            
+            if requirements_met:
+                # Add the function name as-is
+                dropdown_options.append(func_data['name'])
+            else:
+                # Add with missing requirements indicator
+                missing = [req for req in func_data['requires'] if req not in available_file_types]
+                req_labels = {
+                    'customer_journals': 'Customer Journals',
+                    'ui_journals': 'UI Journals',
+                    'trc_trace': 'TRC Trace',
+                    'trc_error': 'TRC Error',
+                    'registry_files': 'Registry Files',
+                    'acu_files': 'ACU XML Files',
+                }
+                missing_str = ", ".join([req_labels.get(m, m) for m in missing])
+                dropdown_options.append(f"{func_data['name']} (Missing: {missing_str})")
+
+        selected_option = st.selectbox(
+            "Select Analysis Function",
+            options=dropdown_options,
+            key="function_selector"
+        )
+
+        selected_func_id = None
+        selected_func_data = None
+
+        if selected_option != "Select a function":
+            clean_option = selected_option.split(" (Missing:")[0]
+            
+            for func_id, func_data in functionalities.items():
+                if func_data['name'] == clean_option:
+                    selected_func_id = func_id
+                    selected_func_data = func_data
+                    break
+
+        if selected_func_data:
+            st.markdown("---")
+            
+            requirements_met = all(req in available_file_types for req in selected_func_data['requires'])
+            
+            if not requirements_met:
+                missing = [req for req in selected_func_data['requires'] if req not in available_file_types]
+                missing_str = ", ".join([req_labels.get(m, m) for m in missing])
+                st.error(f"Cannot proceed. Missing required files: {missing_str}")
+                st.info("Please upload a package containing the required file types.")
+            
+            elif selected_func_data['status'] == 'construction':
+                render_under_construction(selected_func_data['name'])
+            
+            else:
+                # Ready functionalities - show their content
+                if selected_func_id == "transaction_stats":
+                    render_transaction_stats()           
+                elif selected_func_id == "individual_transaction":
+                    render_individual_transaction_analysis()
+                elif selected_func_id == "registry_single":
+                    render_registry_single()
+                elif selected_func_id == "registry_compare":
+                    render_registry_compare()
+                elif selected_func_id == "transaction_comparison":
+                    render_transaction_comparison()
+                elif selected_func_id == "ui_flow_individual":
+                    render_ui_flow_individual()
+                elif selected_func_id == "consolidated_flow":
+                    render_consolidated_flow()
+                elif selected_func_id == "counters_analysis":
+                    render_counters_analysis()
+                elif selected_func_id == "acu_single_parse":
+                    render_acu_single_parse()
+                elif selected_func_id == "acu_compare":
+                    render_acu_compare()
+
+    st.markdown("---")
+    st.markdown("""
+        <div style='text-align: center; color: #666666; font-size: 0.875rem;'>
+            © 2025 Diebold Nixdorf Analysis Tools
+        </div>
+    """, unsafe_allow_html=True)
+
+# ============================================
+# APP ENTRY POINT
+# ============================================
+
+def main():
+    """
+    Main entry point - decides which page to show
+    """
+    # Initialize session
+    initialize_session()
+    
+    # Show appropriate page based on login status
+    if not is_logged_in():
+        # NOT LOGGED IN → Show login page only
+        show_login_page()
+    else:
+        # LOGGED IN → Show main application only
+        show_main_app()
+
+# ============================================
+# RUN THE APP
+# ============================================
+
+if __name__ == "__main__":
+    main()

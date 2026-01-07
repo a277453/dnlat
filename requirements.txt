@@ -11,3 +11,4 @@ xmltodict
 ollama
 pandas
 xmldict
+psycopg2-binary

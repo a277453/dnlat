@@ -78,37 +78,28 @@ def create_individual_transaction_flow_plotly(
     logger.info(f"Creating transaction flow figure for ID: {transaction_id}")
 
     try:
-        # Extract screens with details from transaction log if available
         screens_with_details = []
+
         if transaction_log and ui_flow and ui_flow[0] != 'No flow data':
-            logger.debug("Extracting screen details from transaction log.")
             screens_with_details = _extract_screens_from_log(transaction_log, ui_flow)
         elif ui_flow and ui_flow[0] != 'No flow data':
-            logger.debug("Using UI flow data without detailed parsing.")
             screens_with_details = [(screen, "", "OK") for screen in ui_flow]
         else:
-            logger.warning("No UI flow data available.")
             screens_with_details = [("No flow data available", "", "")]
 
-        # Calculate event count and dates
-        num_events = len(screens_with_details)
-        logger.debug(f"Number of events/screens: {num_events}")
-        current_date = datetime.now().strftime("%Y-%m-%d")
-
-        # Create the Plotly figure
         fig = go.Figure()
+
         box_width = 500
         box_height = 80
         spacing = 40
         y_start = 100
 
-        # Add title header
         fig.add_annotation(
             x=350,
             y=y_start + 80,
             text=f"<b>Transaction Flow: {transaction_id}</b><br>",
             showarrow=False,
-            font=dict(size=20, color='#0d47a1', family='Arial Black'),
+            font=dict(size=20, color='#0d47a1'),
             bgcolor='#e3f2fd',
             bordercolor='#1976d2',
             borderwidth=2,
@@ -116,25 +107,22 @@ def create_individual_transaction_flow_plotly(
             xanchor='center'
         )
 
-        # Draw each screen box
         y_position = y_start - 50
+
         for i, (screen, timestamp, result_detail) in enumerate(screens_with_details):
             y_position -= (box_height + spacing)
 
-            if any(term in screen.lower() for term in ['error', 'fail', 'cancel', 'timeout']):
-                box_color = '#ffcdd2'  # Red
-                logger.debug(f"Screen '{screen}' marked as error/fail/cancel/timeout.")
-            else:
-                box_color = '#bbdefb'  # Blue
+            box_color = '#ffcdd2' if any(
+                term in screen.lower() for term in ['error', 'fail', 'cancel', 'timeout']
+            ) else '#bbdefb'
 
-            # Add step number circle
+            # Step number
             fig.add_shape(
                 type="circle",
                 x0=30, x1=70,
                 y0=y_position - 20, y1=y_position + 20,
                 fillcolor='#1976d2',
-                line=dict(color='white', width=2),
-                layer='above'
+                line=dict(color='white', width=2)
             )
 
             fig.add_annotation(
@@ -142,91 +130,68 @@ def create_individual_transaction_flow_plotly(
                 y=y_position,
                 text=f"<b>{i+1}</b>",
                 showarrow=False,
-                font=dict(size=14, color='white', family='Arial'),
+                font=dict(size=14, color='white'),
                 xanchor='center',
                 yanchor='middle'
             )
 
-            # Add main screen box
+            # Screen box
             fig.add_shape(
                 type="rect",
-                x0=100, x1=100 + box_width,
-                y0=y_position - box_height//2,
-                y1=y_position + box_height//2,
+                x0=100, x1=600,
+                y0=y_position - box_height // 2,
+                y1=y_position + box_height // 2,
                 fillcolor=box_color,
-                line=dict(color='#1976d2', width=2),
-                layer='below'
+                line=dict(color='#1976d2', width=2)
             )
 
-            # Add screen name with timestamp
             screen_text = f"<b>{screen}</b>"
             if timestamp:
                 screen_text += f" [{timestamp}]"
 
-        fig.add_annotation(
-            x=350,
-            y=y_position + 15,
-            text=screen_text,
-            showarrow=False,
-            font=dict(size=14, color='#0d47a1', family='Arial'),
-            xanchor='center'
-        )
-        
-        # Add result detail
-        if result_detail:
             fig.add_annotation(
                 x=350,
-                y=y_position - 15,
-                text=f"<i>Result: {result_detail}</i>",
+                y=y_position + 15,
+                text=screen_text,
                 showarrow=False,
-                font=dict(size=10, color='#2e7d32', family='Arial'),
+                font=dict(size=14, color='#0d47a1'),
                 xanchor='center'
             )
-        
-        # Add connecting arrow (except for last step)
-        if i < len(screens_with_details) - 1:
-            arrow_y_start = y_position - box_height//2 - 5
-            arrow_y_end = arrow_y_start - spacing + 10
-            
-            fig.add_annotation(
-                x=350,
-                y=arrow_y_end,
-                ax=350,
-                ay=arrow_y_start,
-                xref='x', yref='y',
-                axref='x', ayref='y',
-                showarrow=True,
-                arrowhead=2,
-                arrowsize=1.5,
-                arrowwidth=2.5,
-                arrowcolor='#2e7d32'
-            )
-    
-    # Calculate total height
-    total_height = abs(y_position) + 150
-    
-    # Update layout for clean look
-    fig.update_layout(
-        width=700,
-        height=min(total_height, 2000),  # Cap at 2000px
-        xaxis=dict(
-            showgrid=False,
-            zeroline=False,
-            showticklabels=False,
-            range=[-50, 650]
-        ),
-        yaxis=dict(
-            showgrid=False,
-            zeroline=False,
-            showticklabels=False,
-            range=[y_position - 100, y_start + 150]
-        ),
-        plot_bgcolor='white',
-        paper_bgcolor='white',
-        margin=dict(t=20, l=20, r=20, b=20),
-        hovermode='closest'
-    )
-    
+
+            if result_detail:
+                fig.add_annotation(
+                    x=350,
+                    y=y_position - 15,
+                    text=f"<i>Result: {result_detail}</i>",
+                    showarrow=False,
+                    font=dict(size=10, color='#2e7d32'),
+                    xanchor='center'
+                )
+
+            if i < len(screens_with_details) - 1:
+                fig.add_annotation(
+                    x=350,
+                    y=y_position - box_height // 2 - spacing + 10,
+                    ax=350,
+                    ay=y_position - box_height // 2 - 5,
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowwidth=2.5,
+                    arrowcolor='#2e7d32'
+                )
+
+        total_height = abs(y_position) + 150
+
+        fig.update_layout(
+            width=700,
+            height=min(total_height, 2000),
+            xaxis=dict(showgrid=False, showticklabels=False, range=[-50, 650]),
+            yaxis=dict(showgrid=False, showticklabels=False),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(t=20, l=20, r=20, b=20)
+        )
+
         logger.info(f"Transaction flow figure created successfully for ID: {transaction_id}")
         return fig
 

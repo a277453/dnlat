@@ -136,7 +136,7 @@ async def debug_zip_members(file: UploadFile = File(...)):
         BadZipFile : If the uploaded file is not a valid ZIP archive.
         Exception  : Any unexpected errors during reading or processing the ZIP file.
     """
-    logger.info("📥 Received request: /debug-zip-members")  
+    logger.info(" Received request: /debug-zip-members")  
     try:
         zip_bytes = await file.read()
         logger.debug(f"Read {len(zip_bytes)} bytes from uploaded file: {file.filename}") 
@@ -232,9 +232,9 @@ def organize_files_into_subdirectories(extract_path: Path, file_categories: Dict
                 try:
                     shutil.copy2(source, dest)
                     organized_files.append(str(dest))
-                    print(f"  📁 Moved {source.name} to {category}/")
+                    logger.info(f"   Moved {source.name} to {category}/")
                 except Exception as e:
-                    #print(f"  ❌ Failed to move {source.name}: {e}")
+                    logger.info(f"  Failed to move {source.name}: {e}")
                     continue
         
         organized_categories[category] = organized_files
@@ -275,7 +275,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
     """
     logger.info(" Received request to process ZIP file")
     if not file.filename.endswith('.zip'):
-        logger.error(" Invalid file type — only ZIP allowed")
+        logger.error(" Invalid file type - only ZIP allowed")
         raise HTTPException(
             status_code=400,
             detail="Only ZIP files are accepted"
@@ -286,7 +286,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         
 
         # -----------------------------------------------------------
-        # ⏱️ START TOTAL TIME MEASUREMENT
+        # â±ï¸ START TOTAL TIME MEASUREMENT
         # -----------------------------------------------------------
         start_time = time.perf_counter()
         # -----------------------------------------------------------
@@ -326,7 +326,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         logger.debug(f"Extracted directory: {extract_path}")
 
         # ------------------ NESTED ZIP EXTRACTION ------------------
-        logger.info("🔍 STEP 3: Checking for nested ZIP files.")
+        logger.info(" STEP 3: Checking for nested ZIP files.")
         t_nested_zip_start = time.perf_counter()
 
         nested_zip_files = [p for p in Path(extract_path).rglob('*.zip')]
@@ -334,7 +334,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
 
         for nested_zip_path in nested_zip_files:
-                logger.info(f"📁 Handling nested ZIP: {nested_zip_path.relative_to(extract_path)}")
+                logger.info(f" Handling nested ZIP: {nested_zip_path.relative_to(extract_path)}")
             
                 try:
                     with open(nested_zip_path, 'rb') as f:
@@ -343,7 +343,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
                     
                     nested_extract_path = extraction_service.extract_zip(nested_content)
                     all_files_after_nested = [p for p in Path(extract_path).rglob('*') if p.is_file()]
-                    logger.info(f"  ✓ Nested ZIP extracted to {nested_extract_path}")
+                    logger.info(f"   Nested ZIP extracted to {nested_extract_path}")
                     logger.info(f"Grand total files after nested ZIP extraction: {len(all_files_after_nested)}")
                 except Exception as e:
                     logger.error(f"  Failed to extract nested ZIP {nested_zip_path.name}: {e}", exc_info=True)
@@ -354,7 +354,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
         # ------------------ CATEGORIZATION + ACU EXTRACTION (COMBINED) ------------------
         # Extract ACU files first, then include in categorization result
-        logger.info(f"🔧 Extracting ACU XML files (jdd*, x3*) directly from ZIP...")
+        logger.info(f" Extracting ACU XML files (jdd*, x3*) directly from ZIP...")
         acu_logs = []
         t_cat_start = time.perf_counter()
         
@@ -363,7 +363,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             acu_files = extract_from_zip_bytes(zip_content, acu_logs, target_prefixes=('jdd', 'x3'))
             xml_count = sum(1 for k in acu_files if not k.startswith('__xsd__'))
             xsd_count = sum(1 for k in acu_files if k.startswith('__xsd__'))
-            logger.info(f"✓ ACU extraction: {xml_count} XML, {xsd_count} XSD files")
+            logger.info(f" ACU extraction: {xml_count} XML, {xsd_count} XSD files")
 
             # Get a set of base filenames for exclusion during disk scan
             acu_filenames_to_exclude = {os.path.basename(p) for p in acu_files.keys()}
@@ -384,7 +384,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         # Step 3: Add the correctly identified ACU files to the categories FIRST
         if acu_files:
             file_categories['acu_files'] = list(acu_files.keys())
-            logger.info(f"✓ Added {len(acu_files)} ACU files to final categories.")
+            logger.info(f" Added {len(acu_files)} ACU files to final categories.")
         
         # Step 4: Run on-disk categorization, which will populate the SAME dictionary
         logger.info("Running on-disk categorization ...")
@@ -393,6 +393,18 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         
         t_cat_end = time.perf_counter()
         logger.debug(f"CATEGORIZATION + ACU EXTRACTION TIME: {t_cat_end - t_cat_start:.4f} s")
+
+        #--------------------------------------------
+        registry_contents = {}
+        for reg_file in file_categories.get('registry_files', []):
+            try:
+                if Path(reg_file).exists():
+                    with open(reg_file, 'rb') as f:
+                        registry_contents[Path(reg_file).name] = f.read()
+                        logger.info(f" Loaded registry file into memory: {Path(reg_file).name}")
+            except Exception as e:
+                logger.error(f"Failed to read registry file {reg_file}: {e}")
+                #---------------------------------------------------------------
         
         # ------------------ SESSION CREATION TIMER ------------------
         logger.info("Creating/updating session")
@@ -401,6 +413,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         session_service.create_session(CURRENT_SESSION_ID, file_categories, extract_path)
         session_service.update_session(CURRENT_SESSION_ID, 'acu_extracted_files', acu_files)
         session_service.update_session(CURRENT_SESSION_ID, 'acu_extraction_logs', acu_logs)
+        session_service.update_session(CURRENT_SESSION_ID, 'registry_contents', registry_contents)
         t_sess_end = time.perf_counter()
         logger.debug(f"SESSION SAVE TIME: {t_sess_end - t_sess_start:.4f} s")
 
@@ -467,7 +480,7 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
     """
     Extract ACU files from an uploaded ZIP for comparison purposes.
     """
-    logger.info(f"📥 Received request: /extract-files/ for file: {file.filename}")  
+    logger.info(f" Received request: /extract-files/ for file: {file.filename}")  
     try:
         if not file.filename.endswith('.zip'):
             logger.error(f"Invalid file type uploaded: {file.filename}")  
@@ -508,6 +521,63 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
             status_code=500,
             detail=f"Error extracting files: {str(e)}\n{traceback.format_exc()}"
         )
+
+@router.get("/get-registry-contents")
+async def get_registry_contents(session_id: str = Query(default=CURRENT_SESSION_ID)):
+    """
+FUNCTION: get_registry_contents
+
+DESCRIPTION:
+    Retrieves registry file contents from a given session. 
+    Converts binary registry file contents to base64 strings for JSON serialization 
+    and returns them along with a count of available files.
+
+USAGE:
+    response = await get_registry_contents(session_id="session_123")
+
+PARAMETERS:
+    session_id (str) : Optional. The ID of the session to retrieve registry files from.
+                       Defaults to CURRENT_SESSION_ID if not provided.
+
+RETURNS:
+    dict : A dictionary containing:
+        - "registry_contents" (dict) : Mapping of file names to base64-encoded file contents
+        - "count" (int)               : Number of registry files available in the session
+
+RAISES:
+    HTTPException : 
+        - 404 : If the session with the given ID does not exist
+        - 500 : For any other unexpected server error during retrieval
+"""
+
+    try:
+        if not session_service.session_exists(session_id):
+            raise HTTPException(status_code=404, detail="No session found")
+        
+        session_data = session_service.get_session(session_id)
+        registry_contents = session_data.get('registry_contents', {})
+        
+        # Convert bytes to base64 for JSON serialization
+        import base64
+        encoded_contents = {}
+        for filename, content_bytes in registry_contents.items():
+            if isinstance(content_bytes, bytes):
+                encoded_contents[filename] = base64.b64encode(content_bytes).decode('utf-8')
+            else:
+                encoded_contents[filename] = content_bytes
+        
+        logger.info(f"Serving {len(encoded_contents)} registry files from session")
+        
+        return {
+            "registry_contents": encoded_contents,
+            "count": len(encoded_contents)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving registry contents: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================
 # ACU PARSER ENDPOINTS
@@ -559,8 +629,8 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
         acu_logs = session.get('acu_extraction_logs', [])
         logger.info(f"SESSION KEYS FOR DEBUG: {list(session.keys())}")
 
-        logger.info(f">> SP type acu_files {type(acu_files)}, initial 5 elements {list(acu_files.keys())[:5]}")
-        logger.info(f">> SP type acu_logs {type(acu_logs)}, initial 5 elements {acu_logs[:5]}")
+        logger.info(f" type acu_files {type(acu_files)}, initial 5 elements {list(acu_files.keys())[:5]}")
+        logger.info(f" SP type acu_logs {type(acu_logs)}, initial 5 elements {acu_logs[:5]}")
 
 
         logger.debug(f"Retrieved {len(acu_files)} ACU files and {len(acu_logs)} extraction logs from session {session_id}")
@@ -583,7 +653,7 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
         xml_dict = {fname: acu_files[fname] for fname in xml_files}
 
         return {
-            "acu_files": xml_dict,       # <-- What frontend expects!
+            "acu_files": xml_dict,       # -- What frontend expects!
             "logs": acu_logs or [],
             "count": len(xml_dict),
             "message": f"Found {len(xml_dict)} ACU XML file(s)"
@@ -725,14 +795,14 @@ async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str
                 
                 if df is not None and not df.empty:
                     all_parsed_data.extend(df.to_dict('records'))
-                    logs.append(f"✓ Parsed {filename}: {len(df)} records")
+                    logs.append(f" Parsed {filename}: {len(df)} records")
                     logger.info(f"Parsed {filename}: {len(df)} records")
                 else:
-                    logs.append(f"⚠️ No data extracted from {filename}")
+                    logs.append(f" No data extracted from {filename}")
                     logger.warning(f"No data extracted from {filename}")
                     
             except Exception as e:
-                logs.append(f"✗ Failed to parse {filename}: {str(e)}")
+                logs.append(f" Failed to parse {filename}: {str(e)}")
                 logger.error(f"Failed to parse {filename}: {str(e)}")
         
         logger.info(f"Parsing complete: {len(all_parsed_data)} total records")
@@ -791,7 +861,7 @@ async def get_available_file_types(session_id: str = Query(default=CURRENT_SESSI
             - 404 if the session does not exist
             - 404 if no file categories are found in the session
     """
-    logger.info(f"📥 Received request: /available-file-types for session_id: {session_id}") 
+    logger.info(f" Received request: /available-file-types for session_id: {session_id}") 
 
     # Check if session exists
     if not session_service.session_exists(session_id):
@@ -870,7 +940,7 @@ async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Q
             - 404 if the session does not exist
             - 404 if no file categories are found in the session
     """
-    logger.info(f"📥 Received request: /select-file-type for session_id: {session_id}")  
+    logger.info(f" Received request: /select-file-type for session_id: {session_id}")  
 
     # Check if session exists
     if not session_service.session_exists(session_id):
@@ -999,7 +1069,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             - 500 for unexpected errors during processing
     """
     try:
-        logger.info(f"🔍 Starting customer journal analysis for session: {session_id}")
+        logger.info(f" Starting customer journal analysis for session: {session_id}")
         
         # Check if session exists
         if not session_service.session_exists(session_id):
@@ -1020,7 +1090,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
                 detail="No customer journal files found in the uploaded package."
             )
         
-        logger.info(f"📂 Found {len(journal_files)} customer journal file(s)")
+        logger.info(f" Found {len(journal_files)} customer journal file(s)")
         
         # Initialize analyzer
         analyzer = TransactionAnalyzerService()
@@ -1030,7 +1100,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
         source_file_map = {}
         
         for journal_file in journal_files:
-            logger.info(f"📖 Processing: {journal_file}")
+            logger.info(f"   Processing: {journal_file}")
             logger.info(f"   Path object: {Path(journal_file)}")
             logger.info(f"   Filename (name): {Path(journal_file).name}")
             logger.info(f"   Filename (stem): {Path(journal_file).stem}")
@@ -1045,7 +1115,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
                     logger.debug(f"No transactions found in {source_filename}")
                     continue
                 
-                logger.info(f"✓ Found {len(df)} transactions")
+                logger.info(f"Found {len(df)} transactions")
                 
                 all_transactions_df.append(df)
                 
@@ -1068,7 +1138,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
         
         combined_df = pd.concat(all_transactions_df, ignore_index=True)
 
-        logger.info(f"\n📊 BEFORE RENAME:")
+        logger.info(f"\n BEFORE RENAME:")
         logger.info(f"   Total rows: {len(combined_df)}")
         logger.info(f"   Columns: {combined_df.columns.tolist()}")
         if 'Source_File' in combined_df.columns:
@@ -1077,8 +1147,8 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
         if 'Source_File' in combined_df.columns:
             combined_df = combined_df.rename(columns={'Source_File': 'Source File'})
         
-        logger.info(f"✅ Total transactions extracted: {len(combined_df)}")
-        logger.info(f"📁 Total source files: {len(source_files)}")
+        logger.info(f"Total transactions extracted: {len(combined_df)}")
+        logger.info(f"Total source files: {len(source_files)}")
         
         if 'Source File' in combined_df.columns:
             unique_sources_in_data = combined_df['Source File'].unique().tolist()
@@ -1088,7 +1158,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
         transaction_records = combined_df.to_dict('records')
 
         # ADD THESE DEBUG LINES
-        logger.info(f"\n💾 CONVERTING TO RECORDS:")
+        logger.info(f"\n CONVERTING TO RECORDS:")
         logger.info(f"   Total records: {len(transaction_records)}")
         if transaction_records:
             sample = transaction_records[0]
@@ -1100,8 +1170,8 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
         unique_source_files.sort()
 
         # DEBUG: Print what we're about to store
-        logger.info(f"  🔍 Unique source files being stored: {unique_source_files}")
-        logger.info(f"  🔍 Total source files count: {len(unique_source_files)}")
+        logger.info(f" Unique source files being stored: {unique_source_files}")
+        logger.info(f" Total source files count: {len(unique_source_files)}")
 
         session_service.update_session(session_id, 'transaction_data', transaction_records)
         session_service.update_session(session_id, 'source_files', unique_source_files)
@@ -1178,7 +1248,7 @@ async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_
         logger.info(f"Fetching transactions with source mapping for session: {session_id}")
         logger.debug("Entered /get-transactions-with-sources route")
 
-        print(f"🔍 Getting transactions with sources for session: {session_id}")
+        logger.info(f" Getting transactions with sources for session: {session_id}")
         
         if not session_service.session_exists(session_id):
             logger.error(f"Session not found: {session_id}")
@@ -1200,13 +1270,13 @@ async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_
         # DEBUG: Check what's actually in the transaction data
         if transaction_data:
             actual_sources_in_data = set(txn.get('Source File', '') for txn in transaction_data)
-            logger.info(f"  🔍 Source files from stored list: {source_files}")
-            logger.info(f"  🔍 Actual 'Source File' values in transaction data: {actual_sources_in_data}")
-            logger.info(f"  🔍 Do they match? {set(source_files) == actual_sources_in_data}")
+            logger.info(f"   Source files from stored list: {source_files}")
+            logger.info(f"   Actual 'Source File' values in transaction data: {actual_sources_in_data}")
+            logger.info(f"   Do they match? {set(source_files) == actual_sources_in_data}")
             
         logger.debug(f"Source file map keys: {list(source_file_map.keys())}")
 
-        logger.info(f"✓ Found {len(transaction_data)} transactions from {len(source_files)} source files")
+        logger.info(f" Found {len(transaction_data)} transactions from {len(source_files)} source files")
         
         return {
             'source_files': source_files,
@@ -1266,8 +1336,8 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
             - 500 for unexpected errors during filtering
     """
     try:
-        logger.info(f"🔍 Filtering transactions by {len(source_files)} source file(s)")
-        logger.info(f"  🔍 Requested source files: {source_files}")
+        logger.info(f" Filtering transactions by {len(source_files)} source file(s)")
+        logger.info(f" Requested source files: {source_files}")
         
         
         if not session_service.session_exists(session_id):
@@ -1289,14 +1359,14 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
             )
         
         # DEBUG: Check what's in the data before filtering
-        logger.info(f"  🔍 Total transactions before filter: {len(transaction_data)}")
+        logger.info(f"   Total transactions before filter: {len(transaction_data)}")
         if transaction_data:
             sample_txn = transaction_data[0]
-            logger.info(f"  🔍 Sample transaction 'Source File': '{sample_txn.get('Source File', 'KEY NOT FOUND')}'")
+            logger.info(f"   Sample transaction 'Source File': '{sample_txn.get('Source File', 'KEY NOT FOUND')}'")
             
             # Get all unique source files in the data
             actual_sources = set(txn.get('Source File', '') for txn in transaction_data)
-            logger.info(f"  🔍 Actual unique source files in data: {actual_sources}")
+            logger.info(f"   Actual unique source files in data: {actual_sources}")
         
         # Filter transactions by source file
         logger.debug("Applying source file filters to transaction list.")
@@ -1305,12 +1375,12 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
             if txn.get('Source File') in source_files
         ]
         
-        logger.info(f"  ✓ Filtered to {len(filtered_transactions)} transactions")
+        logger.info(f"   Filtered to {len(filtered_transactions)} transactions")
         
         if len(filtered_transactions) == 0:
-            logger.info(f"  ⚠️ WARNING: No transactions matched!")
-            logger.info(f"  🔍 Requested: {source_files}")
-            logger.info(f"  🔍 Available: {actual_sources}")
+            logger.info(f"  WARNING: No transactions matched!")
+            logger.info(f"  Requested: {source_files}")
+            logger.info(f"  Available: {actual_sources}")
         
         return {
             'transactions': filtered_transactions,
@@ -1498,7 +1568,7 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
         - Handles missing or empty UI journals gracefully.
     """
     try:
-        logger.info(f"🔄 Comparing transactions: {txn1_id} vs {txn2_id}")
+        logger.info(f" Comparing transactions: {txn1_id} vs {txn2_id}")
 
         # Check session
         if not session_service.session_exists(session_id):
@@ -1535,13 +1605,13 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
         txn1_data = df[df['Transaction ID'] == txn1_id].iloc[0]
         txn2_data = df[df['Transaction ID'] == txn2_id].iloc[0]
 
-        logger.info(f"✓ Found both transactions: {txn1_id}, {txn2_id}")
+        logger.info(f" Found both transactions: {txn1_id}, {txn2_id}")
 
         # Get file categories from session
         file_categories = session_data.get('file_categories', {})
         ui_journals = file_categories.get('ui_journals', [])
 
-        logger.info(f"📂 Found {len(ui_journals)} UI journal file(s)")
+        logger.info(f" Found {len(ui_journals)} UI journal file(s)")
 
         # Extract UI flows for both transactions
         ui_flow_1 = ["No screens in time range"]
@@ -1564,19 +1634,19 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
                         ui_journal_name = Path(ui_journal).stem
                         if ui_journal_name == txn_source_file:
                             matching_ui_journal = ui_journal
-                            logger.info(f"✓ Found matching UI journal for {txn_label}: {ui_journal_name}")
+                            logger.info(f" Found matching UI journal for {txn_label}: {ui_journal_name}")
                             break
 
                     # If no exact match, try all UI journals
                     ui_journals_to_check = [matching_ui_journal] if matching_ui_journal else ui_journals
 
                     for ui_journal_path in ui_journals_to_check:
-                        logger.info(f"📖 Parsing UI journal for {txn_label}: {ui_journal_path}")
+                        logger.info(f" Parsing UI journal for {txn_label}: {ui_journal_path}")
 
                         ui_df = parse_ui_journal(ui_journal_path)
 
                         if not ui_df.empty:
-                            logger.info(f"✓ Parsed {len(ui_df)} UI events for {txn_label}")
+                            logger.info(f" Parsed {len(ui_df)} UI events for {txn_label}")
 
                             processor = UIJournalProcessor(ui_journal_path)
                             processor.df = ui_df
@@ -1598,7 +1668,7 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
                             end_time = parse_time_local(txn_data['End Time'])
                             
                             if start_time and end_time:
-                                logger.info(f"⏰ {txn_label} time range: {start_time} to {end_time}")
+                                logger.info(f" {txn_label} time range: {start_time} to {end_time}")
                                 unique_screens = processor.get_screen_flow(start_time, end_time)
                                 
                                 if unique_screens and len(unique_screens) > 0:
@@ -1683,26 +1753,26 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
                                                 
                                                 if flow_details:
                                                     flow_screens = flow_details
-                                                    logger.info(f"✓ {txn_label} flow with durations: {len(flow_details)} screens")
+                                                    logger.info(f" {txn_label} flow with durations: {len(flow_details)} screens")
                                                     break
                                             else:
                                                 # No durations, use simple screens
                                                 flow_screens = unique_screens
-                                                # print(f"⚠️ No UI events in time range, using simple screens for {txn_label}")
+                                                # print(f" No UI events in time range, using simple screens for {txn_label}")
                                                 break
                                         else:
                                             # No columns found, use simple screens
                                             flow_screens = unique_screens
-                                            # print(f"⚠️ Columns not found, using simple screens for {txn_label}")
+                                            # print(f" Columns not found, using simple screens for {txn_label}")
                                             break
                                     except Exception as e:
-                                        # print(f"⚠️ Could not add durations for {txn_label}: {e}")
+                                        # print(f" Could not add durations for {txn_label}: {e}")
                                         flow_screens = unique_screens
                                         break
                                 else:
-                                    logger.warning(f"⚠️ No screens found for {txn_label}")
+                                    logger.warning(f" No screens found for {txn_label}")
                         else:
-                            logger.warning(f"⚠️ Empty UI journal for {txn_label}")
+                            logger.warning(f" Empty UI journal for {txn_label}")
                     
                     return flow_screens
                 
@@ -1711,12 +1781,12 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
                 ui_flow_2 = extract_flow_with_durations(txn2_data, txn2_source_file, "Transaction 2")
                 
             except Exception as e:
-                logger.error(f"❌ Error extracting UI flows: {e}", exc_info=True)
+                logger.error(f" Error extracting UI flows: {e}", exc_info=True)
         else:
-            logger.warning("⚠️ No UI journal files available")
+            logger.warning(" No UI journal files available")
 
-        logger.info(f"📊 Transaction 1 flow: {len(ui_flow_1)} screens")
-        logger.info(f"📊 Transaction 2 flow: {len(ui_flow_2)} screens")
+        logger.info(f" Transaction 1 flow: {len(ui_flow_1)} screens")
+        logger.info(f" Transaction 2 flow: {len(ui_flow_2)} screens")
 
         # --- Part C: LCS Matching and Analysis ---
         def find_lcs_matches(flow1, flow2):
@@ -1786,7 +1856,7 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
             "has_details_2": isinstance(ui_flow_2[0], dict) if (ui_flow_2 and len(ui_flow_2) > 0 and ui_flow_2[0] != "No screens in time range") else False
         }
 
-        logger.info("✅ Comparison complete - returning response")
+        logger.info(" Comparison complete - returning response")
         return response_data
 
     except HTTPException:
@@ -1830,10 +1900,10 @@ async def get_current_selection(session_id: str = Query(default=CURRENT_SESSION_
         - Useful for UI components to display or maintain the user's current selection.
     """
     try:
-        logger.info(f"🔍 Getting current selection for session: {session_id}")
+        logger.info(f" Getting current selection for session: {session_id}")
 
         if not session_service.session_exists(session_id):
-            logger.error(f"❌ No session found for session_id: {session_id}")
+            logger.error(f" No session found for session_id: {session_id}")
             raise HTTPException(
                 status_code=404,
                 detail="No session found"
@@ -1843,14 +1913,14 @@ async def get_current_selection(session_id: str = Query(default=CURRENT_SESSION_
         selected_types = session.get('selected_types', [])
         
         if not selected_types:
-            logger.info(f"ℹ️ No file types selected yet for session: {session_id}")
+            logger.info(f"  No file types selected yet for session: {session_id}")
             return {"selected_types": [], "message": "No file types selected yet"}
         
-        logger.info(f"✓ Current selection for session {session_id}: {selected_types}")
+        logger.info(f"Current selection for session {session_id}: {selected_types}")
         return {"selected_types": selected_types}
     
     except Exception as e:
-        logger.exception(f"❌ Error retrieving current selection for session {session_id}: {str(e)}")
+        logger.exception(f" Error retrieving current selection for session {session_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Error retrieving current selection: {str(e)}"
@@ -1899,17 +1969,17 @@ async def debug_session(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
 
     try:
-        logger.info(f"🔍 Debugging session: {session_id}")
+        logger.info(f" Debugging session: {session_id}")
 
         if not session_service.session_exists(session_id):
-            logger.warning(f"❌ Session not found: {session_id}")
+            logger.warning(f"Session not found: {session_id}")
             return {
                 "exists": False,
                 "message": "Session not found"
             }
         
         session_data = session_service.get_session(session_id)
-        logger.info(f"✓ Session found: {session_id}, keys: {list(session_data.keys())}")
+        logger.info(f" SUCCESS: Session found:{session_id}, keys: {list(session_data.keys())}")
     
         file_categories = session_data.get('file_categories', {})
         file_counts = {cat: len(files) for cat, files in file_categories.items()} if file_categories else {}
@@ -1935,7 +2005,7 @@ async def debug_session(session_id: str = Query(default=CURRENT_SESSION_ID)):
         }
 
     except Exception as e:
-        logger.exception(f"❌ Error debugging session {session_id}: {str(e)}")
+        logger.exception(f" Error debugging session {session_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Error debugging session: {str(e)}"
@@ -1994,11 +2064,11 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
     """
     try:
         transaction_id = request.transaction_id
-        logger.info(f"🔍 Visualizing flow for transaction: {transaction_id}")
+        logger.info(f"Visualizing flow for transaction: {transaction_id}")
 
         # Check if session exists
         if not session_service.session_exists(session_id):
-            logger.warning(f"❌ No processed ZIP found for session: {session_id}")
+            logger.warning(f" No processed ZIP found for session: {session_id}")
             raise HTTPException(
                 status_code=404,
                 detail="No processed ZIP found. Please upload a ZIP file first."
@@ -2009,7 +2079,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
         transaction_data = session_data.get('transaction_data')
 
         if not transaction_data:
-            logger.warning(f"❌ No transaction data available for session: {session_id}")
+            logger.warning(f" No transaction data available for session: {session_id}")
             raise HTTPException(
                 status_code=400,
                 detail="No transaction data available. Please analyze customer journals first."
@@ -2021,7 +2091,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
         # Check if transaction exists
         txn_exists = len(df[df['Transaction ID'] == transaction_id]) > 0
         if not txn_exists:
-            logger.warning(f"❌ Transaction {transaction_id} not found in session: {session_id}")
+            logger.warning(f" Transaction {transaction_id} not found in session: {session_id}")
             raise HTTPException(
                 status_code=404,
                 detail=f"Transaction {transaction_id} not found."
@@ -2029,7 +2099,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
 
         # Get transaction details
         txn_data = df[df['Transaction ID'] == transaction_id].iloc[0]
-        logger.info(f"✓ Found transaction: {transaction_id}")
+        logger.info(f" Found transaction: {transaction_id}")
 
         # Extract UI flow
         ui_flow_screens = ["No flow data"]
@@ -2038,29 +2108,29 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
         # Get file categories
         file_categories = session_data.get('file_categories', {})
         ui_journals = file_categories.get('ui_journals', [])
-        logger.info(f"📂 Found {len(ui_journals)} UI journal file(s)")
+        logger.info(f" Found {len(ui_journals)} UI journal file(s)")
 
         if ui_journals:
             try:
                 txn_source_file = str(txn_data.get('Source File', ''))
-                logger.info(f"📂 Transaction source file: {txn_source_file}")
+                logger.info(f" Transaction source file: {txn_source_file}")
 
                 matching_ui_journal = None
                 for ui_journal in ui_journals:
                     ui_journal_name = Path(ui_journal).stem
                     if ui_journal_name == txn_source_file:
                         matching_ui_journal = ui_journal
-                        logger.info(f"✓ Found matching UI journal: {ui_journal_name}")
+                        logger.info(f" Found matching UI journal: {ui_journal_name}")
                         break
 
                 ui_journals_to_check = [matching_ui_journal] if matching_ui_journal else ui_journals
 
                 for ui_journal_path in ui_journals_to_check:
-                    logger.debug(f"📖 Parsing UI journal: {ui_journal_path}")
+                    logger.debug(f" Parsing UI journal: {ui_journal_path}")
                     ui_df = parse_ui_journal(ui_journal_path)
 
                     if not ui_df.empty:
-                        logger.info(f"✓ Parsed {len(ui_df)} UI events")
+                        logger.info(f" Parsed {len(ui_df)} UI events")
                         processor = UIJournalProcessor(ui_journal_path)
                         processor.df = ui_df
 
@@ -2080,18 +2150,18 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                         end_time = parse_time(txn_data['End Time'])
 
                         if start_time and end_time:
-                            logger.info(f"⏰ Time range: {start_time} to {end_time}")
+                            logger.info(f" Time range: {start_time} to {end_time}")
                             try:
-                                logger.info("🔄 Extracting flow with durations...")
+                                logger.info(" Extracting flow with durations...")
                                 
                                 # Get unique screen list (from processor)
                                 unique_screens = processor.get_screen_flow(start_time, end_time)
                                 
                                 if not unique_screens or len(unique_screens) == 0:
-                                    print("⚠️ No screens found in time range")
+                                    print(" No screens found in time range")
                                     continue
                                 
-                                # print(f"✓ Found {len(unique_screens)} unique screens")
+                                # print(f" Found {len(unique_screens)} unique screens")
                                 
                                 # Auto-detect columns
                                 time_col = None
@@ -2110,7 +2180,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                 if not time_col or not screen_col:
                                     raise Exception("Missing required columns")
                                 
-                                # print(f"✓ Using columns: time='{time_col}', screen='{screen_col}'")
+                                # print(f" Using columns: time='{time_col}', screen='{screen_col}'")
                                 
                                 # Ensure time column is in time format
                                 if ui_df[time_col].dtype == 'object' or str(ui_df[time_col].dtype).startswith('datetime'):
@@ -2122,7 +2192,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                     (ui_df[time_col] <= end_time)
                                 ].copy()
                                 
-                                # print(f"✓ Filtered {len(ui_filtered)} UI events in time range")
+                                # print(f" Filtered {len(ui_filtered)} UI events in time range")
                                 
                                 if len(ui_filtered) > 0:
                                     # Build complete sequence with all occurrences
@@ -2134,7 +2204,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                         if screen and not pd.isna(screen):
                                             all_events.append((screen, time_val))
                                     
-                                    # print(f"✓ Built sequence of {len(all_events)} screen events")
+                                    # print(f" Built sequence of {len(all_events)} screen events")
                                     
                                     # Now map each UNIQUE screen to its time range
                                     # For each unique screen, find first and last occurrence
@@ -2152,7 +2222,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                                 'last_time': last_time
                                             }
                                     
-                                    # print(f"✓ Mapped {len(screen_info)} unique screens to time ranges")
+                                    # print(f" Mapped {len(screen_info)} unique screens to time ranges")
                                     
                                     # Build detailed flow for unique screens
                                     ui_flow_details = []
@@ -2197,7 +2267,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                         has_flow = True
                                         
                                         with_duration = sum(1 for s in ui_flow_details if s['duration'] is not None)
-                                        # print(f"✅ Created detailed flow: {len(ui_flow_details)} unique screens, {with_duration} with durations")
+                                        # print(f" Created detailed flow: {len(ui_flow_details)} unique screens, {with_duration} with durations")
                                         
                                         # Debug: print all screens
                                         # for i, screen in enumerate(ui_flow_details):
@@ -2211,7 +2281,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                     raise Exception("No filtered events")
                                     
                             except Exception as e:
-                                # print(f"❌ Enhancement failed: {e}")
+                                # print(f" Enhancement failed: {e}")
                                 import traceback
                                 traceback.print_exc()
                                 
@@ -2221,19 +2291,19 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                     if simple_screens and len(simple_screens) > 0:
                                         ui_flow_screens = simple_screens
                                         has_flow = True
-                                        # print(f"✅ Using fallback: {len(simple_screens)} screens")
+                                        # print(f" Using fallback: {len(simple_screens)} screens")
                                         break
                                 except:
                                     continue
                         else:
-                            logger.warning("⚠️ Invalid time range")
+                            logger.warning(" Invalid time range")
                     else:
-                        logger.warning(f"⚠️ Empty UI journal")
+                        logger.warning(f" Empty UI journal")
                         
             except Exception as e:
-                logger.exception(f"❌ Error extracting UI flow: {str(e)}")
+                logger.exception(f" Error extracting UI flow: {str(e)}")
         else:
-            logger.warning("⚠️ No UI journal files available")
+            logger.warning(" No UI journal files available")
 
         response_data = {
             "transaction_id": transaction_id,
@@ -2249,13 +2319,13 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
             "num_events": len(ui_flow_screens) if ui_flow_screens else 0
         }
 
-        logger.info("✅ Visualization data prepared")
+        logger.info(" Visualization data prepared")
         return response_data
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"❌ Visualization failed: {str(e)}")
+        logger.exception(f" Visualization failed: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Visualization failed: {str(e)}"
@@ -2351,10 +2421,10 @@ RAISES:
 """
 
     try:
-        logger.info(f"🔄 Starting consolidated flow generation for type '{transaction_type}' from source '{source_file}'")
+        logger.info(f" Starting consolidated flow generation for type '{transaction_type}' from source '{source_file}'")
         logger.debug(f"Session ID received: {session_id}")
         
-        print(f"🔄 Generating consolidated flow for {transaction_type} from {source_file}")
+        print(f" Generating consolidated flow for {transaction_type} from {source_file}")
         
         # Check session
         if not session_service.session_exists(session_id):
@@ -2380,7 +2450,7 @@ RAISES:
         df = pd.DataFrame(transaction_data)
         
         # Filter by source file and transaction type
-        logger.debug(f"Applying filters → Source File: {source_file}, Transaction Type: {transaction_type}")
+        logger.debug(f"Applying filters Source File: {source_file}, Transaction Type: {transaction_type}")
         filtered_df = df[
             (df['Source File'] == source_file) & 
             (df['Transaction Type'] == transaction_type)
@@ -2393,8 +2463,8 @@ RAISES:
                 detail=f"No transactions of type '{transaction_type}' found in source '{source_file}'"
             )
         
-        logger.info(f"✓ {len(filtered_df)} transactions matched filters")
-        print(f"✓ Found {len(filtered_df)} transactions")
+        logger.info(f" {len(filtered_df)} transactions matched filters")
+        print(f" Found {len(filtered_df)} transactions")
         
         # Get UI journals
         file_categories = session_data.get('file_categories', {})
@@ -2415,7 +2485,7 @@ RAISES:
             )
         
         logger.info(f"Matched UI journal: {matching_ui_journal}")
-        print(f"✓ Found matching UI journal: {matching_ui_journal}")
+        print(f" Found matching UI journal: {matching_ui_journal}")
         
         # Parse UI journal
         logger.info("Parsing UI journal file")
@@ -2429,7 +2499,7 @@ RAISES:
             )
         
         logger.info(f"UI journal parsed successfully with {len(ui_df)} events")
-        print(f"✓ Parsed UI journal with {len(ui_df)} events")
+        print(f" Parsed UI journal with {len(ui_df)} events")
         
         # Create processor
         logger.debug("Creating UIJournalProcessor instance")
@@ -2463,7 +2533,7 @@ RAISES:
             start_time = parse_time(txn['Start Time'])
             end_time = parse_time(txn['End Time'])
             
-            logger.debug(f"Times parsed → Start: {start_time}, End: {end_time}")
+            logger.debug(f"Times parsed â†’ Start: {start_time}, End: {end_time}")
             
             if start_time and end_time:
                 screens = processor.get_screen_flow(start_time, end_time)
@@ -2489,13 +2559,13 @@ RAISES:
                         transitions[(screens[i], screens[i + 1])] += 1
         
         if not transaction_flows:
-            logger.error("UI flow extraction failed — no flows found")
+            logger.error("UI flow extraction failed no flows found")
             raise HTTPException(
                 status_code=404,
                 detail="No UI flow data could be extracted for these transactions"
             )
         
-        logger.info(f"✓ Extracted flows for {len(transaction_flows)} transactions")
+        logger.info(f" Extracted flows for {len(transaction_flows)} transactions")
         logger.debug(f"Unique screens: {len(all_screens)}, Unique transitions: {len(transitions)}")
         
         
@@ -2631,7 +2701,7 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
     """
     try:
         transaction_id = request.transaction_id
-        logger.info(f"🤖 Analyzing transaction with LLM: {transaction_id}")
+        logger.info(f" Analyzing transaction with LLM: {transaction_id}")
         logger.debug(f"Request data: {request.dict()}")
         
         # Check session
@@ -2675,7 +2745,7 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
                 detail="No transaction log available for this transaction"
             )
         
-        logger.info(f"✓ Found transaction log ({len(transaction_log)} characters)")
+        logger.info(f" Found transaction log ({len(transaction_log)} characters)")
 
         # Call LLM for analysis
         try:
@@ -2692,12 +2762,12 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
                 }
             ]
             
-            logger.info("🤖 Calling Ollama model...")
+            logger.info(" Calling Ollama model...")
             logger.debug(f"LLM messages payload: {messages}")
             
             response = ollama.chat(model="llama3_log_analyzer", messages=messages)
             raw_response = response['message']['content'].strip()
-            logger.info(f"✓ LLM analysis complete ({len(raw_response)} characters)")
+            logger.info(f" LLM analysis complete ({len(raw_response)} characters)")
             
             # Structure the response
             structured_response = {
@@ -2806,7 +2876,7 @@ RAISES:
 """
 
     try:
-        logger.info(f"📝 Submitting feedback for transaction: {feedback.transaction_id}")
+        logger.info(f" Submitting feedback for transaction: {feedback.transaction_id}")
         logger.debug(f"Feedback payload: {feedback.dict()}")
         
         # Create feedback record
@@ -2831,9 +2901,9 @@ RAISES:
         try:
             with open(feedback_file, "a") as f:
                 f.write(json.dumps(feedback_record) + "\n")
-            logger.info(f"✓ Feedback saved to file: {feedback_file}")
+            logger.info(f" Feedback saved to file: {feedback_file}")
         except Exception as e:
-            logger.error(f"⚠️ Could not save feedback to file {feedback_file}: {str(e)}")
+            logger.error(f" Could not save feedback to file {feedback_file}: {str(e)}")
         
         # Also store in session for immediate retrieval
         if not session_service.session_exists(session_id):
@@ -2847,7 +2917,7 @@ RAISES:
         
         session_data['feedback_data'].append(feedback_record)
         session_service.update_session(session_id, 'feedback_data', session_data['feedback_data'])
-        logger.info(f"✓ Feedback stored in session for session_id: {session_id}")
+        logger.info(f" Feedback stored in session for session_id: {session_id}")
         
         return {
             "status": "success",
@@ -2918,7 +2988,7 @@ DATA SOURCES:
     - `llm_feedback.json` file (JSONL format)
 
 SIDE EFFECTS:
-    None — this endpoint only reads data.
+    None this endpoint only reads data.
 
 RAISES:
     HTTPException 500:
@@ -2927,7 +2997,7 @@ RAISES:
 """
 
     try:
-        logger.info(f"📖 Retrieving feedback for transaction: {transaction_id}")
+        logger.info(f" Retrieving feedback for transaction: {transaction_id}")
         
         all_feedback = []
         
@@ -2959,9 +3029,9 @@ RAISES:
                                     all_feedback.append(feedback_record)
                 logger.info(f"Read feedback from file {feedback_file}, total records found: {len(all_feedback)}")
             except Exception as e:
-                logger.error(f"⚠️ Could not read feedback file {feedback_file}: {str(e)}")
+                logger.error(f" Could not read feedback file {feedback_file}: {str(e)}")
         
-        logger.info(f"✓ Found {len(all_feedback)} feedback record(s) for transaction {transaction_id}")
+        logger.info(f" Found {len(all_feedback)} feedback record(s) for transaction {transaction_id}")
         
         return {
             "transaction_id": transaction_id,
@@ -2992,9 +3062,46 @@ def safe_decode(blob: bytes) -> str:
 
 def parse_counter_data_from_trc(log_lines: list) -> list:
     """
-    Parse counter data from TRC trace - intelligent field detection
-    Handles missing/optional fields by detecting patterns
-    """
+        FUNCTION: parse_counter_data_from_trc
+
+        DESCRIPTION:
+            Parses counter data from TRC trace log lines using intelligent field detection. 
+            Handles missing or optional fields by detecting patterns for UnitName, currency, 
+            and numeric values. Returns a list of structured counter records.
+
+        USAGE:
+            counters = parse_counter_data_from_trc(log_lines)
+
+        PARAMETERS:
+            log_lines (list) : List of strings, each representing a line from a TRC trace file.
+
+        RETURNS:
+            list : A list of dictionaries, each representing a counter record with fields:
+                - 'No'        : Counter number
+                - 'Ty'        : Counter type
+                - 'ID'        : Counter ID
+                - 'UnitName'  : Unit name (may be empty if missing)
+                - 'Cur'       : Currency code (3-letter, may be empty)
+                - 'Val'       : Value
+                - 'Ini'       : Initial count
+                - 'Cnt'       : Current count
+                - 'RCnt'      : Reject count
+                - 'Safe'      : Safe count
+                - 'Min'       : Minimum value
+                - 'Max'       : Maximum value
+                - 'Disp'      : Display field (empty by default)
+                - 'Pres'      : Present field (empty by default)
+                - 'Retr'      : Retracted field (empty by default)
+                - 'A'         : AppL field
+                - 'DevL'      : DevL field
+                - 'St'        : Status field
+                - 'HWsens'    : Hardware sensor field
+                - 'Record_Type': Always 'Logical'
+
+        RAISES:
+            None : Function handles parsing errors internally and skips invalid lines.
+"""
+
     import re
     counter_rows = []
     
@@ -3141,10 +3248,31 @@ def parse_time_from_trc(time_str: str) -> datetime.time:
 
 def extract_counter_blocks(trc_file_path: str) -> list:
     """
-    Extract ALL counter blocks from TRC trace file
-    Returns list of dicts with 'time', 'timestamp', 'data'
-    CRITICAL: Each CCdmCashUnitInfoDataEx block is kept SEPARATE - NO MERGING
-    """
+        FUNCTION: extract_counter_blocks
+
+        DESCRIPTION:
+            Extracts all counter blocks from a given TRC trace file.
+            Each 'CCdmCashUnitInfoDataEx' block is parsed separately and returned
+            as a dictionary containing the block's timestamp, time object, and counter data.
+            CRITICAL: Each block is kept separate; no merging of blocks occurs.
+
+        USAGE:
+            counter_blocks = extract_counter_blocks("path/to/trc_file.trc")
+
+        PARAMETERS:
+            trc_file_path (str) : Path to the TRC trace file to be processed.
+
+        RETURNS:
+            list : A list of dictionaries, each representing a counter block with:
+                - 'time' (datetime.time)        : Time extracted from the TRC block
+                - 'timestamp' (str)             : Timestamp string (HH:MM:SS.ss) from the TRC block
+                - 'data' (list of dicts)        : Counter data extracted using parse_counter_data_from_trc
+
+        RAISES:
+            Exception : Any error during file reading or parsing is caught and printed,
+                        but the function will return an empty list if critical errors occur.
+"""
+
     all_counter_blocks = []
     
     try:
@@ -3219,8 +3347,29 @@ def extract_counter_blocks(trc_file_path: str) -> list:
 @router.get("/get-matching-sources-for-trc")
 async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
-    Get list of source files that have matching TRC trace files
-    """
+        FUNCTION: get_matching_sources_for_trc
+
+        DESCRIPTION:
+            Retrieves a list of source files that have corresponding TRC trace files in the current session.
+            Matches source file dates with TRC trace file contents to determine availability.
+
+        USAGE:
+            response = await get_matching_sources_for_trc(session_id="session_123")
+
+        PARAMETERS:
+            session_id (str) : Optional. The session ID to search for matching TRC trace files.
+                            Defaults to CURRENT_SESSION_ID if not provided.
+
+        RETURNS:
+            dict : A dictionary containing:
+                - "matching_sources" (list) : List of source file names that have at least one matching TRC trace file.
+
+        RAISES:
+            HTTPException :
+                - 404 : If the session with the given ID does not exist
+                - 500 : For any unexpected server error during processing
+"""
+
     try:
         if not session_service.session_exists(session_id):
             raise HTTPException(status_code=404, detail="No session found")
@@ -3255,7 +3404,7 @@ async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_S
                 except:
                     continue
         
-        print(f"✓ Found {len(matching_sources)} sources with matching TRC trace files")
+        logger.info(f" Found {len(matching_sources)} sources with matching TRC trace files")
         
         return {"matching_sources": matching_sources}
         
@@ -3270,10 +3419,55 @@ async def get_counter_data(
     session_id: str = Query(default=CURRENT_SESSION_ID)
 ):
     """
-    Get counter data from TRC Trace files mapped to transaction timestamp
-    """
+        FUNCTION: get_counter_data
+
+        DESCRIPTION:
+            Retrieves counter data from TRC trace files mapped to a specific transaction. 
+            Finds the corresponding TRC trace file for the transaction's source file and date, 
+            extracts start, first, and last counters, and builds a per-transaction counter table 
+            including CIN/CI and COUT/GA transactions. Handles transaction logs to extract 
+            denomination information and flags transactions with counters available.
+
+        USAGE:
+            response = await get_counter_data(request=CounterDataRequest(transaction_id="TX123", source_file="20250404"))
+
+        PARAMETERS:
+            request (CounterDataRequest) : Pydantic model containing:
+                - transaction_id (str) : ID of the transaction to retrieve counters for
+                - source_file (str)    : Source file associated with the transaction
+            session_id (str)           : Optional. Session ID to fetch data from. Defaults to CURRENT_SESSION_ID.
+
+        RETURNS:
+            dict : Dictionary containing counter data:
+                - "transaction_id" (str)           : Transaction ID
+                - "source_file" (str)              : Source file name
+                - "all_blocks" (list)              : All counter blocks extracted from TRC files
+                - "column_descriptions" (dict)     : Column descriptions for counters
+                - "start_counter" (dict)           : First counter in file (static)
+                    - "date" (str)
+                    - "timestamp" (str)
+                    - "counter_data" (list of dict)
+                - "first_counter" (dict)           : Counter at or after transaction start (dynamic)
+                - "last_counter" (dict)            : Last counter in file (static)
+                - "counter_per_transaction" (list of dict) : Summary of each transaction with:
+                    - "date_timestamp" (str)
+                    - "transaction_id" (str)
+                    - "transaction_type" (str)
+                    - "transaction_summary" (str)
+                    - "transaction_state" (str)
+                    - "count" (str)
+                    - "counter_summary" (str)
+                    - "comment" (str)
+
+        RAISES:
+            HTTPException :
+                - 400 : No transaction data available or no TRC trace files found
+                - 404 : Session not found, transaction not found, or no matching TRC trace file
+                - 500 : For any unexpected errors during processing
+"""
+
     try:
-        # print(f"📊 Getting counter data for transaction: {request.transaction_id}")
+        # print(f" Getting counter data for transaction: {request.transaction_id}")
         
         # Check session
         if not session_service.session_exists(session_id):
@@ -3324,13 +3518,13 @@ async def get_counter_data(
                 detail="No TRC trace files available"
             )
         
-        # print(f"✓ Found {len(trc_trace_files)} TRC trace file(s)")
+        # print(f" Found {len(trc_trace_files)} TRC trace file(s)")
         
         # Parse transaction date from source file (format: YYYYMMDD -> YYMMDD)
         txn_date_full = request.source_file  # e.g., "20250404"
         txn_date_short = txn_date_full[2:] if len(txn_date_full) == 8 else txn_date_full  # "250404"
         
-        # print(f"✓ Transaction date: {txn_date_full} (searching for {txn_date_short})")
+        # print(f" Transaction date: {txn_date_full} (searching for {txn_date_short})")
         
         # Find matching TRC trace file by parsing its content for the date
         matching_trc = None
@@ -3344,10 +3538,10 @@ async def get_counter_data(
                 # Check if this TRC file contains the transaction date (YYMMDD format)
                 if txn_date_short in first_lines:
                     matching_trc = trc_file
-                    # print(f"✓ Found matching TRC trace: {Path(trc_file).name}")
+                    # print(f" Found matching TRC trace: {Path(trc_file).name}")
                     break
             except Exception as e:
-                # print(f"⚠️ Error reading {trc_file}: {e}")
+                # print(f" Error reading {trc_file}: {e}")
                 continue
         
         if not matching_trc:
@@ -3356,19 +3550,19 @@ async def get_counter_data(
                 detail=f"No matching TRC trace file found for date '{txn_date_full}' (searched for '{txn_date_short}')"
             )
         
-        # print(f"✓ Found matching TRC trace: {matching_trc}")
+        # print(f" Found matching TRC trace: {matching_trc}")
         
         # Extract counter blocks from TRC trace file
         txn_start_time = str(txn_data.get('Start Time', ''))
         txn_end_time = str(txn_data.get('End Time', ''))
 
-        # print(f"📊 Transaction times: {txn_start_time} to {txn_end_time}")
+        # print(f"Transaction times: {txn_start_time} to {txn_end_time}")
 
         # OPTIMIZATION: Extract ALL counter blocks from TRC file ONCE
         all_counter_blocks = extract_counter_blocks(matching_trc)
 
         if not all_counter_blocks:
-            print("⚠️ No counter blocks found")
+            print(" No counter blocks found")
             start_counter_data = []
             first_counter_data = []
             last_counter_data = []
@@ -3392,7 +3586,7 @@ async def get_counter_data(
                     parsed = datetime.strptime(base_time, '%H:%M:%S').time()
                     return parsed
                 except Exception as e:
-                    # print(f"⚠️ Error parsing time '{time_str}': {e}")
+                    # print(f" Error parsing time '{time_str}': {e}")
                     return None
             
             # Extract just the time portion from transaction start/end
@@ -3402,9 +3596,9 @@ async def get_counter_data(
             txn_start_dt = parse_time_from_trc_local(txn_start_time_only)
             txn_end_dt = parse_time_from_trc_local(txn_end_time_only)
             
-            # print(f"🔍 Transaction start time: {txn_start_dt}")
-            # print(f"🔍 Transaction end time: {txn_end_dt}")
-            # print(f"🔍 Total counter blocks: {len(all_counter_blocks)}")
+            # print(f" Transaction start time: {txn_start_dt}")
+            # print(f" Transaction end time: {txn_end_dt}")
+            # print(f" Total counter blocks: {len(all_counter_blocks)}")
             
             # 1. Start counter: STATIC - absolute first block in the file
             start_block = all_counter_blocks[0]
@@ -3421,12 +3615,12 @@ async def get_counter_data(
                         # print(f"  Block {i}: time={block_time}, comparing with txn_start={txn_start_dt}")
                         if block_time >= txn_start_dt:
                             first_block = block
-                            # print(f"  ✓ Found first counter at/after transaction start: {block_time}")
+                            # print(f"   Found first counter at/after transaction start: {block_time}")
                             break
             
             # Fallback to first block if no counter found after start time
             if not first_block:
-                # print(f"  ⚠️ No counter found at/after transaction start, using first block")
+                # print(f"   No counter found at/after transaction start, using first block")
                 first_block = all_counter_blocks[0]
             
             first_counter_data = first_block['data']
@@ -3437,9 +3631,9 @@ async def get_counter_data(
             last_counter_data = last_block['data']
             last_timestamp = last_block['timestamp']
             
-            # print(f"✓ Start counter (static - first in file): {len(start_counter_data)} rows at {start_timestamp}")
-            # print(f"✓ First counter (dynamic - at/after txn start): {len(first_counter_data)} rows at {first_timestamp}")
-            # print(f"✓ Last counter (static - last in file): {len(last_counter_data)} rows at {last_timestamp}")
+            # print(f" Start counter (static - first in file): {len(start_counter_data)} rows at {start_timestamp}")
+            # print(f" First counter (dynamic - at/after txn start): {len(first_counter_data)} rows at {first_timestamp}")
+            # print(f" Last counter (static - last in file): {len(last_counter_data)} rows at {last_timestamp}")
         
         # Get transaction date
         txn_date = txn_date_full
@@ -3471,7 +3665,7 @@ async def get_counter_data(
             transactions_subset['Transaction Type'].isin(['CIN/CI', 'COUT/GA'])
         ]
 
-        # print(f"✓ Building counter per transaction table for {len(transactions_subset)} transactions (CIN/COUT only)")
+        # print(f"  Building counter per transaction table for {len(transactions_subset)} transactions (CIN/COUT only)")
 
         for _, txn_row in transactions_subset.iterrows():
             txn_id = txn_row['Transaction ID']
@@ -3562,7 +3756,7 @@ async def get_counter_data(
                             counter_summary = "View Counters"
                             break
             except Exception as e:
-                print(f"⚠️ Error checking counters for {txn_id}: {e}")
+                print(f" Error checking counters for {txn_id}: {e}")
             
             counter_per_transaction.append({
                 'date_timestamp': f"{date_formatted} {time_part}",
@@ -3575,7 +3769,7 @@ async def get_counter_data(
                 'comment': ''
             })
         
-        # print(f"✓ Created counter per transaction table with {len(counter_per_transaction)} entries")
+        # print(f" Created counter per transaction table with {len(counter_per_transaction)} entries")
         
         # Find this section in get_counter_data endpoint (around line 1890):
         response_data = {

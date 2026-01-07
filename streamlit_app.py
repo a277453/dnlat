@@ -13,13 +13,17 @@ import numpy as np
 from fastapi.logger import logger
 
 # Import authentication functions
-from login import (
+from admin_setup import initialize_admin_table
+from modules.login import (
     initialize_session,
     is_logged_in,
     authenticate_user,
     logout_user,
     get_current_user
 )
+# IMPORTANT 
+initialize_admin_table()
+initialize_session()
 
 # ============================================
 # PAGE CONFIGURATION (MUST BE FIRST!)
@@ -214,7 +218,7 @@ def show_login_page():
                 with st.spinner("Authenticating..."):
                     if authenticate_user(username, password):
                         user = get_current_user()
-                        st.success(f"✅ Welcome {user['name']}!")
+                        st.success(f"✅ Welcome {user['username']}!")
                         st.rerun()  # Reload to show main app
                     else:
                         st.error("❌ Invalid username or password")
@@ -1373,351 +1377,317 @@ def render_transaction_stats():
         with st.expander("🐛 Debug Information"):
             st.code(traceback.format_exc())
 
-def render_individual_transaction_analysis():
-    """
-    FUNCTION:
-        render_transaction_stats
-
-    DESCRIPTION:
-        Renders transaction statistics and allows filtering by source files
-        using Streamlit. The function fetches statistics from an API, analyzes
-        customer journals if needed, and displays:
-            - Overall transaction statistics
-            - Source file filters
-            - Filtered transaction tables
-            - Metrics such as total, successful, unsuccessful, and success rate
-        Users can also download filtered transactions as a CSV file.
-
-    USAGE:
-        render_transaction_stats()
-
-    PARAMETERS:
-        None
-
-    RETURNS:
-        None :
-            This function renders UI elements directly in Streamlit and does
-            not return any value.
-
-    RAISES:
-        requests.exceptions.Timeout :
-            Raised internally if any API request times out.
-        requests.exceptions.ConnectionError :
-            Raised internally if API server is unreachable.
-        Exception :
-            Any unexpected error during analysis, statistics retrieval, or
-            filtering is caught and displayed via Streamlit.
-    """
-    st.markdown("### Individual Transaction Analysis")
-    
-    if 'transaction_analysis' not in st.session_state:
-        if st.button("Load Transactions", use_container_width=True):
-            with st.spinner("Loading transactions..."):
-                try:
-                    response = requests.get(f"{API_BASE_URL}/analyze-customer-journals")
-                    
-                    if response.status_code == 200:
-                        analysis_data = response.json()
-                        st.session_state['transaction_analysis'] = analysis_data
-                        st.success("Transactions loaded successfully.")
-                        st.rerun()
-                    else:
-                        st.error(f"Error: {response.json().get('detail', 'Unknown error occurred.')}")
-                
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-    
-    else:
-        analysis_data = st.session_state['transaction_analysis']
-        transactions_df = pd.DataFrame(analysis_data['transactions'])
-        
-        transaction_options = [
-            f"{row['Transaction ID']} - {row['Transaction Type']} ({row['End State']})"
-            for _, row in transactions_df.iterrows()
-        ]
-        
-        selected_txn_option = st.selectbox(
-            "Select Transaction",
-            options=["Select a transaction"] + transaction_options,
-            key="selected_transaction"
-        )
-        
-        if selected_txn_option != "Select a transaction":
-            selected_txn_id = selected_txn_option.split(" - ")[0]
-            txn_data = transactions_df[transactions_df['Transaction ID'] == selected_txn_id].iloc[0]
-            
-            st.markdown("---")
-            st.markdown(f"### Transaction Details: {selected_txn_id}")
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Type", txn_data['Transaction Type'])
-                st.metric("State", txn_data['End State'])
-            with col2:
-                st.metric("Start Time", txn_data['Start Time'])
-                st.metric("End Time", txn_data['End Time'])
-            with col3:
-                st.metric("Duration", txn_data['Duration'])
-                st.caption(f"Source: {txn_data['Source_File']}")
-            
-            st.markdown("---")
-            st.markdown("### Transaction Log")
-            st.code(txn_data['Transaction Log'], language='log')
 
 def render_registry_single():
     """
-    FUNCTION:
-        render_registry_single
+FUNCTION: render_registry_single
 
-    DESCRIPTION:
-        Renders a single registry file viewer in Streamlit. The function allows
-        users to:
-            - Select a registry file from the processed package
-            - View its parsed contents in a table
-            - See metrics such as total entries, unique paths, and unique keys
-            - Search within paths, keys, or values
-            - Download the displayed registry data as a CSV
+DESCRIPTION:
+    Renders a Streamlit interface to view a single registry file from an 
+    in-memory session. Allows selecting a registry file, searching entries, 
+    displaying key metrics, and downloading filtered results as CSV.
 
-    USAGE:
-        render_registry_single()
+USAGE:
+    render_registry_single()
 
-    PARAMETERS:
-        None
+PARAMETERS:
+    This function does not take any parameters. It relies on:
+        - API_BASE_URL : Base URL for backend API calls
+        - Streamlit session_state for storing selected file and search input
 
-    RETURNS:
-        None :
-            This function renders UI components directly in Streamlit and does
-            not return any value.
+RETURNS:
+    None : The function directly renders Streamlit UI components 
+           (dropdowns, dataframes, search input, metrics, download button).
 
-    RAISES:
-        Exception :
-            Any unexpected error while reading or parsing the registry file is
-            caught and displayed via Streamlit.
-    """
+RAISES:
+    requests.exceptions.Timeout         : If an API request times out
+    requests.exceptions.ConnectionError : If API server is not reachable
+    Exception                           : For any unexpected errors during execution
+"""
+
     st.markdown("### Registry File Viewer")
 
-    file_categories = st.session_state.processing_result['categories']
-    registry_files = file_categories.get('registry_files', {}).get('files', [])
-
-    if not registry_files:
-        st.warning("No registry files found in the uploaded package.")
-        return
-
-    file_map = {Path(f).name: f for f in registry_files}
-
-    selected_file_name = st.selectbox(
-        "Select Registry File",
-        options=["Select a file"] + list(file_map.keys()),
-        key="reg_single_select"
-    )
-
-    if selected_file_name != "Select a file":
-        file_path = file_map[selected_file_name]
+    # Get registry contents from session via API
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/get-registry-contents",
+            params={"session_id": "current_session"},
+            timeout=30
+        )
         
-        with st.spinner("Loading registry file..."):
-            try:
-                with open(file_path, 'rb') as f:
-                    content = f.read()
-                
-                df = parse_registry_file(content)
-                
-                if not df.empty:
+        if response.status_code != 200:
+            st.error("❌ Failed to load registry files from session")
+            logger.error(f"API call failed with status: {response.status_code}")
+            return
+            
+        registry_data = response.json()
+        registry_contents = registry_data.get('registry_contents', {})
+        
+        if not registry_contents:
+            st.warning("⚠️ No registry files found in the uploaded package.")
+            return
+
+        # Create file selection dropdown
+        selected_file_name = st.selectbox(
+            "Select Registry File",
+            options=["Select a file"] + list(registry_contents.keys()),
+            key="reg_single_select"
+        )
+
+        if selected_file_name != "Select a file":
+            with st.spinner("Loading registry file..."):
+                try:
+                    # Get content from in-memory cache
+                    content_b64 = registry_contents[selected_file_name]
                     
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total Entries", len(df))
-                    with col2:
-                        st.metric("Unique Paths", df['Path'].nunique())
-                    with col3:
-                        st.metric("Unique Keys", df['Key'].nunique())
+                    # Decode base64 to bytes
+                    import base64
+                    content = base64.b64decode(content_b64)
                     
-                    st.markdown("---")
-                    search_term = st.text_input("Search Registry", placeholder="Search in path, key, or value", key="reg_search")
+                    # Parse registry file
+                    df = parse_registry_file(content)
                     
-                    display_df = df
-                    if search_term:
-                        mask = (
-                            df['Path'].str.contains(search_term, case=False, na=False) |
-                            df['Key'].str.contains(search_term, case=False, na=False) |
-                            df['Value'].str.contains(search_term, case=False, na=False)
+                    if not df.empty:
+                        # Display metrics
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Total Entries", len(df))
+                        with col2:
+                            st.metric("Unique Paths", df['Path'].nunique())
+                        with col3:
+                            st.metric("Unique Keys", df['Key'].nunique())
+                        
+                        st.markdown("---")
+                        
+                        # Search functionality
+                        search_term = st.text_input(
+                            "Search Registry", 
+                            placeholder="Search in path, key, or value", 
+                            key="reg_search"
                         )
-                        display_df = df[mask]
-                        st.info(f"Found {len(display_df)} matching entries.")
+                        
+                        display_df = df
+                        if search_term:
+                            mask = (
+                                df['Path'].str.contains(search_term, case=False, na=False) |
+                                df['Key'].str.contains(search_term, case=False, na=False) |
+                                df['Value'].str.contains(search_term, case=False, na=False)
+                            )
+                            display_df = df[mask]
+                            st.info(f"Found {len(display_df)} matching entries.")
+                        
+                        # Display table
+                        st.dataframe(display_df, use_container_width=True, height=400)
+                        
+                        # Download button
+                        csv = display_df.to_csv(index=False)
+                        st.download_button(
+                            label="Download as CSV",
+                            data=csv,
+                            file_name=f"{Path(selected_file_name).stem}.csv",
+                            mime="text/csv",
+                            use_container_width=True
+                        )
+                    else:
+                        st.warning("No entries found in the registry file.")
+                        
+                except Exception as e:
+                    st.error(f"Error loading file: {str(e)}")
+                    logger.exception(f"Error parsing registry file {selected_file_name}")
+                    import traceback
+                    with st.expander("🐛 Debug Information"):
+                        st.code(traceback.format_exc())
                     
-                    st.dataframe(display_df, use_container_width=True, height=400)
-                    
-                    csv = display_df.to_csv(index=False)
-                    st.download_button(
-                        label="Download as CSV",
-                        data=csv,
-                        file_name=f"{Path(selected_file_name).stem}.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                else:
-                    st.warning("No entries found in the registry file.")
-                    
-            except Exception as e:
-                st.error(f"Error loading file: {str(e)}")
+    except requests.exceptions.Timeout:
+        st.error("⏱️ Request timeout. Please try again.")
+    except requests.exceptions.ConnectionError:
+        st.error("🔌 Connection error. Ensure the API server is running on localhost:8000.")
+    except Exception as e:
+        st.error(f"❌ Error: {str(e)}")
+        logger.exception("Error in render_registry_single")
+        import traceback
+        with st.expander("🐛 Debug Information"):
+            st.code(traceback.format_exc())
 
 def render_registry_compare():
     """
-    FUNCTION:
-        render_registry_compare
-
-    DESCRIPTION:
-        Renders a side-by-side registry file comparison interface in Streamlit.
-        The function allows users to:
-            - View registry files from the first uploaded package (already loaded)
-            - Upload a second ZIP package containing registry files for comparison
-            - Automatically detect common registry files between the two packages
-            - Select a file to compare from the common files
-            - Render a side-by-side diff of the selected registry file using
-              color-coded highlights for changes
-        Supports downloading and visual inspection of differences.
-
-    USAGE:
-        render_registry_compare()
-
-    PARAMETERS:
-        None
-
-    RETURNS:
-        None :
-            This function renders UI components directly in Streamlit and does
-            not return any value.
-
-    RAISES:
-        Exception :
-            Any unexpected error during file upload, processing, or comparison
-            is caught and displayed via Streamlit.
+    Render registry file comparison interface with in-memory content loading
     """
     st.markdown("### Registry File Comparison")
     
-    # Check if we have any registry files in current session
-    categories = st.session_state.processing_result['categories']
-    registry_files_a = categories.get('registry_files', {}).get('files', [])
-    
-    if not registry_files_a:
-        st.warning("No registry files found in the first uploaded package.")
-        return
-    
-    st.markdown("#### Step 1: First Package (Already Loaded)")
-    
-    # Show available files from first package
-    with st.expander("View files in first package"):
-        for f in registry_files_a:
-            st.caption(f"• {Path(f).name}")
-    
-    st.markdown("---")
-    st.markdown("#### Step 2: Upload Second Package for Comparison")
-    
-    # File uploader for second ZIP
-    uploaded_file_b = st.file_uploader(
-        "Select second ZIP archive",
-        type=['zip'],
-        help="Upload another ZIP file to compare registry files",
-        key="compare_zip_upload"
-    )
-    
-    if uploaded_file_b is not None:
-        file_size_mb = len(uploaded_file_b.getvalue()) / (1024 * 1024)
-        
-        # Process second ZIP button
-        if st.button("Process Second Package", use_container_width=True, key="process_second_zip"):
-            with st.spinner("Processing second package..."):
-                try:
-                    import requests
-                    API_BASE_URL = "http://localhost:8000/api/v1"
-                    
-                    files = {"file": (uploaded_file_b.name, uploaded_file_b.getvalue(), "application/zip")}
-                    response = requests.post(f"{API_BASE_URL}/process-zip", files=files, timeout=120)
-                    
-                    if response.status_code == 200:
-                        result_b = response.json()
-                        
-                        # Store second package results in session state
-                        st.session_state['compare_package_b'] = result_b
-                        
-                        registry_files_b = result_b['categories'].get('registry_files', {}).get('files', [])
-                        
-                        if not registry_files_b:
-                            st.error("No registry files found in second package.")
-                            return
-                        
-                        st.success(f"✓ Second package processed: {len(registry_files_b)} registry file(s) found")
-                        st.rerun()
-                    else:
-                        st.error(f"Error processing second package: {response.json().get('detail')}")
-                
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-    
-    # If second package is loaded, show comparison UI
-    if 'compare_package_b' in st.session_state:
-        result_b = st.session_state['compare_package_b']
-        registry_files_b = result_b['categories'].get('registry_files', {}).get('files', [])
-        
-        st.markdown("---")
-        st.markdown("#### Step 3: Select Files to Compare")
-        
-        # Get file names from both packages
-        files_a_map = {Path(f).name: f for f in registry_files_a}
-        files_b_map = {Path(f).name: f for f in registry_files_b}
-        
-        # Find common file names
-        common_names = set(files_a_map.keys()) & set(files_b_map.keys())
-        
-        if not common_names:
-            st.warning("No files with matching names found in both packages.")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**Files in Package 1:**")
-                for name in sorted(files_a_map.keys()):
-                    st.caption(f"• {name}")
-            with col2:
-                st.markdown("**Files in Package 2:**")
-                for name in sorted(files_b_map.keys()):
-                    st.caption(f"• {name}")
-            
-            # Reset button
-            if st.button("Upload Different Package", use_container_width=True):
-                del st.session_state['compare_package_b']
-                st.rerun()
-            return
-        
-        st.success(f"Found {len(common_names)} file(s) with matching names")
-        
-        # Select which file to compare
-        selected_filename = st.selectbox(
-            "Select file to compare",
-            options=sorted(list(common_names)),
-            key="compare_file_select"
+    # Get registry contents from Package A (main session)
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/get-registry-contents",
+            params={"session_id": "current_session"},
+            timeout=30
         )
         
-        if selected_filename:
-            file_path_a = files_a_map[selected_filename]
-            file_path_b = files_b_map[selected_filename]
+        if response.status_code != 200:
+            st.error("❌ Failed to load registry files from first package")
+            return
             
-            if st.button("Compare Selected Files", use_container_width=True, key="do_compare"):
-                with st.spinner("Comparing files..."):
+        registry_data = response.json()
+        registry_contents_a = registry_data.get('registry_contents', {})
+        
+        if not registry_contents_a:
+            st.warning("⚠️ No registry files found in the first uploaded package.")
+            return
+        
+        st.markdown("#### Step 1: First Package (Already Loaded)")
+        st.success(f"✅ Loaded {len(registry_contents_a)} registry file(s) from main package")
+        
+        # Show available files from first package
+        with st.expander("View files in first package"):
+            for filename in registry_contents_a.keys():
+                st.caption(f"• {filename}")
+        
+        st.markdown("---")
+        st.markdown("#### Step 2: Upload Second Package for Comparison")
+        
+        # File uploader for second ZIP
+        uploaded_file_b = st.file_uploader(
+            "Select second ZIP archive",
+            type=['zip'],
+            help="Upload another ZIP file to compare registry files",
+            key="compare_zip_upload"
+        )
+        
+        if uploaded_file_b is not None:
+            file_size_mb = len(uploaded_file_b.getvalue()) / (1024 * 1024)
+            st.info(f"📦 File: {uploaded_file_b.name} ({file_size_mb:.2f} MB)")
+            
+            # Process second ZIP button
+            if st.button("Process Second Package", use_container_width=True, key="process_second_zip"):
+                with st.spinner("Processing second package..."):
                     try:
-                        # Read both files
-                        with open(file_path_a, 'rb') as f:
-                            content_a = f.read()
-                        with open(file_path_b, 'rb') as f:
-                            content_b = f.read()
+                        files = {"file": (uploaded_file_b.name, uploaded_file_b.getvalue(), "application/zip")}
+                        response = requests.post(
+                            f"{API_BASE_URL}/process-zip", 
+                            files=files, 
+                            timeout=120
+                        )
                         
-                        text_a = safe_decode(content_a)
-                        text_b = safe_decode(content_b)
-                        
-                        fname_a = f"Package 1: {selected_filename}"
-                        fname_b = f"Package 2: {selected_filename}"
-                        render_side_by_side_diff(text_a, text_b, fname_a, fname_b)
-
+                        if response.status_code == 200:
+                            result_b = response.json()
+                            
+                            # Get registry contents from second package
+                            # Note: The second package is now in the main session (it replaces Package A)
+                            # So we need to fetch it immediately
+                            reg_response = requests.get(
+                                f"{API_BASE_URL}/get-registry-contents",
+                                timeout=30
+                            )
+                            
+                            if reg_response.status_code == 200:
+                                reg_data = reg_response.json()
+                                registry_contents_b = reg_data.get('registry_contents', {})
+                                
+                                if not registry_contents_b:
+                                    st.error("❌ No registry files found in second package.")
+                                    return
+                                
+                                # Store second package contents in session state
+                                st.session_state['compare_package_b'] = {
+                                    'zip_name': uploaded_file_b.name,
+                                    'registry_contents': registry_contents_b
+                                }
+                                
+                                st.success(f"✅ Second package processed: {len(registry_contents_b)} registry file(s) found")
+                                st.rerun()
+                            else:
+                                st.error("Failed to load registry files from second package")
+                        else:
+                            st.error(f"Error processing second package: {response.json().get('detail')}")
+                    
+                    except requests.exceptions.Timeout:
+                        st.error("⏱️ Request timeout. Please try again.")
+                    except requests.exceptions.ConnectionError:
+                        st.error("🔌 Connection error. Ensure the API server is running.")
                     except Exception as e:
-                        st.error(f"Error comparing files: {str(e)}")
+                        st.error(f"Error: {str(e)}")
+                        import traceback
+                        with st.expander("🐛 Debug Information"):
+                            st.code(traceback.format_exc())
+        
+        # If second package is loaded, show comparison UI
+        if 'compare_package_b' in st.session_state:
+            package_b = st.session_state['compare_package_b']
+            registry_contents_b = package_b['registry_contents']
+            
+            st.markdown("---")
+            st.markdown("#### Step 3: Select Files to Compare")
+            
+            # Get file names from both packages
+            files_a = set(registry_contents_a.keys())
+            files_b = set(registry_contents_b.keys())
+            
+            # Find common file names
+            common_names = files_a & files_b
+            
+            if not common_names:
+                st.warning("⚠️ No files with matching names found in both packages.")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**Files in Package 1:**")
+                    for name in sorted(files_a):
+                        st.caption(f"• {name}")
+                with col2:
+                    st.markdown("**Files in Package 2:**")
+                    for name in sorted(files_b):
+                        st.caption(f"• {name}")
+                
+                return
+            
+            st.success(f"✅ Found {len(common_names)} file(s) with matching names")
+            
+            # Select which file to compare
+            selected_filename = st.selectbox(
+                "Select file to compare",
+                options=sorted(list(common_names)),
+                key="compare_file_select"
+            )
+            
+            if selected_filename:
+                if st.button("Compare Selected Files", use_container_width=True, key="do_compare"):
+                    with st.spinner("Comparing files..."):
+                        try:
+                            # Get contents from both packages
+                            import base64
+                            
+                            content_a_b64 = registry_contents_a[selected_filename]
+                            content_b_b64 = registry_contents_b[selected_filename]
+                            
+                            # Decode base64 to bytes
+                            content_a = base64.b64decode(content_a_b64)
+                            content_b = base64.b64decode(content_b_b64)
+                            
+                            # Decode to text
+                            text_a = safe_decode(content_a)
+                            text_b = safe_decode(content_b)
+                            
+                            # Render side-by-side comparison
+                            fname_a = f"Package 1: {selected_filename}"
+                            fname_b = f"Package 2: {selected_filename}"
+                            render_side_by_side_diff(text_a, text_b, fname_a, fname_b)
+
+                        except Exception as e:
+                            st.error(f"Error comparing files: {str(e)}")
+                            import traceback
+                            with st.expander("🐛 Debug Information"):
+                                st.code(traceback.format_exc())
+    
+    except requests.exceptions.Timeout:
+        st.error("⏱️ Request timeout. Please try again.")
+    except requests.exceptions.ConnectionError:
+        st.error("🔌 Connection error. Ensure the API server is running on localhost:8000.")
+    except Exception as e:
+        st.error(f"❌ Error in comparison setup: {str(e)}")
+        logger.exception("Error in render_registry_compare")
+        import traceback
+        with st.expander("🐛 Debug Information"):
+            st.code(traceback.format_exc())
     
 
 def render_transaction_comparison():
@@ -3815,7 +3785,34 @@ RAISES:
             st.code(traceback.format_exc())
 
 def render_counters_analysis():
-    """Render counters analysis functionality"""
+    """
+FUNCTION: render_counters_analysis
+
+DESCRIPTION:
+    Renders the counters analysis interface in a Streamlit app. 
+    Fetches transaction sources, performs analysis if needed, 
+    allows selection of source files and transactions, and displays 
+    counter data including first, start, per-transaction, logical, 
+    and last counters.
+
+USAGE:
+    render_counters_analysis()
+
+PARAMETERS:
+    This function does not take any parameters. It relies on:
+        - API_BASE_URL : Base URL for backend API calls
+        - Streamlit session_state for storing selected options
+
+RETURNS:
+    None : The function directly renders Streamlit UI components 
+           (dataframes, dropdowns, info messages, buttons).
+
+RAISES:
+    requests.exceptions.Timeout         : If an API request times out
+    requests.exceptions.ConnectionError : If API server is not reachable
+    Exception                           : For any unexpected errors during execution
+"""
+
     st.markdown("### 📊 Counters Analysis")
     
     need_analysis = False
@@ -3852,7 +3849,7 @@ def render_counters_analysis():
                     )
                     
                     if analyze_response.status_code == 200:
-                        st.success("✓ Analysis complete!")
+                        st.success("✅ Analysis complete!")
                         import time
                         time.sleep(0.5)
                         st.rerun()
@@ -3993,8 +3990,6 @@ def render_counters_analysis():
             st.warning("⚠️ This transaction type is not supported for counter analysis. Please select a CIN/CI or COUT/GA transaction.")
             return
 
-        selected_txn_id = transaction_options[selected_display]
-        
         selected_txn_id = transaction_options[selected_display]
         selected_txn_data = source_transactions[source_transactions['Transaction ID'] == selected_txn_id].iloc[0]
         
@@ -4176,29 +4171,71 @@ def render_counters_analysis():
                                     st.markdown(f"#### 📊 Counters for Transaction: {selected_row['Transaction ID']}")
                                     st.caption(f"Time: {selected_row['Date Timestamp']}")
                                     
-                                    # Extract matching counters from all_blocks
-                                    logical_counters = []
+
                                     
-                                    if 'all_blocks' in counter_data:
-                                        for block in counter_data['all_blocks']:
-                                            for counter in block.get('data', []):
-                                                if counter.get('Record_Type') == 'Logical':
-                                                    logical_counters.append({
-                                                        'Name (PName)': counter.get('UnitName', ''),
-                                                        'Value (Val)': counter.get('Val', ''),
-                                                        'Cur': counter.get('Cur', ''),
-                                                        'Ini': counter.get('Ini', ''),
-                                                        'Retr': counter.get('Retr', ''),
-                                                        'Disp': counter.get('Disp', ''),
-                                                        'RCNT (Reject Count)': counter.get('RCnt', ''),
-                                                        'Pres': counter.get('Pres', ''),
-                                                        'Cnt': counter.get('Cnt', ''),
-                                                        'Status (St)': counter.get('St', ''),
-                                                        'NrPCU': counter.get('No', '')
-                                                    })
+                                    # Extract time from date_timestamp (format: "DD Month YYYY HH:MM:SS")
+                                    date_timestamp = selected_row['Date Timestamp']
+                                    try:
+                                        # Parse the full datetime
+                                        txn_datetime = datetime.strptime(date_timestamp, '%d %B %Y %H:%M:%S')
+                                        txn_time = txn_datetime.time()
+                                        
+                                        # Filter blocks that match this transaction time (within reasonable range)
+                                        # Allow ±30 seconds margin
+                                        margin_seconds = 30
+                                        
+                                        logical_counters = []
+                                        
+                                        if 'all_blocks' in counter_data:
+                                            for block in counter_data['all_blocks']:
+                                                block_time_str = block.get('time')
+                                                
+                                                if block_time_str:
+                                                    # Parse block time string to time object
+                                                    # block_time comes from API as string (e.g., "11:38:38")
+                                                    try:
+                                                        block_time = datetime.strptime(str(block_time_str), '%H:%M:%S').time()
+                                                    except ValueError:
+                                                        # Try with milliseconds format
+                                                        try:
+                                                            block_time = datetime.strptime(str(block_time_str), '%H:%M:%S.%f').time()
+                                                        except ValueError:
+                                                            continue  # Skip if time format is invalid
+                                                    
+                                                    # Convert both to datetime for comparison
+                                                    block_datetime = datetime.combine(datetime.today(), block_time)
+                                                    txn_datetime_today = datetime.combine(datetime.today(), txn_time)
+                                                    
+                                                    # Calculate time difference in seconds
+                                                    time_diff = abs((block_datetime - txn_datetime_today).total_seconds())
+                                                    
+                                                    # Only include blocks within margin
+                                                    if time_diff <= margin_seconds:
+                                                        for counter in block.get('data', []):
+                                                            if counter.get('Record_Type') == 'Logical':
+                                                                logical_counters.append({
+                                                                    'Name (PName)': counter.get('UnitName', ''),
+                                                                    'Value (Val)': counter.get('Val', ''),
+                                                                    'Cur': counter.get('Cur', ''),
+                                                                    'Ini': counter.get('Ini', ''),
+                                                                    'Retr': counter.get('Retr', ''),
+                                                                    'Disp': counter.get('Disp', ''),
+                                                                    'RCNT (Reject Count)': counter.get('RCnt', ''),
+                                                                    'Pres': counter.get('Pres', ''),
+                                                                    'Cnt': counter.get('Cnt', ''),
+                                                                    'Status (St)': counter.get('St', ''),
+                                                                    'NrPCU': counter.get('No', '')
+                                                                })
+                                    
+                                    except ValueError as e:
+                                        st.error(f"Error parsing transaction time: {e}")
+                                        logical_counters = []
                                     
                                     if logical_counters:
                                         counter_display_df = pd.DataFrame(logical_counters)
+                                        
+                                        # Remove duplicates based on all columns
+                                        counter_display_df = counter_display_df.drop_duplicates()
                                         
                                         # Get column descriptions
                                         col_descriptions = counter_data.get('column_descriptions', {})
@@ -4235,6 +4272,8 @@ def render_counters_analysis():
                                             hide_index=True,
                                             column_config=detail_column_config
                                         )
+                                        
+                                        st.caption(f"Showing {len(counter_display_df)} unique counter record(s)")
                                         
                                         if st.button("✕ Close Counters View", key="close_counters"):
                                             st.session_state["counter_txn_table"]["selection"]["rows"] = []
@@ -4698,8 +4737,9 @@ def show_main_app():
     col1, col2 = st.columns([5, 1])
     
     with col1:
-        st.markdown(f"**👤 Welcome, {user['name'] or user['username']}**")
-    
+        display_name = user.get('name') or user.get('username', 'User')
+        st.markdown(f"**👤 Welcome, {display_name}**")
+
     with col2:
         if st.button("🚪 Logout", use_container_width=True, key="logout_btn"):
             logout_user()
@@ -4730,7 +4770,24 @@ def show_main_app():
         help="Upload a ZIP file containing diagnostic files (max 500 MB)",
         key="zip_uploader"
     )
-
+    # Check if file was deleted (uploader is now empty but we had processed a file before)
+    if uploaded_file is None and st.session_state.zip_processed:
+        st.session_state.zip_processed = False
+        st.session_state.processing_result = None
+        st.session_state.last_processed_file = None
+        st.session_state.selected_function = None
+        # Clear ACU-related session states
+        if 'acu_extracted_files' in st.session_state:
+            del st.session_state.acu_extracted_files
+        if 'acu_parsed_df' in st.session_state:
+            del st.session_state.acu_parsed_df
+        if 'acu_files_loaded' in st.session_state:
+            del st.session_state.acu_files_loaded
+        # Clear cache
+        clear_cache()
+        st.info("ℹ️ File removed. Please upload a new ZIP file to continue.")
+        st.rerun()
+        
     # Only process if file exists AND it's different from the last processed file
     if uploaded_file is not None:
         # Check if this is a new file or the same file we just processed
@@ -4951,7 +5008,7 @@ def show_main_app():
     st.markdown("---")
     st.markdown("""
         <div style='text-align: center; color: #666666; font-size: 0.875rem;'>
-            © 2025 Diebold Nixdorf Analysis Tools
+            © 2025-26 Diebold Nixdorf Analysis Tools
         </div>
     """, unsafe_allow_html=True)
 

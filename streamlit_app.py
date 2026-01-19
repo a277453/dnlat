@@ -11,6 +11,8 @@ import os
 from datetime import datetime  
 import numpy as np
 from fastapi.logger import logger
+from modules.streamlit_logger import logger as frontend_logger
+
 
 # Import authentication functions
 from admin_setup import initialize_admin_table
@@ -24,6 +26,8 @@ from modules.login import (
 # IMPORTANT 
 initialize_admin_table()
 initialize_session()
+
+frontend_logger.info("Streamlit app loaded")
 
 # ============================================
 # PAGE CONFIGURATION (MUST BE FIRST!)

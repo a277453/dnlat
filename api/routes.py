@@ -286,7 +286,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         
 
         # -----------------------------------------------------------
-        # â±ï¸ START TOTAL TIME MEASUREMENT
+        # ⏱️ START TOTAL TIME MEASUREMENT
         # -----------------------------------------------------------
         start_time = time.perf_counter()
         # -----------------------------------------------------------
@@ -2533,7 +2533,7 @@ RAISES:
             start_time = parse_time(txn['Start Time'])
             end_time = parse_time(txn['End Time'])
             
-            logger.debug(f"Times parsed â†’ Start: {start_time}, End: {end_time}")
+            logger.debug(f"Times parsed  Start: {start_time}, End: {end_time}")
             
             if start_time and end_time:
                 screens = processor.get_screen_flow(start_time, end_time)

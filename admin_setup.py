@@ -32,10 +32,16 @@ def initialize_admin_table():
         cursor = conn.cursor()
 
         # 1️⃣ Create table if not exists
+        # 1️⃣ Create table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS admins (
-                username VARCHAR(50) PRIMARY KEY,
-                password_hash VARCHAR(256) NOT NULL
+                username VARCHAR(150) PRIMARY KEY,
+                name VARCHAR(150) NOT NULL,
+                password_hash TEXT NOT NULL,
+                employee_code VARCHAR(8) UNIQUE NOT NULL,
+                role VARCHAR(50) DEFAULT 'USER',
+                is_active BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
 
@@ -44,16 +50,16 @@ def initialize_admin_table():
         count = cursor.fetchone()[0]
 
         if count == 0:
-            users = ["Admin", "Atharv.Deshpande@dieboldnixdorf.com", "Ashish.Trivedi@dieboldnixdorf.com", "Test_user"]
-            password_hash = hash_password("dnadmin")
+            default_users = [
+                ("Admin", "Admin User", "dnadmin", "00000001", "ADMIN","TRUE"),
+            ]
 
-            for user in users:
+            for email, name, password, emp_code, role, is_active in default_users:
                 cursor.execute("""
-                    INSERT INTO admins (username, password_hash)
-                    VALUES (%s, %s)
-                """, (user, password_hash))
-
-            print("✅ 4 default users created with password 'dnadmin'")
+                    INSERT INTO admins (username, name, password_hash, employee_code, role, is_active)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (email, name, hash_password(password), emp_code, role, is_active))
+            print("✅ default users created with password")
         else:
             print("ℹ️ Admin users already exist, skipping insert")
 

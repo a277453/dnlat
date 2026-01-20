@@ -20,6 +20,7 @@ from modules.login import (
     initialize_session,
     is_logged_in,
     authenticate_user,
+    is_user_pending_approval,
     logout_user,
     get_current_user
 )
@@ -225,7 +226,129 @@ def show_login_page():
                         st.success(f"✅ Welcome {user['username']}!")
                         st.rerun()  # Reload to show main app
                     else:
-                        st.error("❌ Invalid username or password")
+                        with st.spinner("Authenticating..."):
+                            if authenticate_user(username, password):
+                                user = get_current_user()
+                                st.success(f"✅ Welcome {user['username']}!")
+                                st.rerun()
+
+                            elif is_user_pending_approval(username, password):
+                                st.warning(
+                                    f"⏳ **{username}** is pending admin approval.\n\n"
+                                    "Please contact the administrator to activate your account."
+                                )
+
+                            else:
+                                st.error("❌ Invalid username or password")
+
+
+
+        # ---------------------------
+        # REGISTER BUTTON (NEW)
+        # ---------------------------
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        if st.button("📝 Register New User", use_container_width=True):
+            st.session_state.page = "register"
+            st.rerun()
+
+def show_register_page():
+    """
+    Display registration page UI
+    """
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col2:
+        st.markdown(
+            "<h2 style='text-align:center; margin-top:100px;'>📝 DN Diagnostics Register</h2>",
+            unsafe_allow_html=True
+        )
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        with st.form("newUser_Form"):
+            email = st.text_input(
+                "Email ID",
+                placeholder="Enter DN Official Email",
+                key="register_email"
+            )
+            name = st.text_input(
+                "Name",
+                placeholder="Enter your name",
+                key="register_name"
+            )
+            password = st.text_input(
+                "Password",
+                type="password",
+                placeholder="Enter your password",
+                key="register_password"
+            )
+            confirm_password = st.text_input(
+                "Confirm Password",
+                type="password",
+                placeholder="Re-enter your password",
+                key="register_confirm_password"
+            )
+            employee_code = st.text_input(
+                "Employee Code",
+                placeholder="Enter 8 digit employee code",
+                key="register_emp_code"
+            )
+            role_type = st.text_input(
+                "Role Type",
+                placeholder="USER",
+                key="register_role"
+            )
+
+            submit = st.form_submit_button("Register", use_container_width=True)
+
+        # ---------------------------
+        # FORM SUBMIT HANDLING
+        # ---------------------------
+        if submit:
+            email_pattern = r"^[a-zA-Z]+\.[a-zA-Z]+@dieboldnixdorf\.com$"
+            name_pattern = r"^[A-Za-z ]+$"
+
+            email = email.strip().lower()
+            name = name.strip().title()
+            
+            if not all([email, name, password, confirm_password, employee_code]):
+                st.error("⚠️ All fields are required")
+
+            elif not re.match(email_pattern, email):
+                st.error("Please use your official Diebold Nixdorf email ID")
+
+            elif not re.match(name_pattern, name):
+                st.error("❌ Name must contain only letters and spaces")    
+
+
+            elif password != confirm_password:
+                st.error("❌ Passwords do not match")
+
+            elif not employee_code.isdigit() or len(employee_code) != 8:
+                st.error("❌ Employee code must be exactly 8 digits")
+
+
+            else:
+                # ---------------------------
+                # BACKEND REGISTRATION
+                # ---------------------------
+                from modules.login import register_user  # make sure import is correct
+                success, message = register_user(email, name, password, employee_code, role_type or "USER")
+                
+                if success:
+                    st.success(f"✅ {message}")
+                    # Go back to login page
+                    st.session_state.page = "login"
+                    st.rerun()
+                else:
+                    st.error(f"❌ {message}")
+        # ---------------------------
+        # BACK TO LOGIN
+        # ---------------------------
+        if st.button("⬅️ Back to Login", use_container_width=True):
+            st.session_state.page = "login"
+            st.rerun()
+
 
 def create_comparison_flow_plotly(txn1_id, txn1_state, txn1_flow_screens, txn1_matches,
                                    txn2_id, txn2_state, txn2_flow_screens, txn2_matches):
@@ -5027,12 +5150,13 @@ def main():
     # Initialize session
     initialize_session()
     
-    # Show appropriate page based on login status
     if not is_logged_in():
-        # NOT LOGGED IN → Show login page only
-        show_login_page()
+        if st.session_state.page == "login":
+            show_login_page()
+        elif st.session_state.page == "register":
+            show_register_page()
     else:
-        # LOGGED IN → Show main application only
+        # LOGGED IN → MAIN APP
         show_main_app()
 
 # ============================================

@@ -65,7 +65,7 @@ def create_login_history_table():
         conn.close()
         return True
     except Exception as e:
-        print("âŒ Error creating login_history:", e)
+        print(" Error creating login_history:", e)
         conn.rollback()
         conn.close()
         return False
@@ -87,7 +87,7 @@ def log_login_event(username: str, action: str):
         conn.close()
         return True
     except Exception as e:
-        print("âŒ Login history insert failed:", e)
+        print(" Login history insert failed:", e)
         conn.rollback()
         conn.close()
         return False
@@ -140,7 +140,7 @@ def verify_credentials(username: str, password: str) -> Optional[str]:
         cursor.execute("""
             SELECT username
             FROM admins
-            WHERE username = %s AND password_hash = %s
+            WHERE username = %s AND password_hash = %s AND is_active = TRUE
         """, (username, password_hash))
 
         user = cursor.fetchone()
@@ -149,7 +149,7 @@ def verify_credentials(username: str, password: str) -> Optional[str]:
         return user[0] if user else None
 
     except Exception as e:
-        print("âŒ Login verification failed:", e)
+        print(" Login verification failed:", e)
         conn.close()
         return None
 
@@ -167,10 +167,94 @@ def authenticate_user(username: str, password: str) -> bool:
     return False
 
 # ============================================
+# REGISTRATION
+# ============================================
+
+def user_exists(email: str, employee_code: str) -> bool:
+    conn = get_db_connection()
+    if not conn:
+        return True
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 1 FROM admins
+            WHERE username = %s OR employee_code = %s
+        """, (email, employee_code))
+        exists = cursor.fetchone() is not None
+        cursor.close()
+        conn.close()
+        return exists
+    except Exception as e:
+        print("❌ user_exists check failed:", e)
+        conn.close()
+        return True
+
+def register_user(email, name, password, employee_code, role="USER") -> tuple[bool, str]:
+    if user_exists(email, employee_code):
+        print("❌ User already exists")
+        return False, "User with this email or employee code already exists."
+    conn = get_db_connection()
+    if not conn:
+        print("❌ DB connection failed")
+        return False, "Database connection failed."
+    try:
+        cursor = conn.cursor()
+        password_hash = hash_password(password)
+        print("ℹ️ Registering user:", email, name, employee_code)
+        cursor.execute("""
+            INSERT INTO admins (username, name, password_hash, employee_code, role, is_active)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (email, name, password_hash, employee_code, role, False))  # inactive by default
+        conn.commit()
+        cursor.close()
+        conn.close()
+        log_login_event(username=email, action="register")
+        return True, "Registration successful. Await admin activation."
+    except Exception as e:
+        print("❌ Registration failed:", e)
+        conn.rollback()
+        conn.close()
+        return False, "Registration failed."
+    
+def is_user_pending_approval(username: str, password: str) -> bool:
+    """
+    Returns True if user exists, password is correct, but is_active = FALSE
+    """
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        password_hash = hash_password(password)
+
+        cursor.execute("""
+            SELECT 1
+            FROM admins
+            WHERE username = %s
+              AND password_hash = %s
+              AND is_active = FALSE
+        """, (username, password_hash))
+
+        pending = cursor.fetchone() is not None
+        cursor.close()
+        conn.close()
+        return pending
+
+    except Exception as e:
+        print("❌ Pending approval check failed:", e)
+        conn.close()
+        return False
+
+    
+# ============================================
 # SESSION MANAGEMENT
 # ============================================
 
 def initialize_session():
+
+    if "page" not in st.session_state:
+        st.session_state.page = "login"
+
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
     if "username" not in st.session_state:

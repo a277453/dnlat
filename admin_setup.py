@@ -21,9 +21,8 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 def initialize_admin_table():
-    """
-    Creates admins table (username, password) and inserts 4 users once
-    """
+    """Initializes the admin table and inserts default admin user if table is empty."""
+    print("ℹ️ initializing admin table")
     conn = get_db_connection()
     if not conn:
         return
@@ -34,7 +33,7 @@ def initialize_admin_table():
         # 1️⃣ Create table if not exists
         # 1️⃣ Create table
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS admins (
+            CREATE TABLE IF NOT EXISTS Users (
                 username VARCHAR(150) PRIMARY KEY,
                 name VARCHAR(150) NOT NULL,
                 password_hash TEXT NOT NULL,
@@ -44,26 +43,29 @@ def initialize_admin_table():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
-
+    
         # 2️⃣ Check if table is empty
-        cursor.execute("SELECT COUNT(*) FROM admins")
+        cursor.execute("SELECT COUNT(*) FROM Users")
         count = cursor.fetchone()[0]
 
         if count == 0:
             default_users = [
-                ("Admin", "Admin User", "dnadmin", "00000001", "ADMIN","TRUE"),
+                ("Admin", "Admin User", "dnadmin", "00000001", "ADMIN", True),
             ]
 
             for email, name, password, emp_code, role, is_active in default_users:
                 cursor.execute("""
-                    INSERT INTO admins (username, name, password_hash, employee_code, role, is_active)
+                    INSERT INTO Users (username, name, password_hash, employee_code, role, is_active)
                     VALUES (%s, %s, %s, %s, %s, %s)
                 """, (email, name, hash_password(password), emp_code, role, is_active))
-            print("✅ default users created with password")
+            print("✅ default user created with password")
         else:
-            print("ℹ️ Admin users already exist, skipping insert")
+            print("ℹ️ users already exist, skipping insert")
 
         conn.commit()
+        cursor.execute("select * from Users;")
+        print("currentusers:",cursor.fetchall())
+    
         cursor.close()
         conn.close()
 
@@ -71,3 +73,5 @@ def initialize_admin_table():
         print("❌ Error initializing admin table:", e)
         conn.rollback()
         conn.close()
+if __name__ == "__main__":
+    initialize_admin_table()

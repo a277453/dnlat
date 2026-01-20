@@ -31,7 +31,7 @@ def get_db_connection():
     try:
         return psycopg2.connect(**DB_CONFIG)
     except Exception as e:
-        print("âŒ DB connection failed:", e)
+        print(" DB connection failed:", e)
         return None
 
 # ============================================
@@ -120,7 +120,7 @@ def get_login_history(username: str = None, limit: int = 50):
         conn.close()
         return rows
     except Exception as e:
-        print("âŒ Fetch login history failed:", e)
+        print(" Fetch login history failed:", e)
         conn.close()
         return []
 
@@ -139,7 +139,7 @@ def verify_credentials(username: str, password: str) -> Optional[str]:
 
         cursor.execute("""
             SELECT username
-            FROM admins
+            FROM Users
             WHERE username = %s AND password_hash = %s AND is_active = TRUE
         """, (username, password_hash))
 
@@ -177,7 +177,7 @@ def user_exists(email: str, employee_code: str) -> bool:
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT 1 FROM admins
+            SELECT 1 FROM Users
             WHERE username = %s OR employee_code = %s
         """, (email, employee_code))
         exists = cursor.fetchone() is not None
@@ -202,7 +202,7 @@ def register_user(email, name, password, employee_code, role="USER") -> tuple[bo
         password_hash = hash_password(password)
         print("ℹ️ Registering user:", email, name, employee_code)
         cursor.execute("""
-            INSERT INTO admins (username, name, password_hash, employee_code, role, is_active)
+            INSERT INTO Users (username, name, password_hash, employee_code, role, is_active)
             VALUES (%s, %s, %s, %s, %s, %s)
         """, (email, name, password_hash, employee_code, role, False))  # inactive by default
         conn.commit()
@@ -229,7 +229,7 @@ def is_user_pending_approval(username: str, password: str) -> bool:
 
         cursor.execute("""
             SELECT 1
-            FROM admins
+            FROM Users
             WHERE username = %s
               AND password_hash = %s
               AND is_active = FALSE

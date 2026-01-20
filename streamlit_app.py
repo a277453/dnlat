@@ -296,7 +296,8 @@ def show_register_page():
             role_type = st.text_input(
                 "Role Type",
                 placeholder="USER",
-                key="register_role"
+                key="register_role",
+                disabled=True
             )
 
             submit = st.form_submit_button("Register", use_container_width=True)
@@ -337,6 +338,8 @@ def show_register_page():
                 
                 if success:
                     st.success(f"✅ {message}")
+                    import time
+                    time.sleep(3)
                     # Go back to login page
                     st.session_state.page = "login"
                     st.rerun()

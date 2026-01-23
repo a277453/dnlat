@@ -400,17 +400,7 @@ class TransactionAnalyzerService:
                 tid_val = row["tid"] if row["tid"] else ""
                 msg_val = row["message"]
                 txn_log_lines.append(f"{ts} {tid_val} {msg_val}")
-            #add new debug """"---------
-            txn_log = "\n".join(txn_log_lines)
-            logger.error(
-                "[DEBUG_TXN_LOG] TXN_ID=%s START_IDX=%s END_IDX=%s LOG_LEN=%d FIRST_LINE=%s",
-                txn_id,
-                start_idx,
-                end_idx,
-                len(txn_log),
-                txn_log_lines[0] if txn_log_lines else "EMPTY"
-            )
-
+            
             # Calculate duration
             duration_seconds = 0
             if start_time and end_time:

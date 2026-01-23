@@ -3414,7 +3414,8 @@ RAISES:
             # Metadata
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Model", result['metadata']['model'])
+                analysis_time = result['metadata'].get('analysis_time_seconds', 'N/A')
+                st.metric("Analysis Time", f"{analysis_time} sec")
             with col2:
                 st.metric("Log Size", f"{result['metadata']['log_length']} chars")
             with col3:

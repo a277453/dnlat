@@ -185,22 +185,22 @@ def user_exists(email: str, employee_code: str) -> bool:
         conn.close()
         return exists
     except Exception as e:
-        print("❌ user_exists check failed:", e)
+        print("  user_exists check failed:", e)
         conn.close()
         return True
 
 def register_user(email, name, password, employee_code, role="USER") -> tuple[bool, str]:
     if user_exists(email, employee_code):
-        print("❌ User already exists")
+        print("  User already exists")
         return False, "User with this email or employee code already exists."
     conn = get_db_connection()
     if not conn:
-        print("❌ DB connection failed")
+        print("  DB connection failed")
         return False, "Database connection failed."
     try:
         cursor = conn.cursor()
         password_hash = hash_password(password)
-        print("ℹ️ Registering user:", email, name, employee_code)
+        print("  Registering user:", email, name, employee_code)
         cursor.execute("""
             INSERT INTO Users (username, name, password_hash, employee_code, role, is_active)
             VALUES (%s, %s, %s, %s, %s, %s)
@@ -211,7 +211,7 @@ def register_user(email, name, password, employee_code, role="USER") -> tuple[bo
         log_login_event(username=email, action="register")
         return True, "Registration successful. Await admin activation."
     except Exception as e:
-        print("❌ Registration failed:", e)
+        print("  Registration failed:", e)
         conn.rollback()
         conn.close()
         return False, "Registration failed."
@@ -241,7 +241,7 @@ def is_user_pending_approval(username: str, password: str) -> bool:
         return pending
 
     except Exception as e:
-        print("❌ Pending approval check failed:", e)
+        print("  Pending approval check failed:", e)
         conn.close()
         return False
 

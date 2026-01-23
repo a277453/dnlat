@@ -14,7 +14,7 @@ def get_db_connection():
     try:
         return psycopg2.connect(**DB_CONFIG)
     except Exception as e:
-        print("❌ DB connection failed:", e)
+        print("  DB connection failed:", e)
         return None
 
 def hash_password(password: str) -> str:
@@ -22,7 +22,7 @@ def hash_password(password: str) -> str:
 
 def initialize_admin_table():
     """Initializes the admin table and inserts default admin user if table is empty."""
-    print("ℹ️ initializing admin table")
+    print("  initializing admin table")
     conn = get_db_connection()
     if not conn:
         return
@@ -30,8 +30,7 @@ def initialize_admin_table():
     try:
         cursor = conn.cursor()
 
-        # 1️⃣ Create table if not exists
-        # 1️⃣ Create table
+        # 1️ Create table if not exists
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS Users (
                 username VARCHAR(150) PRIMARY KEY,
@@ -44,7 +43,7 @@ def initialize_admin_table():
             );
         """)
     
-        # 2️⃣ Check if table is empty
+        #   Check if table is empty
         cursor.execute("SELECT COUNT(*) FROM Users")
         count = cursor.fetchone()[0]
 
@@ -58,9 +57,9 @@ def initialize_admin_table():
                     INSERT INTO Users (username, name, password_hash, employee_code, role, is_active)
                     VALUES (%s, %s, %s, %s, %s, %s)
                 """, (email, name, hash_password(password), emp_code, role, is_active))
-            print("✅ default user created with password")
+            print("  default user created with password")
         else:
-            print("ℹ️ users already exist, skipping insert")
+            print("  users already exist, skipping insert")
 
         conn.commit()
         cursor.execute("select * from Users;")
@@ -70,7 +69,7 @@ def initialize_admin_table():
         conn.close()
 
     except Exception as e:
-        print("❌ Error initializing admin table:", e)
+        print("  Error initializing admin table:", e)
         conn.rollback()
         conn.close()
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from modules.streamlit_logger import logger as frontend_logger
 # Import authentication functions
 from admin_setup import initialize_admin_table
 from modules.login import (
+    create_login_history_table,
     initialize_session,
     is_logged_in,
     authenticate_user,
@@ -247,22 +248,19 @@ def show_login_page():
                     if authenticate_user(username, password):
                         user = get_current_user()
                         st.success(f"  Welcome {user['username']}!")
+
+                        st.session_state.login_success = True
+                        st.session_state.username = user["username"]
+
                         st.rerun()  # Reload to show main app
+                    elif is_user_pending_approval(username, password):
+                        st.warning(
+                            f"  {username}  is pending admin approval.\n\n"
+                            "Please contact the administrator to activate your account."
+                        )
+
                     else:
-                        with st.spinner("Authenticating..."):
-                            if authenticate_user(username, password):
-                                user = get_current_user()
-                                st.success(f"  Welcome {user['username']}!")
-                                st.rerun()
-
-                            elif is_user_pending_approval(username, password):
-                                st.warning(
-                                    f"  **{username}** is pending admin approval.\n\n"
-                                    "Please contact the administrator to activate your account."
-                                )
-
-                            else:
-                                st.error("  Invalid username or password")
+                        st.error("  Invalid username or password")
 
 
 
@@ -3316,7 +3314,7 @@ RAISES:
         transaction_options = {}
         for _, txn in filtered_df.iterrows():
             txn_id = txn['Transaction ID']
-            display = f"{txn_id} | {txn['Transaction Type']} | {txn['End State']} | {txn['Start Time']}"
+            display = f"{txn_id} | {txn['Transaction Type']} | {txn['End State']} | {txn['Source File']} | {txn['Start Time']}"
             transaction_options[display] = txn_id
         
         selected_display = st.selectbox(
@@ -4572,7 +4570,17 @@ def show_main_app():
     
     with col1:
         display_name = user.get('name') or user.get('username', 'User')
-        st.markdown(f"**  Welcome, {display_name} **")
+        st.markdown(
+            f"""
+            <div style="
+                font-size: 24px;
+                font-weight: 700;
+            ">
+                Welcome, {display_name}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     with col2:
         if st.button(" Logout", use_container_width=True, key="logout_btn"):
@@ -4857,7 +4865,7 @@ def main():
     # Initialize session
     initialize_session()
     initialize_admin_table()
-    
+    create_login_history_table()
     if not is_logged_in():
         if st.session_state.page == "login":
             show_login_page()

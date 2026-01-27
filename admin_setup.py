@@ -49,7 +49,7 @@ def initialize_admin_table():
 
         if count == 0:
             default_users = [
-                ("Admin", "Admin User", "dnadmin", "00000001", "ADMIN", True),
+                ("dnuser", "Admin User", "dnpass", "00000001", "ADMIN", True),
             ]
 
             for email, name, password, emp_code, role, is_active in default_users:

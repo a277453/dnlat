@@ -12,6 +12,7 @@ from datetime import datetime
 import numpy as np
 from fastapi.logger import logger
 from modules.streamlit_logger import logger as frontend_logger
+import time
 
 
 # Import authentication functions
@@ -338,7 +339,6 @@ def show_register_page():
                 
                 if success:
                     st.success(f"✅ {message}")
-                    import time
                     time.sleep(3)
                     # Go back to login page
                     st.session_state.page = "login"

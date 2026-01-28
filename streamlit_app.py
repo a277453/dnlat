@@ -17,14 +17,15 @@ from modules.streamlit_logger import logger as frontend_logger
 # Import authentication functions
 from admin_setup import initialize_admin_table
 from modules.login import (
+    create_login_history_table,
     initialize_session,
     is_logged_in,
     authenticate_user,
+    is_user_pending_approval,
     logout_user,
     get_current_user
 )
 # IMPORTANT 
-initialize_admin_table()
 initialize_session()
 
 frontend_logger.info("Streamlit app loaded")
@@ -42,8 +43,32 @@ st.set_page_config(
 # ============================================
 # CSS STYLES
 # ============================================
+#new change(hide icon )
 st.markdown("""
     <style>
+    /* Completely hide all Streamlit branding and deploy button */
+    #MainMenu {visibility: hidden !important;}
+    footer {visibility: hidden !important;}
+    header {visibility: hidden !important;}
+    
+    [data-testid="stToolbar"] {
+        display: none !important;
+    }
+    
+    [data-testid="stDecoration"] {
+        display: none !important;
+    }
+    
+    button[kind="header"] {
+        display: none !important;
+    }
+    
+    .css-1dp5vir {
+        display: none !important;
+    }
+    
+    /* Your existing styles below... */        
+    #------------------------------------------------
     /* Global Styles */
     .main {
         background-color: #0a0a0a;
@@ -217,15 +242,194 @@ def show_login_page():
         # Handle login
         if submit:
             if not username or not password:
-                st.error("⚠️ Please enter username and password")
+                st.error("  Please enter username and password")
             else:
                 with st.spinner("Authenticating..."):
                     if authenticate_user(username, password):
                         user = get_current_user()
-                        st.success(f"✅ Welcome {user['username']}!")
+                        st.success(f"  Welcome {user['username']}!")
+
+                        st.session_state.login_success = True
+                        st.session_state.username = user["username"]
+
                         st.rerun()  # Reload to show main app
+                    elif is_user_pending_approval(username, password):
+                        st.warning(
+                            f"  {username}  is pending admin approval.\n\n"
+                            "Please contact the administrator to activate your account."
+                        )
+
                     else:
-                        st.error("❌ Invalid username or password")
+                        st.error("  Invalid username or password")
+
+
+
+        # ---------------------------
+        # REGISTER BUTTON (NEW)
+        # ---------------------------
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        if st.button(" Register New User", use_container_width=True):
+            st.session_state.page = "register"
+            st.rerun()
+def is_invalid_emp_code(emp_code: str) -> bool:
+    """
+    Check if employee code is sequential or repeating pattern.
+    Returns True if invalid.
+    """
+    if len(emp_code) != 8 or not emp_code.isdigit():
+        return True
+
+    # Check if all digits are same
+    if len(set(emp_code)) == 1:
+        return True
+
+    # Check sequential ascending
+    if emp_code in "01234567890123456789":
+        return True
+
+    # Check sequential descending
+    if emp_code in "98765432109876543210":
+        return True
+
+    # Check repeating pairs like 11223344
+    pairs = [emp_code[i:i+2] for i in range(0, 8, 2)]
+    if all(pair[0] == pair[1] for pair in pairs):
+        return True
+
+    return False
+
+def is_valid_password(password: str) -> bool:
+    """
+    Validates password strength.
+    Rules:
+    - Minimum 8 characters
+    - At least 1 uppercase letter
+    - At least 1 lowercase letter
+    - At least 2 digits
+    - At least 1 special character
+    """
+    if len(password) < 8:
+        return False
+
+    if not any(c.isupper() for c in password):
+        return False
+
+    if not any(c.islower() for c in password):
+        return False
+
+    # 🔹 MINIMUM 2 DIGITS CHECK
+    if sum(c.isdigit() for c in password) < 2:
+        return False
+
+    if not any(c in "!@#$%^&*()-_=+[]{}|;:'\",.<>?/`~" for c in password):
+        return False
+
+    return True
+
+
+def show_register_page():
+    """
+    Display registration page UI
+    """
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col2:
+        st.markdown(
+            "<h2 style='text-align:center; margin-top:100px;'>📝 DN Diagnostics Register</h2>",
+            unsafe_allow_html=True
+        )
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        with st.form("newUser_Form"):
+            email = st.text_input(
+                "Email ID",
+                placeholder="Enter DN Official Email",
+                key="register_email"
+            )
+            name = st.text_input(
+                "Name",
+                placeholder="Enter your name",
+                key="register_name"
+            )
+            password = st.text_input(
+                "Password",
+                type="password",
+                placeholder="Enter your password",
+                key="register_password"
+            )
+            confirm_password = st.text_input(
+                "Confirm Password",
+                type="password",
+                placeholder="Re-enter your password",
+                key="register_confirm_password"
+            )
+            employee_code = st.text_input(
+                "Employee Code",
+                placeholder="Enter 8 digit employee code",
+                key="register_emp_code"
+            )
+            role_type = st.text_input(
+                "Role Type",
+                placeholder="USER",
+                key="register_role",
+                disabled=True
+            )
+
+            submit = st.form_submit_button("Register", use_container_width=True)
+
+        # ---------------------------
+        # FORM SUBMIT HANDLING
+        # ---------------------------
+        if submit:
+            email_pattern = r"^[a-zA-Z]+\.[a-zA-Z]+@dieboldnixdorf\.com$"
+            name_pattern = r"^[A-Za-z ]+$"
+
+            email = email.strip().lower()
+            name = name.strip().title()
+            
+            if not all([email, name, password, confirm_password, employee_code]):
+                st.error("  All fields are required")
+
+            elif not re.match(email_pattern, email):
+                st.error("Please use your official Diebold Nixdorf email ID")
+
+            elif not re.match(name_pattern, name):
+                st.error("  Name must contain only letters and spaces")    
+            
+            elif not is_valid_password(password):
+                st.error("Password must be at least 8 characters long and include uppercase, lowercase, Min 2 digits, and special character.")
+
+            elif password != confirm_password:
+                st.error("  Passwords do not match with confirm password")
+
+            elif is_invalid_emp_code(employee_code):
+                st.error("  Please enter a valid 8-digit employee code")
+
+
+            else:
+                # ---------------------------
+                # BACKEND REGISTRATION
+                # ---------------------------
+                from modules.login import register_user  # make sure import is correct
+                success, message = register_user(email, name, password, employee_code, role_type or "USER")
+                
+                if success:
+                    st.success(f"  {message}")
+                    import time
+                    time.sleep(3)
+                    # Go back to login page
+                    st.session_state.page = "login"
+                    st.rerun()
+                else:
+                    st.error(f"  {message}")
+        # ---------------------------
+        # BACK TO LOGIN
+        # ---------------------------
+        if st.button("⬅  Back to Login", use_container_width=True):
+            st.session_state.page = "login"
+            st.rerun()
+
 
 def create_comparison_flow_plotly(txn1_id, txn1_state, txn1_flow_screens, txn1_matches,
                                    txn2_id, txn2_state, txn2_flow_screens, txn2_matches):
@@ -372,369 +576,6 @@ def create_comparison_flow_plotly(txn1_id, txn1_state, txn1_flow_screens, txn1_m
         )
     
     return fig
-
-# Page configuration
-st.set_page_config(
-    page_title="DN Diagnostics Platform",
-    page_icon="⚙️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Professional CSS
-st.markdown("""
-    <style>
-    /* Global Styles */
-    .main {
-        background-color: #0a0a0a;
-        color: #e0e0e0;
-    }
-    
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-        max-width: 1400px;
-    }
-    
-    /* Sidebar Styles */
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1a1a 0%, #0f0f0f 100%);
-        border-right: 1px solid #2a2a2a;
-    }
-    
-    [data-testid="stSidebar"] h2 {
-        color: #ffffff;
-        font-weight: 600;
-        font-size: 1.1rem;
-        margin-bottom: 1.5rem;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-    
-    /* Typography */
-    h1 {
-        color: #ffffff !important;
-        font-size: 2.5rem !important;
-        font-weight: 700 !important;
-        margin-bottom: 0.5rem !important;
-        letter-spacing: -0.5px !important;
-    }
-    
-    h2 {
-        color: #ffffff !important;
-        font-size: 1.75rem !important;
-        font-weight: 600 !important;
-        margin: 2rem 0 1rem 0 !important;
-        border-bottom: 2px solid #2563eb;
-        padding-bottom: 0.5rem;
-    }
-    
-    h3 {
-        color: #e0e0e0 !important;
-        font-size: 1.25rem !important;
-        font-weight: 600 !important;
-        margin: 1.5rem 0 0.75rem 0 !important;
-    }
-    
-    h4, h5, h6 {
-        color: #c0c0c0 !important;
-        font-weight: 500 !important;
-    }
-    
-    p, span, div, label {
-        color: #b0b0b0 !important;
-        line-height: 1.6 !important;
-    }
-    
-    /* Button Styles - Uniform and Professional */
-    .stButton > button {
-        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-        color: #ffffff;
-        border: none;
-        padding: 0.75rem 2rem;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.95rem;
-        letter-spacing: 0.3px;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
-        width: 100%;
-        height: 48px;
-        text-transform: none;
-    }
-    
-    .stButton > button:hover {
-        background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
-        box-shadow: 0 6px 12px rgba(37, 99, 235, 0.35);
-        transform: translateY(-1px);
-    }
-    
-    .stButton > button:active {
-        transform: translateY(0);
-        box-shadow: 0 2px 4px rgba(37, 99, 235, 0.3);
-    }
-    
-    .stButton > button:disabled {
-        background: linear-gradient(135deg, #374151 0%, #1f2937 100%);
-        color: #6b7280;
-        cursor: not-allowed;
-        box-shadow: none;
-    }
-    
-    /* File Uploader */
-    [data-testid="stFileUploader"] {
-        background-color: #1a1a1a;
-        border: 2px dashed #404040;
-        border-radius: 12px;
-        padding: 2rem;
-        transition: all 0.3s ease;
-    }
-    
-    [data-testid="stFileUploader"]:hover {
-        border-color: #2563eb;
-        background-color: #1f1f1f;
-    }
-    
-    /* Select Box - Uniform Style */
-    .stSelectbox > div > div {
-        background-color: #1a1a1a;
-        border: 1px solid #404040;
-        border-radius: 8px;
-        color: #e0e0e0;
-        height: 48px;
-        transition: all 0.3s ease;
-    }
-    
-    .stSelectbox > div > div:hover {
-        border-color: #2563eb;
-        background-color: #1f1f1f;
-    }
-    
-    /* Text Input */
-    .stTextInput > div > div > input {
-        background-color: #1a1a1a;
-        border: 1px solid #404040;
-        border-radius: 8px;
-        color: #e0e0e0;
-        height: 48px;
-        padding: 0 1rem;
-        transition: all 0.3s ease;
-    }
-    
-    .stTextInput > div > div > input:focus {
-        border-color: #2563eb;
-        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
-    }
-    
-    /* Metric Cards */
-    [data-testid="stMetricValue"] {
-        font-size: 1.75rem;
-        font-weight: 700;
-        color: #ffffff;
-    }
-    
-    [data-testid="stMetricLabel"] {
-        font-size: 0.875rem;
-        color: #9ca3af;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        font-weight: 500;
-    }
-    
-    /* Data Tables */
-    .dataframe {
-        border: 1px solid #2a2a2a !important;
-        border-radius: 8px;
-        overflow: hidden;
-    }
-    
-    .dataframe thead tr th {
-        background-color: #1a1a1a !important;
-        color: #ffffff !important;
-        font-weight: 600 !important;
-        text-transform: uppercase;
-        font-size: 0.75rem;
-        letter-spacing: 0.5px;
-        padding: 1rem !important;
-    }
-    
-    .dataframe tbody tr:hover {
-        background-color: #1f1f1f !important;
-    }
-    
-    /* Info/Warning/Success Boxes */
-    .stAlert {
-        border-radius: 8px;
-        border-left-width: 4px;
-        padding: 1rem 1.25rem;
-    }
-    
-    /* Construction Badge */
-    .construction-badge {
-        display: inline-block;
-        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-        color: #000000;
-        padding: 0.375rem 0.875rem;
-        border-radius: 6px;
-        font-size: 0.75rem;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    
-    /* Section Divider */
-    hr {
-        border: none;
-        border-top: 1px solid #2a2a2a;
-        margin: 2rem 0;
-    }
-    
-    /* Diff Viewer Styles */
-    .diff-viewer {
-        display: flex;
-        gap: 1rem;
-        margin-top: 1.5rem;
-    }
-    
-    .diff-pane {
-        flex: 1;
-        background-color: #1a1a1a;
-        border: 1px solid #2a2a2a;
-        border-radius: 8px;
-        padding: 1rem;
-        overflow-x: auto;
-        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-        font-size: 0.875rem;
-    }
-    
-    .diff-pane-header {
-        background-color: #0f0f0f;
-        padding: 0.75rem 1rem;
-        border-bottom: 1px solid #2a2a2a;
-        font-weight: 600;
-        color: #ffffff;
-        border-radius: 8px 8px 0 0;
-        margin: -1rem -1rem 1rem -1rem;
-    }
-    
-    .diff-line {
-        padding: 0.25rem 0.5rem;
-        white-space: pre-wrap;
-        word-break: break-all;
-        border-left: 3px solid transparent;
-    }
-    
-    .diff-line-number {
-        display: inline-block;
-        width: 50px;
-        color: #666666;
-        text-align: right;
-        margin-right: 1rem;
-        user-select: none;
-        font-weight: 500;
-    }
-    
-    .diff-content-change {
-        background-color: rgba(239, 68, 68, 0.15);
-        border-left-color: #ef4444;
-    }
-    
-    .diff-whitespace-change {
-        background-color: rgba(168, 85, 247, 0.12);
-        border-left-color: #a855f7;
-    }
-    
-    .diff-identical {
-        background-color: transparent;
-    }
-    
-    /* Legend Items */
-    .legend-item {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.5rem 1rem;
-        background-color: #1a1a1a;
-        border-radius: 6px;
-        font-size: 0.875rem;
-        font-weight: 500;
-    }
-    
-    .legend-color {
-        width: 20px;
-        height: 20px;
-        border-radius: 4px;
-    }
-    
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 0.5rem;
-        background-color: #1a1a1a;
-        padding: 0.5rem;
-        border-radius: 8px;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        background-color: transparent;
-        border-radius: 6px;
-        color: #9ca3af;
-        font-weight: 500;
-        padding: 0.75rem 1.5rem;
-        transition: all 0.2s ease;
-    }
-    
-    .stTabs [data-baseweb="tab"]:hover {
-        background-color: #0f0f0f;
-        color: #e0e0e0;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background-color: #2563eb;
-        color: #ffffff;
-    }
-    
-    /* Download Button */
-    .stDownloadButton > button {
-        background: linear-gradient(135deg, #059669 0%, #047857 100%);
-        color: #ffffff;
-        border: none;
-        padding: 0.75rem 2rem;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.95rem;
-        transition: all 0.3s ease;
-        width: 100%;
-        height: 48px;
-    }
-    
-    .stDownloadButton > button:hover {
-        background: linear-gradient(135deg, #047857 0%, #065f46 100%);
-        transform: translateY(-1px);
-    }
-            
-    .stSelectbox option[value*="Not available"] {
-        color: #666666 !important;
-        background-color: #2a2a2a !important;
-        font-style: italic !important;
-    }
-            
-    /* Center align all dataframe cells */
-    .dataframe tbody tr td {
-        text-align: center !important;
-    }
-
-    .dataframe thead tr th {
-        text-align: center !important;
-    }
-
-    .stSelectbox select option:disabled {
-        color: #666666 !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# API Configuration
-API_BASE_URL = "http://localhost:8000/api/v1"
 
 # ============================================
 # CACHE HELPER FUNCTIONS
@@ -1111,7 +952,7 @@ def render_transaction_stats():
     """
     Render transaction statistics with source file filter
     """
-    st.markdown("### 📊 Transaction Type Statistics")
+    st.markdown("###   Transaction Type Statistics")
     
     # Initialize a flag to track if we need to analyze
     need_analysis = False
@@ -1142,17 +983,17 @@ def render_transaction_stats():
                         time.sleep(0.5)
                     else:
                         error_detail = analyze_response.json().get('detail', 'Analysis failed')
-                        st.error(f"❌ Failed to analyze customer journals: {error_detail}")
+                        st.error(f"  Failed to analyze customer journals: {error_detail}")
                         return
                         
                 except requests.exceptions.Timeout:
-                    st.error("⏱️ Analysis timeout. The file may be too large.")
+                    st.error("⏱  Analysis timeout. The file may be too large.")
                     return
                 except requests.exceptions.ConnectionError:
-                    st.error("🔌 Connection error. Ensure the API server is running on localhost:8000.")
+                    st.error("  Connection error. Ensure the API server is running on localhost:8000.")
                     return
                 except Exception as e:
-                    st.error(f"❌ Error during analysis: {str(e)}")
+                    st.error(f"  Error during analysis: {str(e)}")
                     import traceback
                     st.code(traceback.format_exc())
                     return
@@ -1284,7 +1125,7 @@ def render_transaction_stats():
                             # Transaction ID search
                                     st.markdown("---")
                                     search_txn_id = st.text_input(
-                                        "🔍 Search Transaction ID",
+                                        "  Search Transaction ID",
                                         placeholder="Enter Transaction ID to search...",
                                         key="ui_flow_txn_search"
                                     )
@@ -1292,7 +1133,7 @@ def render_transaction_stats():
                                     if search_txn_id:
                                         display_df = display_df[display_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
                                         if len(display_df) == 0:
-                                            st.warning("⚠️ No transactions match the search term")
+                                            st.warning("  No transactions match the search term")
                                             return
                                         st.info(f"Search filtered to {len(display_df)} transaction(s)")
                                     
@@ -1305,7 +1146,7 @@ def render_transaction_stats():
                                     )
                                     
                                     # Statistics for filtered data
-                                    st.markdown("##### 📊 Statistics for Filtered Transactions")
+                                    st.markdown("#####   Statistics for Filtered Transactions")
                                     
                                     stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
                                     
@@ -1339,27 +1180,27 @@ def render_transaction_stats():
                                     )
                                     
                                 else:
-                                    st.warning("⚠️ No transactions found for the selected source files.")
+                                    st.warning("  No transactions found for the selected source files.")
                             
                             else:
                                 st.error(f"Failed to filter transactions. Status: {filter_response.status_code}")
                     
                     else:
-                        st.warning("⚠️ No source files available. Please ensure customer journals were analyzed.")
+                        st.warning("  No source files available. Please ensure customer journals were analyzed.")
                 
                 else:
                     st.error(f"Failed to retrieve source file information. Status: {sources_response.status_code}")
             
             except requests.exceptions.Timeout:
-                st.error("⏱️ Request timeout while fetching source files. Please try again.")
+                st.error("⏱  Request timeout while fetching source files. Please try again.")
             except requests.exceptions.ConnectionError:
                 st.error("🔌 Connection error. Ensure the API server is running.")
             except Exception as e:
-                st.error(f"❌ Error loading source file filter: {str(e)}")
+                st.error(f"  Error loading source file filter: {str(e)}")
         
         elif response.status_code == 400:
             # This shouldn't happen after our analysis, but just in case
-            st.error("❌ Transaction data still not available after analysis. Please check the API logs.")
+            st.error("  Transaction data still not available after analysis. Please check the API logs.")
             error_detail = response.json().get('detail', 'Unknown error')
             st.info(f"Details: {error_detail}")
         
@@ -1372,13 +1213,13 @@ def render_transaction_stats():
                 pass
             
     except requests.exceptions.Timeout:
-        st.error("⏱️ Request timeout. Please try again.")
+        st.error("⏱  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("🔌 Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
     except Exception as e:
-        st.error(f"❌ Error loading transaction statistics: {str(e)}")
+        st.error(f"  Error loading transaction statistics: {str(e)}")
         import traceback
-        with st.expander("🐛 Debug Information"):
+        with st.expander(" Debug Information"):
             st.code(traceback.format_exc())
 
 
@@ -1409,7 +1250,7 @@ RAISES:
     Exception                           : For any unexpected errors during execution
 """
 
-    st.markdown("### Registry File Viewer")
+    st.markdown("###  Registry File Viewer")
 
     # Get registry contents from session via API
     try:
@@ -1420,7 +1261,7 @@ RAISES:
         )
         
         if response.status_code != 200:
-            st.error("❌ Failed to load registry files from session")
+            st.error("  Failed to load registry files from session")
             logger.error(f"API call failed with status: {response.status_code}")
             return
             
@@ -1428,7 +1269,7 @@ RAISES:
         registry_contents = registry_data.get('registry_contents', {})
         
         if not registry_contents:
-            st.warning("⚠️ No registry files found in the uploaded package.")
+            st.warning("  No registry files found in the uploaded package.")
             return
 
         # Create file selection dropdown
@@ -1499,18 +1340,18 @@ RAISES:
                     st.error(f"Error loading file: {str(e)}")
                     logger.exception(f"Error parsing registry file {selected_file_name}")
                     import traceback
-                    with st.expander("🐛 Debug Information"):
+                    with st.expander("  Debug Information"):
                         st.code(traceback.format_exc())
                     
     except requests.exceptions.Timeout:
-        st.error("⏱️ Request timeout. Please try again.")
+        st.error("⏱  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("🔌 Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
     except Exception as e:
-        st.error(f"❌ Error: {str(e)}")
+        st.error(f"  Error: {str(e)}")
         logger.exception("Error in render_registry_single")
         import traceback
-        with st.expander("🐛 Debug Information"):
+        with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
 def render_registry_compare():
@@ -1528,18 +1369,18 @@ def render_registry_compare():
         )
         
         if response.status_code != 200:
-            st.error("❌ Failed to load registry files from first package")
+            st.error("  Failed to load registry files from first package")
             return
             
         registry_data = response.json()
         registry_contents_a = registry_data.get('registry_contents', {})
         
         if not registry_contents_a:
-            st.warning("⚠️ No registry files found in the first uploaded package.")
+            st.warning("  No registry files found in the first uploaded package.")
             return
         
         st.markdown("#### Step 1: First Package (Already Loaded)")
-        st.success(f"✅ Loaded {len(registry_contents_a)} registry file(s) from main package")
+        st.success(f"  Loaded {len(registry_contents_a)} registry file(s) from main package")
         
         # Show available files from first package
         with st.expander("View files in first package"):
@@ -1559,7 +1400,7 @@ def render_registry_compare():
         
         if uploaded_file_b is not None:
             file_size_mb = len(uploaded_file_b.getvalue()) / (1024 * 1024)
-            st.info(f"📦 File: {uploaded_file_b.name} ({file_size_mb:.2f} MB)")
+            st.info(f"  File: {uploaded_file_b.name} ({file_size_mb:.2f} MB)")
             
             # Process second ZIP button
             if st.button("Process Second Package", use_container_width=True, key="process_second_zip"):
@@ -1588,7 +1429,7 @@ def render_registry_compare():
                                 registry_contents_b = reg_data.get('registry_contents', {})
                                 
                                 if not registry_contents_b:
-                                    st.error("❌ No registry files found in second package.")
+                                    st.error("  No registry files found in second package.")
                                     return
                                 
                                 # Store second package contents in session state
@@ -1597,7 +1438,7 @@ def render_registry_compare():
                                     'registry_contents': registry_contents_b
                                 }
                                 
-                                st.success(f"✅ Second package processed: {len(registry_contents_b)} registry file(s) found")
+                                st.success(f"  Second package processed: {len(registry_contents_b)} registry file(s) found")
                                 st.rerun()
                             else:
                                 st.error("Failed to load registry files from second package")
@@ -1605,13 +1446,13 @@ def render_registry_compare():
                             st.error(f"Error processing second package: {response.json().get('detail')}")
                     
                     except requests.exceptions.Timeout:
-                        st.error("⏱️ Request timeout. Please try again.")
+                        st.error("⏱  Request timeout. Please try again.")
                     except requests.exceptions.ConnectionError:
-                        st.error("🔌 Connection error. Ensure the API server is running.")
+                        st.error("  Connection error. Ensure the API server is running.")
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
                         import traceback
-                        with st.expander("🐛 Debug Information"):
+                        with st.expander("  Debug Information"):
                             st.code(traceback.format_exc())
         
         # If second package is loaded, show comparison UI
@@ -1630,7 +1471,7 @@ def render_registry_compare():
             common_names = files_a & files_b
             
             if not common_names:
-                st.warning("⚠️ No files with matching names found in both packages.")
+                st.warning("  No files with matching names found in both packages.")
                 
                 col1, col2 = st.columns(2)
                 with col1:
@@ -1644,7 +1485,7 @@ def render_registry_compare():
                 
                 return
             
-            st.success(f"✅ Found {len(common_names)} file(s) with matching names")
+            st.success(f"  Found {len(common_names)} file(s) with matching names")
             
             # Select which file to compare
             selected_filename = st.selectbox(
@@ -1679,18 +1520,18 @@ def render_registry_compare():
                         except Exception as e:
                             st.error(f"Error comparing files: {str(e)}")
                             import traceback
-                            with st.expander("🐛 Debug Information"):
+                            with st.expander("  Debug Information"):
                                 st.code(traceback.format_exc())
     
     except requests.exceptions.Timeout:
-        st.error("⏱️ Request timeout. Please try again.")
+        st.error("⏱  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("🔌 Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
     except Exception as e:
-        st.error(f"❌ Error in comparison setup: {str(e)}")
+        st.error(f"  Error in comparison setup: {str(e)}")
         logger.exception("Error in render_registry_compare")
         import traceback
-        with st.expander("🐛 Debug Information"):
+        with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
     
 
@@ -1728,7 +1569,7 @@ def render_transaction_comparison():
             Any unexpected error during API calls, analysis, or comparison is
             caught and displayed via Streamlit.
     """
-    st.markdown("### ⚖️ Transaction Comparison Analysis")
+    st.markdown("###   Transaction Comparison Analysis")
     
     need_analysis = False
     
@@ -1756,7 +1597,7 @@ def render_transaction_comparison():
         
         # STEP 2: Perform analysis if needed
         if need_analysis:
-            st.info("📊 Customer journals need to be analyzed first...")
+            st.info("  Customer journals need to be analyzed first...")
             
             with st.spinner("Analyzing customer journals... This may take a moment."):
                 try:
@@ -1767,23 +1608,23 @@ def render_transaction_comparison():
                     
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
-                        st.success(f"✓ Analysis complete! Found {analyze_data.get('total_transactions', 0)} transactions")
+                        st.success(f"  Analysis complete! Found {analyze_data.get('total_transactions', 0)} transactions")
                         import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
                         error_detail = analyze_response.json().get('detail', 'Analysis failed')
-                        st.error(f"❌ Failed to analyze customer journals: {error_detail}")
+                        st.error(f"  Failed to analyze customer journals: {error_detail}")
                         return
                         
                 except requests.exceptions.Timeout:
-                    st.error("⏱️ Analysis timeout. The file may be too large.")
+                    st.error("⏱  Analysis timeout. The file may be too large.")
                     return
                 except requests.exceptions.ConnectionError:
-                    st.error("🔌 Connection error. Ensure the API server is running on localhost:8000.")
+                    st.error("  Connection error. Ensure the API server is running on localhost:8000.")
                     return
                 except Exception as e:
-                    st.error(f"❌ Error during analysis: {str(e)}")
+                    st.error(f"  Error during analysis: {str(e)}")
                     return
         
         # ========================================
@@ -1804,7 +1645,7 @@ def render_transaction_comparison():
         all_txns_df = pd.DataFrame(sources_data.get('all_transactions', []))
         
         if not available_sources:
-            st.warning("⚠️ No source files available. Please ensure customer journals were analyzed.")
+            st.warning("  No source files available. Please ensure customer journals were analyzed.")
             return
         
         if not all_txns_df.empty:
@@ -1821,7 +1662,7 @@ def render_transaction_comparison():
         )
         
         if not selected_sources:
-            st.info("👆 Please select at least one source file to continue")
+            st.info("  Please select at least one source file to continue")
             return
         
         # Get filtered transactions
@@ -1840,7 +1681,7 @@ def render_transaction_comparison():
         
         if len(filtered_transactions) < 2:
             st.warning(
-                f"⚠️ Need at least 2 transactions for comparison. "
+                f"  Need at least 2 transactions for comparison. "
                 f"Found only {len(filtered_transactions)} transaction(s) in the selected source files."
             )
             return
@@ -1897,7 +1738,7 @@ def render_transaction_comparison():
         # SECTION 3: Transaction ID Search
         # ========================================
         st.markdown("---")
-        st.markdown("#### 🔍 Search Transactions by ID")
+        st.markdown("####   Search Transactions by ID")
         
         search_col1, search_col2 = st.columns(2)
         
@@ -1927,7 +1768,7 @@ def render_transaction_comparison():
                 if search_txn1_id.lower() in str(txn.get('Transaction ID', '')).lower()
             ]
             if len(filtered_txn1_list) == 0:
-                st.warning("⚠️ No transactions match Transaction 1 search term")
+                st.warning("  No transactions match Transaction 1 search term")
         
         if search_txn2_id:
             filtered_txn2_list = [
@@ -1935,13 +1776,13 @@ def render_transaction_comparison():
                 if search_txn2_id.lower() in str(txn.get('Transaction ID', '')).lower()
             ]
             if len(filtered_txn2_list) == 0:
-                st.warning("⚠️ No transactions match Transaction 2 search term")
+                st.warning("  No transactions match Transaction 2 search term")
         
         # ========================================
         # SECTION 4: Transaction Selection
         # ========================================
         st.markdown("---")
-        st.markdown("#### 🔄 Select Two Transactions to Compare")
+        st.markdown("####   Select Two Transactions to Compare")
         
         col1, col2 = st.columns(2)
         
@@ -2024,14 +1865,14 @@ def render_transaction_comparison():
         
         # Check if both transactions are selected
         if not (txn1_selection and txn2_selection):
-            st.info("👆 Please select both transactions above to proceed with comparison")
+            st.info("  Please select both transactions above to proceed with comparison")
             return
         
         # ========================================
         # SECTION 4: Perform Comparison
         # ========================================
         st.markdown("---")
-        st.markdown("#### 📊 Comparison Results")
+        st.markdown("####   Comparison Results")
         
         with st.spinner(f"Comparing {txn1_id} and {txn2_id}..."):
             try:
@@ -2051,13 +1892,13 @@ def render_transaction_comparison():
                     comparison_data = comparison_response.json()
 
                     if hasattr(comparison_response, '_json'):  # This means it came from cache
-                        st.caption("⚡ Loaded from cache")
+                        st.caption("  Loaded from cache")
                     
                     # Create tabs for different views
                     tab1, tab2, tab3 = st.tabs([
-                        "📊 Side-by-Side Flow",
-                        "📝 Transaction Logs",
-                        "📈 Detailed Analysis"
+                        "  Side-by-Side Flow",
+                        "  Transaction Logs",
+                        "  Detailed Analysis"
                     ])
                     
                     # ========================================
@@ -2128,7 +1969,7 @@ def render_transaction_comparison():
                         
                         # Calculate and display similarity metrics
                         st.markdown("---")
-                        st.markdown("##### 🎯 Flow Similarity Metrics")
+                        st.markdown("#####   Flow Similarity Metrics")
                         
                         # Extract screen names for comparison
                         def get_screen_names(flow):
@@ -2183,7 +2024,7 @@ def render_transaction_comparison():
                         st.markdown("#### Detailed Comparison Analysis")
                         
                         # Additional comparison metrics
-                        st.markdown("##### 📊 Detailed Metrics")
+                        st.markdown("#####   Detailed Metrics")
                         
                         # Duration comparison
                         if txn1_data and txn2_data:
@@ -2208,7 +2049,7 @@ def render_transaction_comparison():
                         st.markdown("---")
                         
                         # Source file comparison
-                        st.markdown("##### 📁 Source File Information")
+                        st.markdown("#####   Source File Information")
                         source_col1, source_col2 = st.columns(2)
                         
                         with source_col1:
@@ -2226,7 +2067,7 @@ def render_transaction_comparison():
                         st.markdown("---")
                         
                         # Screen-by-screen comparison
-                        st.markdown("##### 🔍 Screen-by-Screen Breakdown")
+                        st.markdown("#####   Screen-by-Screen Breakdown")
                         
                         # Extract screen names for comparison
                         def get_screen_names(flow):
@@ -2268,31 +2109,31 @@ def render_transaction_comparison():
                 
                 elif comparison_response.status_code == 404:
                     error_detail = comparison_response.json().get('detail', 'Transaction not found')
-                    st.error(f"❌ {error_detail}")
+                    st.error(f"  {error_detail}")
                 elif comparison_response.status_code == 400:
                     error_detail = comparison_response.json().get('detail', 'Bad request')
-                    st.error(f"❌ {error_detail}")
+                    st.error(f"  {error_detail}")
                 else:
                     st.error(f"Failed to compare transactions. Status code: {comparison_response.status_code}")
                     
             except requests.exceptions.Timeout:
-                st.error("⏱️ Request timeout while comparing transactions. Please try again.")
+                st.error("⏱  Request timeout while comparing transactions. Please try again.")
             except requests.exceptions.ConnectionError:
-                st.error("🔌 Connection error. Ensure the API server is running.")
+                st.error("  Connection error. Ensure the API server is running.")
             except Exception as e:
-                st.error(f"❌ Error during comparison: {str(e)}")
+                st.error(f"  Error during comparison: {str(e)}")
                 import traceback
-                with st.expander("🐛 Debug Information"):
+                with st.expander("  Debug Information"):
                     st.code(traceback.format_exc())
     
     except requests.exceptions.Timeout:
-        st.error("⏱️ Request timeout. Please try again.")
+        st.error("⏱  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("🔌 Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
     except Exception as e:
-        st.error(f"❌ Error in transaction comparison: {str(e)}")
+        st.error(f"  Error in transaction comparison: {str(e)}")
         import traceback
-        with st.expander("🐛 Debug Information"):
+        with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
 def render_ui_flow_individual():
@@ -2328,7 +2169,7 @@ def render_ui_flow_individual():
             Any unexpected errors during API calls, analysis, filtering, or visualization
             are caught and displayed via Streamlit.
     """
-    st.markdown("### 🖥️ UI Flow of Individual Transaction")
+    st.markdown("###   UI Flow of Individual Transaction")
     
     need_analysis = False
     
@@ -2356,7 +2197,7 @@ def render_ui_flow_individual():
         
         # STEP 2: If we need analysis, do it now
         if need_analysis:
-            st.info("📊 Customer journals need to be analyzed first...")
+            st.info("  Customer journals need to be analyzed first...")
             
             with st.spinner("Analyzing customer journals... This may take a moment."):
                 try:
@@ -2373,19 +2214,19 @@ def render_ui_flow_individual():
                         st.rerun()
                     else:
                         error_detail = analyze_response.json().get('detail', 'Analysis failed')
-                        st.error(f"❌ Failed to analyze customer journals: {error_detail}")
+                        st.error(f"  Failed to analyze customer journals: {error_detail}")
                         return
                         
                 except requests.exceptions.Timeout:
-                    st.error("⏱️ Analysis timeout. The file may be too large.")
+                    st.error("⏱  Analysis timeout. The file may be too large.")
                     return
                 except requests.exceptions.ConnectionError:
-                    st.error("🔌 Connection error. Ensure the API server is running on localhost:8000.")
+                    st.error("  Connection error. Ensure the API server is running on localhost:8000.")
                     return
                 except Exception as e:
-                    st.error(f"❌ Error during analysis: {str(e)}")
+                    st.error(f"  Error during analysis: {str(e)}")
                     import traceback
-                    with st.expander("🐛 Debug Information"):
+                    with st.expander("  Debug Information"):
                         st.code(traceback.format_exc())
                     return
         
@@ -2409,7 +2250,7 @@ def render_ui_flow_individual():
         all_transactions = sources_data.get('all_transactions', [])
         
         if not available_sources:
-            st.warning("⚠️ No source files found even after analysis.")
+            st.warning("  No source files found even after analysis.")
             st.info("Please check:\n1. ZIP file contains customer journal files\n2. Customer journal files contain valid transaction data")
             return
         
@@ -2447,7 +2288,7 @@ def render_ui_flow_individual():
         filtered_transactions = filtered_data.get('transactions', [])
         
         if not filtered_transactions:
-            st.warning("⚠️ No transactions found for the selected source files.")
+            st.warning("  No transactions found for the selected source files.")
             return
         
         # Convert to DataFrame for easier filtering
@@ -2486,7 +2327,7 @@ def render_ui_flow_individual():
             display_df = display_df[display_df['End State'] == filter_state]
         
         if len(display_df) == 0:
-            st.warning("⚠️ No transactions match the selected filters.")
+            st.warning("  No transactions match the selected filters.")
             return
         
         # Display filtered count
@@ -2496,7 +2337,7 @@ def render_ui_flow_individual():
         # Transaction ID search
         st.markdown("---")
         search_txn_id = st.text_input(
-            "🔍 Search Transaction ID",
+            "  Search Transaction ID",
             placeholder="Enter Transaction ID to search...",
             key="ui_flow_txn_search"
         )
@@ -2504,7 +2345,7 @@ def render_ui_flow_individual():
         if search_txn_id:
             display_df = display_df[display_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
             if len(display_df) == 0:
-                st.warning("⚠️ No transactions match the search term")
+                st.warning("  No transactions match the search term")
                 return
             st.info(f"Search filtered to {len(display_df)} transaction(s)")
         
@@ -2567,7 +2408,7 @@ def render_ui_flow_individual():
                     
                     # Display UI flow
                     st.markdown("---")
-                    st.markdown("#### 🖥️ UI Flow Visualization")
+                    st.markdown("####   UI Flow Visualization")
                     
                     ui_flow = viz_data.get('ui_flow', [])
                     has_flow = viz_data.get('has_flow', False)
@@ -2588,37 +2429,37 @@ def render_ui_flow_individual():
                             for idx, screen in enumerate(ui_flow, 1):
                                 st.markdown(f"**{idx}.** {screen}")
                     else:
-                        st.warning("⚠️ No UI flow data available for this transaction")
+                        st.warning("  No UI flow data available for this transaction")
                         st.info("This could mean:\n- No UI journal files were uploaded\n- The transaction time range doesn't match any UI events\n- UI journal data is incomplete")
                     
                     # Show transaction log
                     st.markdown("---")
-                    st.markdown("#### 📋 Transaction Log")
+                    st.markdown("####   Transaction Log")
                     with st.expander("View Full Transaction Log", expanded=False):
                         st.code(viz_data.get('transaction_log', 'No log available'), language="text")
                 
                 else:
                     error_detail = viz_response.json().get('detail', 'Visualization failed')
-                    st.error(f"❌ {error_detail}")
+                    st.error(f"  {error_detail}")
                     
             except requests.exceptions.Timeout:
-                st.error("⏱️ Request timeout. Please try again.")
+                st.error("⏱  Request timeout. Please try again.")
             except requests.exceptions.ConnectionError:
-                st.error("🔌 Connection error. Ensure the API server is running on localhost:8000.")
+                st.error("  Connection error. Ensure the API server is running on localhost:8000.")
             except Exception as e:
-                st.error(f"❌ Error in UI flow visualization: {str(e)}")
+                st.error(f"  Error in UI flow visualization: {str(e)}")
                 import traceback
-                with st.expander("🐛 Debug Information"):
+                with st.expander("  Debug Information"):
                     st.code(traceback.format_exc())
     
     except requests.exceptions.Timeout:
-        st.error("⏱️ Request timeout. Please try again.")
+        st.error("⏱  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("🔌 Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
     except Exception as e:
-        st.error(f"❌ Error loading UI flow: {str(e)}")
+        st.error(f"  Error loading UI flow: {str(e)}")
         import traceback
-        with st.expander("🐛 Debug Information"):
+        with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
 def render_under_construction(function_name: str):
@@ -3135,7 +2976,7 @@ def render_consolidated_flow():
         - Detailed transaction flows can be expanded to review each transaction's UI path.
     """
 
-    st.markdown("### 🌐 Consolidated Transaction UI Flow and Analysis")
+    st.markdown("###   Consolidated Transaction UI Flow and Analysis")
     
     need_analysis = False
     
@@ -3161,7 +3002,7 @@ def render_consolidated_flow():
         
         # STEP 2: Perform analysis if needed
         if need_analysis:
-            st.info("📊 Customer journals need to be analyzed first...")
+            st.info("  Customer journals need to be analyzed first...")
             
             with st.spinner("Analyzing customer journals..."):
                 try:
@@ -3177,10 +3018,10 @@ def render_consolidated_flow():
                         st.rerun()
                     else:
                         error_detail = analyze_response.json().get('detail', 'Analysis failed')
-                        st.error(f"❌ {error_detail}")
+                        st.error(f"  {error_detail}")
                         return
                 except Exception as e:
-                    st.error(f"❌ Error during analysis: {str(e)}")
+                    st.error(f"  Error during analysis: {str(e)}")
                     return
         
         # STEP 3: Get source files
@@ -3198,7 +3039,7 @@ def render_consolidated_flow():
         all_transactions = sources_data.get('all_transactions', [])
         
         if not available_sources:
-            st.warning("⚠️ No source files available")
+            st.warning("  No source files available")
             return
         
         selected_source = st.selectbox(
@@ -3250,7 +3091,7 @@ def render_consolidated_flow():
         # STEP 6: Generate consolidated flow
         st.markdown("---")
         
-        if st.button("🌐 Generate Consolidated Flow", use_container_width=True):
+        if st.button("  Generate Consolidated Flow", use_container_width=True):
             with st.spinner(f"Generating consolidated flow for {selected_type}..."):
                 try:
                     response = requests.post(
@@ -3267,15 +3108,15 @@ def render_consolidated_flow():
                         
                         # Display the consolidated flow chart
                         st.markdown("---")
-                        st.markdown("### 🌐 Consolidated Flow Visualization")
-                        st.info("💡 Hover over screens to see transaction IDs. Arrows show flow direction with transaction counts.")
+                        st.markdown("###   Consolidated Flow Visualization")
+                        st.info("  Hover over screens to see transaction IDs. Arrows show flow direction with transaction counts.")
                         
                         fig = create_consolidated_flow_plotly(flow_data)
                         if fig:
                             st.plotly_chart(fig, use_container_width=True)
                         
                         # Show detailed flow information
-                        with st.expander("📊 Transaction Flow Details"):
+                        with st.expander("  Transaction Flow Details"):
                             st.markdown(f"**Transactions with UI flow data:** {flow_data['transactions_with_flow']}/{flow_data['total_transactions']}")
                             
                             st.markdown("**Individual Transaction Flows:**")
@@ -3288,22 +3129,22 @@ def render_consolidated_flow():
                     
                     else:
                         error_detail = response.json().get('detail', 'Failed to generate flow')
-                        st.error(f"❌ {error_detail}")
+                        st.error(f"  {error_detail}")
                         
                 except requests.exceptions.Timeout:
-                    st.error("⏱️ Request timeout. Please try again.")
+                    st.error("⏱  Request timeout. Please try again.")
                 except requests.exceptions.ConnectionError:
-                    st.error("🔌 Connection error. Ensure the API server is running.")
+                    st.error("  Connection error. Ensure the API server is running.")
                 except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
+                    st.error(f"  Error: {str(e)}")
                     import traceback
-                    with st.expander("🐛 Debug Information"):
+                    with st.expander("  Debug Information"):
                         st.code(traceback.format_exc())
     
     except Exception as e:
-        st.error(f"❌ Error: {str(e)}")
+        st.error(f"  Error: {str(e)}")
         import traceback
-        with st.expander("🐛 Debug Information"):
+        with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
 def render_individual_transaction_analysis():
@@ -3330,7 +3171,7 @@ RAISES:
     requests.exceptions.ConnectionError: If the API server is unreachable.
     Exception                         : For general errors during transaction retrieval, analysis, or feedback submission.
 """
-    st.markdown("### 🔍 Individual Transaction Analysis")
+    st.markdown("###  Individual Transaction Analysis")
     
     need_analysis = False
     
@@ -3356,7 +3197,7 @@ RAISES:
         
         # STEP 2: Perform analysis if needed
         if need_analysis:
-            st.info("📊 Customer journals need to be analyzed first...")
+            st.info("  Customer journals need to be analyzed first...")
             
             with st.spinner("Analyzing customer journals..."):
                 try:
@@ -3366,16 +3207,16 @@ RAISES:
                     )
                     
                     if analyze_response.status_code == 200:
-                        st.success("✓ Analysis complete!")
+                        st.success("  Analysis complete!")
                         import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
                         error_detail = analyze_response.json().get('detail', 'Analysis failed')
-                        st.error(f"❌ {error_detail}")
+                        st.error(f"  {error_detail}")
                         return
                 except Exception as e:
-                    st.error(f"❌ Error during analysis: {str(e)}")
+                    st.error(f"  Error during analysis: {str(e)}")
                     return
         
         # STEP 3: Get source files and transactions
@@ -3393,15 +3234,15 @@ RAISES:
         all_transactions = sources_data.get('all_transactions', [])
         
         if not available_sources:
-            st.warning("⚠️ No source files available")
+            st.warning("  No source files available")
             return
         
         if not all_transactions:
-            st.warning("⚠️ No transactions available")
+            st.warning("  No transactions available")
             return
         
         # STEP 4: Filters
-        st.markdown("#### 🔍 Select Transaction")
+        st.markdown("####   Select Transaction")
         
         txn_df = pd.DataFrame(all_transactions)
         
@@ -3448,13 +3289,13 @@ RAISES:
                     filtered_df = filtered_df[filtered_df['End State'] == selected_state]
         
         if filtered_df.empty:
-            st.warning("⚠️ No transactions match the selected filters")
+            st.warning("  No transactions match the selected filters")
             return
         
         # Transaction ID search
         st.markdown("---")
         search_txn_id = st.text_input(
-            "🔍 Search Transaction ID",
+            "  Search Transaction ID",
             placeholder="Enter Transaction ID to search...",
             key="indiv_analysis_txn_search"
         )
@@ -3462,18 +3303,18 @@ RAISES:
         if search_txn_id and not filtered_df.empty:
             filtered_df = filtered_df[filtered_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
             if filtered_df.empty:
-                st.warning("⚠️ No transactions match the search term")
+                st.warning("  No transactions match the search term")
                 return
         
         # STEP 5: Transaction selection
         st.markdown("---")
-        st.markdown("#### 📋 Select a Transaction to Analyze")
+        st.markdown("####   Select a Transaction to Analyze")
         
         # Create transaction options
         transaction_options = {}
         for _, txn in filtered_df.iterrows():
             txn_id = txn['Transaction ID']
-            display = f"{txn_id} | {txn['Transaction Type']} | {txn['End State']} | {txn['Start Time']}"
+            display = f"{txn_id} | {txn['Transaction Type']} | {txn['End State']} | {txn['Source File']} | {txn['Start Time']}"
             transaction_options[display] = txn_id
         
         selected_display = st.selectbox(
@@ -3491,7 +3332,7 @@ RAISES:
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("#### 📋 Transaction Details")
+            st.markdown("####   Transaction Details")
             st.markdown(f"**ID:** {selected_txn_data['Transaction ID']}")
             st.markdown(f"**Type:** {selected_txn_data['Transaction Type']}")
             st.markdown(f"**State:** {selected_txn_data['End State']}")
@@ -3500,19 +3341,14 @@ RAISES:
             st.markdown(f"**Source File:** {selected_txn_data['Source File']}")
         
         with col2:
-            st.markdown("#### 📝 Transaction Log Preview")
+            st.markdown("####   Transaction Log Preview")
             transaction_log = str(selected_txn_data.get('Transaction Log', 'No log available'))
             
-            # Show first 500 characters as preview
-            preview = transaction_log[:500] + "..." if len(transaction_log) > 500 else transaction_log
-            st.text_area(
-                "Log Preview",
-                preview,
-                height=200,
-                disabled=True,
-                key="log_preview"
-            )
-        
+            # Show first 700 characters as preview
+            preview = transaction_log[:700] + "..." if len(transaction_log) > 700 else transaction_log
+            st.subheader("Transaction Log Preview")
+            st.code(transaction_log)            
+
         # STEP 7: LLM Analysis
         st.markdown("---")
         st.markdown("### DN Transaction Analysis")
@@ -3532,7 +3368,7 @@ RAISES:
         
         with col1:
             analyze_button = st.button(
-                "🤖 Analyze Transaction",
+                "  Analyze Transaction",
                 use_container_width=True,
                 type="primary"
             )
@@ -3542,7 +3378,7 @@ RAISES:
                 print("")
         
         if analyze_button:
-            with st.spinner("🤖 DN Analyzer is analyzing the transaction log... This may take a moment."):
+            with st.spinner("  DN Analyzer is analyzing the transaction log... This may take a moment."):
                 try:
                     response = cached_request(
                         'post',
@@ -3557,26 +3393,27 @@ RAISES:
                         st.rerun()
                     else:
                         error_detail = response.json().get('detail', 'Analysis failed')
-                        st.error(f"❌ {error_detail}")
+                        st.error(f"  {error_detail}")
                         
                 except requests.exceptions.Timeout:
-                    st.error("⏱️ Analysis timeout. The model may be taking too long to respond.")
+                    st.error("⏱  Analysis timeout. The model may be taking too long to respond.")
                 except requests.exceptions.ConnectionError:
-                    st.error("🔌 Connection error. Ensure the API server and Ollama are running.")
+                    st.error("  Connection error. Ensure the API server and Ollama are running.")
                 except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
+                    st.error(f"  Error: {str(e)}")
         
         # Display analysis results
         if st.session_state.analysis_result:
             st.markdown("---")
-            st.markdown("### 📊 Analysis Results")
+            st.markdown("###   Analysis Results")
             
             result = st.session_state.analysis_result
             
             # Metadata
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Model", result['metadata']['model'])
+                analysis_time = result['metadata'].get('analysis_time_seconds', 'N/A')
+                st.metric("Analysis Time", f"{analysis_time} sec")
             with col2:
                 st.metric("Log Size", f"{result['metadata']['log_length']} chars")
             with col3:
@@ -3584,7 +3421,7 @@ RAISES:
             
             # Analysis content
             st.markdown("---")
-            st.markdown("#### 🔍 AI Analysis")
+            st.markdown("####   AI Analysis")
             
             analysis_text = result.get('analysis', 'No analysis available')
             
@@ -3599,15 +3436,15 @@ RAISES:
             )
             
             # Metadata details
-            with st.expander("📊 Analysis Metadata"):
+            with st.expander("  Analysis Metadata"):
                 st.json(result['metadata'])
             
             # STEP 8: LLM Response Feedback
             st.markdown("---")
-            st.markdown("### 💬 LLM Response Feedback")
+            st.markdown("###   LLM Response Feedback")
             st.info("Help us improve our AI analysis by providing feedback on the results")
             
-            with st.expander("📝 Provide Feedback", expanded=False):
+            with st.expander("  Provide Feedback", expanded=False):
                 st.markdown("*Your feedback helps improve the accuracy of future analyses*")
                 
                 # Feedback key prefix
@@ -3624,7 +3461,7 @@ RAISES:
                 }
                 
                 # Question 1: Rating
-                st.markdown("#### 1️⃣ Rate the Analysis Quality")
+                st.markdown("#### 1️  Rate the Analysis Quality")
                 rating = st.select_slider(
                     "How would you rate the accuracy and usefulness of the AI analysis?",
                     options=[0, 1, 2, 3, 4, 5],
@@ -3634,7 +3471,7 @@ RAISES:
                 )
                 
                 # Question 2: Alternative Root Cause
-                st.markdown("#### 2️⃣ Alternative Root Cause (if applicable)")
+                st.markdown("#### 2️  Alternative Root Cause (if applicable)")
                 
                 anomaly_categories = [
                     "No alternative needed - AI analysis was correct",
@@ -3661,7 +3498,7 @@ RAISES:
                 )
                 
                 # Question 3: Comments
-                st.markdown("#### 3️⃣ Additional Comments")
+                st.markdown("#### 3️  Additional Comments")
                 feedback_comment = st.text_area(
                     "Please provide any specific feedback, suggestions, or observations:",
                     placeholder="e.g., 'The analysis missed...', 'Very helpful analysis!', 'Could improve by...'",
@@ -3682,7 +3519,7 @@ RAISES:
 
                 if questions_answered > 0:
                     st.markdown("---")
-                    st.markdown("#### 👤 User Selection Required")
+                    st.markdown("####   User Selection Required")
                     st.info("Please select your name to submit feedback.")
                     
                     selected_user = st.selectbox(
@@ -3694,10 +3531,10 @@ RAISES:
                     if selected_user != "Select User":
                         user_name = selected_user.split(" (")[0]
                         user_email = users[selected_user]["email"]
-                        st.success(f"✅ Selected: {user_name}")
+                        st.success(f"  Selected: {user_name}")
                     
                     if selected_user == "Select User":
-                        st.warning("⚠️ Please select your name and email to continue.")
+                        st.warning("  Please select your name and email to continue.")
                 
                 # Submit Feedback
                 st.markdown("---")
@@ -3759,10 +3596,10 @@ RAISES:
                                         st.rerun()
                                     else:
                                         error_detail = response.json().get('detail', 'Failed to submit')
-                                        st.error(f"❌ {error_detail}")
+                                        st.error(f"  {error_detail}")
                                         
                                 except Exception as e:
-                                    st.error(f"❌ Error submitting feedback: {str(e)}")
+                                    st.error(f"  Error submitting feedback: {str(e)}")
 
                 with col2:
                     if st.button("Clear Form", 
@@ -3783,9 +3620,9 @@ RAISES:
 
     
     except Exception as e:
-        st.error(f"❌ Error: {str(e)}")
+        st.error(f"  Error: {str(e)}")
         import traceback
-        with st.expander("🐛 Debug Information"):
+        with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
 def render_counters_analysis():
@@ -3817,7 +3654,7 @@ RAISES:
     Exception                           : For any unexpected errors during execution
 """
 
-    st.markdown("### 📊 Counters Analysis")
+    st.markdown("###   Counters Analysis")
     
     need_analysis = False
     
@@ -3843,7 +3680,7 @@ RAISES:
         
         # Perform analysis if needed
         if need_analysis:
-            st.info("📊 Customer journals need to be analyzed first...")
+            st.info("  Customer journals need to be analyzed first...")
             
             with st.spinner("Analyzing customer journals..."):
                 try:
@@ -3853,16 +3690,16 @@ RAISES:
                     )
                     
                     if analyze_response.status_code == 200:
-                        st.success("✅ Analysis complete!")
+                        st.success("  Analysis complete!")
                         import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
                         error_detail = analyze_response.json().get('detail', 'Analysis failed')
-                        st.error(f"❌ {error_detail}")
+                        st.error(f"  {error_detail}")
                         return
                 except Exception as e:
-                    st.error(f"❌ Error during analysis: {str(e)}")
+                    st.error(f"  Error during analysis: {str(e)}")
                     return
         
         # Get source files and transactions
@@ -3880,11 +3717,11 @@ RAISES:
         all_transactions = sources_data.get('all_transactions', [])
         
         if not available_sources:
-            st.warning("⚠️ No source files available")
+            st.warning("  No source files available")
             return
         
         if not all_transactions:
-            st.warning("⚠️ No transactions available")
+            st.warning("  No transactions available")
             return
         
         # Get TRC trace files to filter source files
@@ -3909,17 +3746,17 @@ RAISES:
                     filtered_sources = matching_data.get('matching_sources', [])
                     
                     if not filtered_sources:
-                        st.warning("⚠️ No source files found that match TRC trace files")
+                        st.warning("  No source files found that match TRC trace files")
                         return
                     
                     available_sources = filtered_sources
                 else:
-                    st.warning("⚠️ Could not filter sources by TRC trace files")
+                    st.warning("  Could not filter sources by TRC trace files")
         except Exception as e:
-            print(f"⚠️ Error filtering sources: {e}")
+            print(f"  Error filtering sources: {e}")
         
         # Source file selection with unique display
-        st.markdown("#### 📂 Select Source File")
+        st.markdown("####   Select Source File")
         
         # Create unique identifiers for each source
         txn_df = pd.DataFrame(all_transactions)
@@ -3934,7 +3771,7 @@ RAISES:
                 source_summary[display_name] = source
         
         if not source_summary:
-            st.warning("⚠️ No transactions found in matching sources")
+            st.warning("  No transactions found in matching sources")
             return
         
         selected_display = st.selectbox(
@@ -3949,12 +3786,12 @@ RAISES:
         source_transactions = txn_df[txn_df['Source File'] == selected_source]
         
         if len(source_transactions) == 0:
-            st.warning(f"⚠️ No transactions found in source '{selected_source}'")
+            st.warning(f"  No transactions found in source '{selected_source}'")
             return
         
         # Transaction selection
         st.markdown("---")
-        st.markdown("#### 🔍 Select Transaction")
+        st.markdown("####   Select Transaction")
 
         # Filter to only transactions from this specific source file
         source_only_transactions = txn_df[txn_df['Source File'] == selected_source].copy()
@@ -3980,7 +3817,7 @@ RAISES:
 
         # Show info message if there are disabled transactions
         if other_count > 0:
-            st.info(f"ℹ️ Counter analysis is only available for CIN/CI and COUT/GA transactions.")
+            st.info(f"  Counter analysis is only available for CIN/CI and COUT/GA transactions.")
 
         selected_display = st.selectbox(
             "Transaction",
@@ -3991,7 +3828,7 @@ RAISES:
 
         # Check if selected option is disabled
         if "(Not available)" in selected_display:
-            st.warning("⚠️ This transaction type is not supported for counter analysis. Please select a CIN/CI or COUT/GA transaction.")
+            st.warning("  This transaction type is not supported for counter analysis. Please select a CIN/CI or COUT/GA transaction.")
             return
 
         selected_txn_id = transaction_options[selected_display]
@@ -4032,7 +3869,7 @@ RAISES:
                     except:
                         formatted_start_date = start_date
                     
-                    st.markdown(f"#### 🕐 First Counter - {formatted_start_date} {start_time}")
+                    st.markdown(f"####   First Counter - {formatted_start_date} {start_time}")
                     st.caption("This counter represents the first transaction in the source file")
                     
                     start_df = pd.DataFrame(counter_data['start_counter']['counter_data'])
@@ -4073,7 +3910,7 @@ RAISES:
                     except:
                         formatted_first_date = first_date
                     
-                    st.markdown(f"#### 🕐 Start Counter - {formatted_first_date} {first_time}")
+                    st.markdown(f"####   Start Counter - {formatted_first_date} {first_time}")
                     st.caption("This counter represents the first transaction from in the TRCTrace file based on the selected Transaction")
                     
                     first_df = pd.DataFrame(counter_data['first_counter']['counter_data'])
@@ -4100,7 +3937,7 @@ RAISES:
                     
                     st.markdown("---")
                     
-                    st.markdown("#### 📊 Counter per Transaction")
+                    st.markdown("####   Counter per Transaction")
 
                     if 'counter_per_transaction' in counter_data and counter_data['counter_per_transaction']:
                         txn_table_data = []
@@ -4303,7 +4140,7 @@ RAISES:
                     except:
                         formatted_last_date = last_date
                     
-                    st.markdown(f"#### 🕐 Last Counter - {formatted_last_date} {last_time}")
+                    st.markdown(f"####   Last Counter - {formatted_last_date} {last_time}")
                     st.caption("This counter represents the last transaction in the source file")
 
                     last_df = pd.DataFrame(counter_data['last_counter']['counter_data'])
@@ -4330,22 +4167,22 @@ RAISES:
                 
                 else:
                     error_detail = response.json().get('detail', 'Failed to get counter data')
-                    st.error(f"❌ {error_detail}")
+                    st.error(f"  {error_detail}")
                     
             except requests.exceptions.Timeout:
-                st.error("⏱️ Request timeout. Please try again.")
+                st.error("⏱  Request timeout. Please try again.")
             except requests.exceptions.ConnectionError:
-                st.error("🔌 Connection error. Ensure the API server is running.")
+                st.error("  Connection error. Ensure the API server is running.")
             except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
+                st.error(f"  Error: {str(e)}")
                 import traceback
-                with st.expander("🐛 Debug Information"):
+                with st.expander("  Debug Information"):
                     st.code(traceback.format_exc())
     
     except Exception as e:
-        st.error(f"❌ Error: {str(e)}")
+        st.error(f"  Error: {str(e)}")
         import traceback
-        with st.expander("🐛 Debug Information"):
+        with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
 def render_acu_single_parse(): # MODIFIED
@@ -4380,7 +4217,7 @@ def render_acu_single_parse(): # MODIFIED
     """
     #st.write("SESSION STATE DEBUG:", st.session_state)   # debug Added
 
-    st.markdown("### ⚡ ACU Configuration Parser")
+    st.markdown("###   ACU Configuration Parser")
     
     
     # Initialize session state
@@ -4406,13 +4243,13 @@ def render_acu_single_parse(): # MODIFIED
 
                     # if no ACU files found → STOP UI here
                     if not xml_files:
-                        st.error("❌ No ACU files found in the uploaded ZIP.")
+                        st.error("  No ACU files found in the uploaded ZIP.")
                         st.stop()  # <<< IMPORTANT: stops rendering the rest of the UI
 
                         # ACU files exist → load normally
                     st.session_state.acu_extracted_files = xml_files
                     st.session_state.acu_files_loaded = True
-                    st.success(f"✓ Loaded {len(xml_files)} ACU XML files from processed package")
+                    st.success(f"  Loaded {len(xml_files)} ACU XML files from processed package")
                     st.rerun()
 
                 else:
@@ -4435,7 +4272,7 @@ def render_acu_single_parse(): # MODIFIED
                 key="acu_file_select"
             )
             
-            if st.button("🚀 Parse Selected File", key="acu_parse_btn", type="primary"):
+            if st.button("  Parse Selected File", key="acu_parse_btn", type="primary"):
                 with st.spinner(f"Parsing {selected_file}..."):
                     try:
                         # Content is always in the main session now
@@ -4456,7 +4293,7 @@ def render_acu_single_parse(): # MODIFIED
                                 st.session_state.acu_parsed_df = df
                                 
                                 docs_count = sum(1 for r in records if r.get('Details'))
-                                st.success(f"✓ Parsed {len(df)} parameters ({docs_count} with documentation)")
+                                st.success(f"  Parsed {len(df)} parameters ({docs_count} with documentation)")
                             else:
                                 st.warning("No parameters extracted from file")
                         else:
@@ -4465,7 +4302,7 @@ def render_acu_single_parse(): # MODIFIED
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
                         import traceback
-                        with st.expander("🐛 Debug Info"):
+                        with st.expander("  Debug Info"):
                             st.code(traceback.format_exc())
         else:
             st.warning("No XML files found")
@@ -4479,7 +4316,7 @@ def render_acu_single_parse(): # MODIFIED
         
         # Search
         search_term = st.text_input(
-            "🔍 Search parameters:",
+            "  Search parameters:",
             placeholder="e.g., capacity, DISABLED...",
             key="acu_search"
         )
@@ -4512,19 +4349,19 @@ def render_acu_single_parse(): # MODIFIED
             
             if selected_param.get('Details'):
                 st.markdown("---")
-                st.markdown(f"#### 📄 Documentation: `{selected_param['Parameter']}`")
+                st.markdown(f"####   Documentation: `{selected_param['Parameter']}`")
                 with st.container(border=True):
                     st.markdown(selected_param['Details'])
             else:
-                st.info("💡 Click a row to see documentation (if available)")
+                st.info("  Click a row to see documentation (if available)")
         else:
-            st.info("💡 Click a row to see documentation (if available)")
+            st.info("  Click a row to see documentation (if available)")
         
         # Download
         st.markdown("---")
         csv = display_df.to_csv(index=False)
         st.download_button(
-            label="📥 Download as CSV",
+            label="  Download as CSV",
             data=csv,
             file_name=f"acu_config_export.csv",
             mime="text/csv"
@@ -4554,7 +4391,7 @@ RAISES:
     requests.exceptions.ConnectionError: If the API server is unreachable.
     Exception                         : For general errors during file loading, extraction, or comparison.
 """
-    st.markdown("### ⚖️ ACU Configuration Comparison")
+    st.markdown("###   ACU Configuration Comparison")
     st.info("Compare ACU configuration files from two different ZIP archives.")
     
     # Initialize session state
@@ -4564,31 +4401,25 @@ RAISES:
     comp_data = st.session_state.acu_compare_data
     
     # Source A is now automatically loaded from the main processed ZIP
-    st.markdown("#### ✅ Source A (Main Package)")
+    st.markdown("####   Source A (Main Package)")
     if not comp_data.get('files1'):
         with st.spinner("Loading ACU files from main package for Source A..."):
             try:
-                #st.write("🔍 DEBUG: Calling API for Source A:", f"{API_BASE_URL}/get-acu-files")       # added
+                
                 resp = requests.get(f"{API_BASE_URL}/get-acu-files", timeout=30)
                 
-                #st.write("🔍 DEBUG: Source A status code:", resp.status_code)
-                #try:
-                #    st.write("🔍 DEBUG: Source A JSON keys:", list(resp.json().keys()))
-                #except:
-                #   st.write("❌ DEBUG: Source A returned non-JSON:", resp.text)
-                    
-
+                
                 if resp.status_code == 200:
                     data = resp.json()
                     all_files = data.get('acu_files', {})
 
-                    #st.write("🔍 DEBUG: Raw ACU files from Source A:", all_files)   #------added
+                    #st.write("  DEBUG: Raw ACU files from Source A:", all_files)   #------added
                     if all_files:
                         comp_data['zip1_name'] = "Main Package"
                         comp_data['files1'] = {k: v for k, v in all_files.items() if not k.startswith('__xsd__')}
-                        #st.write("🔍 DEBUG: Filtered XML files for Source A:", comp_data['files1'])  # DEBUG ADDED
+                        #st.write("  DEBUG: Filtered XML files for Source A:", comp_data['files1'])  # DEBUG ADDED
                         comp_data['files1_all'] = all_files
-                        st.success(f"✓ **Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
+                        st.success(f"  **Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
                         st.rerun()
                     else:
                         comp_data['files1'] = None
@@ -4606,10 +4437,10 @@ RAISES:
     
     # Source B
     # Source B
-    st.markdown("#### 📤 Source B")
+    st.markdown("####   Source B")
     
     if comp_data.get('files2'):
-        st.success(f"✓ **Source B:** {comp_data.get('zip2_name')} ({len(comp_data['files2'])} XML files)")
+        st.success(f"  **Source B:** {comp_data.get('zip2_name')} ({len(comp_data['files2'])} XML files)")
         if st.button("Replace Source B", key="acu_replace_b"):
             comp_data['zip2_name'] = None
             comp_data['files2'] = None
@@ -4620,33 +4451,33 @@ RAISES:
         if zip2 and st.button("Process Source B", key="acu_process_b", type="primary"):
             with st.spinner("Extracting from Source B..."):
                 try:
-                    #st.write("🔍 DEBUG: Uploading ZIP for Source B:", zip2.name)  # DEBUG ADDED
+                    
                     files_payload = {'file': (zip2.name, zip2.getvalue(), 'application/zip')}
                     response = requests.post(
                         f"{API_BASE_URL}/extract-files/",
                         files=files_payload,
                         timeout=120
                     )
-                    #st.write("🔍 DEBUG: Response status for Source B:", response.status_code)  # DEBUG ADDED
+                    
                     
                     if response.status_code == 200:
                         result = response.json()
                         all_files = result.get('files', {})
-                        #st.write("🔍 DEBUG: Response JSON keys for Source B:", list(result.keys()))  # DEBUG ADDED
+                        
                         
                         if not all_files:
-                            st.error("❌ No ACU files found in the uploaded ZIP.")
+                            st.error("  No ACU files found in the uploaded ZIP.")
                         else:
                             comp_data['zip2_name'] = zip2.name
                             comp_data['files2'] = {k: v for k, v in all_files.items() if not k.startswith('__xsd__')}
                             comp_data['files2_all'] = all_files
-                            #st.write("🔍 DEBUG: Filtered XML files for Source B:", comp_data['files2'])  # DEBUG ADDED
-                            st.success(f"✓ Source B: {len(comp_data['files2'])} XML files")
+            
+                            st.success(f"  Source B: {len(comp_data['files2'])} XML files")
                             st.rerun()
                     else:
                         error_detail = response.json().get('detail', 'Unknown error')
-                        st.error(f"❌ Error: {error_detail}")
-                        with st.expander("🐛 Debug Info"):
+                        st.error(f"  Error: {error_detail}")
+                        with st.expander("  Debug Info"):
                             st.code(f"Status: {response.status_code}")
                             try:
                                 st.json(response.json())
@@ -4654,31 +4485,28 @@ RAISES:
                                 st.text(response.text)
                                 
                 except requests.exceptions.Timeout:
-                    st.error("⏱️ Request timeout.")
+                    st.error("⏱  Request timeout.")
                 except requests.exceptions.ConnectionError:
-                    st.error("🔌 Connection error. Check if API server is running.")
+                    st.error("  Connection error. Check if API server is running.")
                 except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
+                    st.error(f"  Error: {str(e)}")
                     import traceback
-                    with st.expander("🐛 Debug Info"):
+                    with st.expander("  Debug Info"):
                         st.code(traceback.format_exc())
     
     # Comparison
     if comp_data.get('files1') and comp_data.get('files2'):
         st.markdown("---")
-        st.markdown("#### 🔍 Select Files to Compare")
+        st.markdown("####   Select Files to Compare")
         
         files1_list = sorted(comp_data['files1'].keys())
         files2_list = sorted(comp_data['files2'].keys())
-
-        #st.write("🔍 DEBUG: Files1 list:", files1_list)  # DEBUG ADDED
-        #st.write("🔍 DEBUG: Files2 list:", files2_list)  # DEBUG ADDED
         
         # Find common files
         common_files = set(os.path.basename(f) for f in files1_list) & set(os.path.basename(f) for f in files2_list)
         
         if not common_files:
-            st.warning("⚠️ No files with matching names found")
+            st.warning("  No files with matching names found")
             
             col1, col2 = st.columns(2)
             with col1:
@@ -4699,7 +4527,7 @@ RAISES:
                 key="acu_comp_file_select"
             )
             
-            if selected_basename and st.button("🔄 Compare Files", key="acu_do_compare", type="primary"):
+            if selected_basename and st.button("  Compare Files", key="acu_do_compare", type="primary"):
                 # Find full paths
                 file1 = next(f for f in files1_list if os.path.basename(f) == selected_basename)
                 file2 = next(f for f in files2_list if os.path.basename(f) == selected_basename)
@@ -4711,7 +4539,7 @@ RAISES:
                         content2 = comp_data['files2_all'][file2]
                         
                         st.markdown("---")
-                        st.markdown("#### 📊 File Comparison")
+                        st.markdown("####   File Comparison")
                         
                         col1, col2 = st.columns(2)
                         
@@ -4742,10 +4570,20 @@ def show_main_app():
     
     with col1:
         display_name = user.get('name') or user.get('username', 'User')
-        st.markdown(f"**👤 Welcome, {display_name}**")
+        st.markdown(
+            f"""
+            <div style="
+                font-size: 24px;
+                font-weight: 700;
+            ">
+                Welcome, {display_name}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     with col2:
-        if st.button("🚪 Logout", use_container_width=True, key="logout_btn"):
+        if st.button(" Logout", use_container_width=True, key="logout_btn"):
             logout_user()
             st.rerun()
     
@@ -4789,7 +4627,7 @@ def show_main_app():
             del st.session_state.acu_files_loaded
         # Clear cache
         clear_cache()
-        st.info("ℹ️ File removed. Please upload a new ZIP file to continue.")
+        st.info("  File removed. Please upload a new ZIP file to continue.")
         st.rerun()
         
     # Only process if file exists AND it's different from the last processed file
@@ -4868,61 +4706,61 @@ def show_main_app():
 
         functionalities = {
             "transaction_stats": {
-                "name": "📊 Transaction Type Statistics",
+                "name": " Transaction Type Statistics",
                 "description": "View statistics for different transaction types",
                 "status": "ready",
                 "requires": ["customer_journals"]
             },
             "individual_transaction": {
-                "name": "🔍 Individual Transaction Analysis",
+                "name": " Individual Transaction Analysis",
                 "description": "Analyze a specific transaction in detail",
                 "status": "ready",
                 "requires": ["customer_journals"]
             },
             "ui_flow_individual": {
-                "name": "🖥️ UI Flow of Individual Transaction",
+                "name": " UI Flow of Individual Transaction",
                 "description": "Visualize UI flow for a specific transaction",
                 "status": "ready",
                 "requires": ["customer_journals", "ui_journals"]
             },
             "consolidated_flow": {
-                "name": "🌐 Consolidated Transaction UI Flow and Analysis",
+                "name": " Consolidated Transaction UI Flow and Analysis",
                 "description": "View consolidated flow across multiple transactions",
                 "status": "ready",
                 "requires": ["customer_journals", "ui_journals"]
             },
             "transaction_comparison": {
-                "name": "⚖️ Transaction Comparison Analysis",
+                "name": " Transaction Comparison Analysis",
                 "description": "Compare two transactions side by side",
                 "status": "ready",
                 "requires": ["customer_journals", "ui_journals"]
             },
             "registry_single": {
-                "name": "📝 Single View of Registry Files",
+                "name": " Single View of Registry Files",
                 "description": "View and analyze a single registry file",
                 "status": "ready",
                 "requires": ["registry_files"]
             },
             "registry_compare": {
-                "name": "🔄 Compare Two Registry Files",
+                "name": " Compare Two Registry Files",
                 "description": "Compare differences between two registry files",
                 "status": "ready",
                 "requires": ["registry_files"]
             },
             "counters_analysis": {
-                "name": "📊 Counters Analysis",
+                "name": " Counters Analysis",
                 "description": "Analyze counter data from TRC Trace files mapped to transactions",
                 "status": "ready",
                 "requires": ["customer_journals", "trc_trace"]
             },
             "acu_single_parse": {
-                "name": "⚡ ACU Parser - Single Archive",
+                "name": " ACU Parser - Single Archive",
                 "description": "Extract and parse ACU configuration files from a single ZIP",
                 "status": "ready",
                 "requires": ["acu_files"]  #fixed
             },
             "acu_compare": {
-                "name": "⚖️ ACU Parser - Compare Archives", 
+                "name": " ACU Parser - Compare Archives", 
                 "description": "Compare ACU configuration files from two ZIP archives",
                 "status": "ready",
                 "requires": ["acu_files"]  #fixed
@@ -5026,13 +4864,15 @@ def main():
     """
     # Initialize session
     initialize_session()
-    
-    # Show appropriate page based on login status
+    initialize_admin_table()
+    create_login_history_table()
     if not is_logged_in():
-        # NOT LOGGED IN → Show login page only
-        show_login_page()
+        if st.session_state.page == "login":
+            show_login_page()
+        elif st.session_state.page == "register":
+            show_register_page()
     else:
-        # LOGGED IN → Show main application only
+        # LOGGED IN → MAIN APP
         show_main_app()
 
 # ============================================

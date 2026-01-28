@@ -14,16 +14,15 @@ def get_db_connection():
     try:
         return psycopg2.connect(**DB_CONFIG)
     except Exception as e:
-        print("❌ DB connection failed:", e)
+        print("  DB connection failed:", e)
         return None
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 def initialize_admin_table():
-    """
-    Creates admins table (username, password) and inserts 4 users once
-    """
+    """Initializes the admin table and inserts default admin user if table is empty."""
+    print("  initializing admin table")
     conn = get_db_connection()
     if not conn:
         return
@@ -31,37 +30,47 @@ def initialize_admin_table():
     try:
         cursor = conn.cursor()
 
-        # 1️⃣ Create table if not exists
+        # 1️ Create table if not exists
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS admins (
-                username VARCHAR(50) PRIMARY KEY,
-                password_hash VARCHAR(256) NOT NULL
+            CREATE TABLE IF NOT EXISTS Users (
+                username VARCHAR(150) PRIMARY KEY,
+                name VARCHAR(150) NOT NULL,
+                password_hash TEXT NOT NULL,
+                employee_code VARCHAR(8) UNIQUE NOT NULL,
+                role VARCHAR(50) DEFAULT 'USER',
+                is_active BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
-
-        # 2️⃣ Check if table is empty
-        cursor.execute("SELECT COUNT(*) FROM admins")
+    
+        #   Check if table is empty
+        cursor.execute("SELECT COUNT(*) FROM Users")
         count = cursor.fetchone()[0]
 
         if count == 0:
-            users = ["Admin", "Atharv.Deshpande@dieboldnixdorf.com", "Ashish.Trivedi@dieboldnixdorf.com", "Test_user"]
-            password_hash = hash_password("dnadmin")
+            default_users = [
+                ("dnuser", "Admin User", "dnpass", "00000001", "ADMIN", True),
+            ]
 
-            for user in users:
+            for email, name, password, emp_code, role, is_active in default_users:
                 cursor.execute("""
-                    INSERT INTO admins (username, password_hash)
-                    VALUES (%s, %s)
-                """, (user, password_hash))
-
-            print("✅ 4 default users created with password 'dnadmin'")
+                    INSERT INTO Users (username, name, password_hash, employee_code, role, is_active)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (email, name, hash_password(password), emp_code, role, is_active))
+            print("  default user created with password")
         else:
-            print("ℹ️ Admin users already exist, skipping insert")
+            print("  users already exist, skipping insert")
 
         conn.commit()
+        cursor.execute("select * from Users;")
+        print("currentusers:",cursor.fetchall())
+    
         cursor.close()
         conn.close()
 
     except Exception as e:
-        print("❌ Error initializing admin table:", e)
+        print("  Error initializing admin table:", e)
         conn.rollback()
         conn.close()
+if __name__ == "__main__":
+    initialize_admin_table()

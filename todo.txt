@@ -1,0 +1,28 @@
+template name: session inactivity timming 
+what ? problem statement - if user monitor time in activity -15 min logout and refresh 
+how? - implement watch dog   
+
+template name:  
+what ? - 
+how? - 
+
+template name:  remove unnesseary icons from streamlit                          (fixed)
+what ? -  main page , remove top right icons ; remove icons from applications (rockect icons .. etc .. )
+how? -    
+
+template name:  streamlit color theme for users                        
+what ? -        enhance color theme- use system settings(only)
+how? -  
+
+template name:  login history 
+what ? - 
+how? - 
+
+template name: Form validation                                  (added)
+what ? - Add validations in register form
+how? -          
+
+
+template name:  Remove the model name from Analysis header                          (fixed)
+what ? - Redudant data is shown like model name which is not to be exposed. 
+how? - Instead replace it with time taken for analysis

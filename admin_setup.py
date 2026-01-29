@@ -1,6 +1,7 @@
 # admin_setup.py
 import psycopg2
 import hashlib
+from modules.logging_config import logger
 
 DB_CONFIG = {
     "host": "localhost",
@@ -12,9 +13,11 @@ DB_CONFIG = {
 
 def get_db_connection():
     try:
-        return psycopg2.connect(**DB_CONFIG)
+        conn = psycopg2.connect(**DB_CONFIG)
+        logger.info("Database connection established successfully")
+        return conn
     except Exception as e:
-        print("  DB connection failed:", e)
+        logger.error("Database connection failed")
         return None
 
 def hash_password(password: str) -> str:
@@ -22,15 +25,16 @@ def hash_password(password: str) -> str:
 
 def initialize_admin_table():
     """Initializes the admin table and inserts default admin user if table is empty."""
-    print("  initializing admin table")
+    logger.info(" initializing admin table")
     conn = get_db_connection()
     if not conn:
+        logger.error("Admin table initialization aborted due to DB connection failure")
         return
 
     try:
         cursor = conn.cursor()
 
-        # 1️ Create table if not exists
+        #  Create table if not exists
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS Users (
                 username VARCHAR(150) PRIMARY KEY,
@@ -43,13 +47,13 @@ def initialize_admin_table():
             );
         """)
     
-        #   Check if table is empty
+        #  Check if table is empty
         cursor.execute("SELECT COUNT(*) FROM Users")
         count = cursor.fetchone()[0]
 
         if count == 0:
             default_users = [
-                ("dnuser", "Admin User", "dnpass", "00000001", "ADMIN", True),
+                ("Admin", "Admin User", "dnadmin", "00000001", "ADMIN", True),
             ]
 
             for email, name, password, emp_code, role, is_active in default_users:
@@ -57,20 +61,19 @@ def initialize_admin_table():
                     INSERT INTO Users (username, name, password_hash, employee_code, role, is_active)
                     VALUES (%s, %s, %s, %s, %s, %s)
                 """, (email, name, hash_password(password), emp_code, role, is_active))
-            print("  default user created with password")
+            logger.info(" default user created with password")
         else:
-            print("  users already exist, skipping insert")
+            logger.info(" users already exist, skipping insert")
 
         conn.commit()
-        cursor.execute("select * from Users;")
-        print("currentusers:",cursor.fetchall())
-    
-        cursor.close()
-        conn.close()
-
+        
     except Exception as e:
-        print("  Error initializing admin table:", e)
+        logger.error("Error occurred while initializing admin table")
         conn.rollback()
-        conn.close()
+    finally:
+        if conn:
+            conn.close()
+            logger.info("Database connection closed")
+        
 if __name__ == "__main__":
     initialize_admin_table()

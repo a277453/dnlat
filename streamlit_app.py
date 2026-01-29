@@ -12,6 +12,8 @@ from datetime import datetime
 import numpy as np
 from fastapi.logger import logger
 from modules.streamlit_logger import logger as frontend_logger
+import time
+from modules.login import register_user
 
 
 # Import authentication functions
@@ -411,22 +413,32 @@ def show_register_page():
                 # ---------------------------
                 # BACKEND REGISTRATION
                 # ---------------------------
-                from modules.login import register_user  # make sure import is correct
-                success, message = register_user(email, name, password, employee_code, role_type or "USER")
+                try:
+                    success, message = register_user(
+                        email, name, password, employee_code, role_type or "USER"
+                    )
+
+                    if success:
+                        st.success(message)
+                        time.sleep(3)
+                        st.session_state.page = "login"
+                        st.rerun()
+                    else:
+                        st.error(message)
+
+                except RuntimeError:
+                    # DB / infra issue
+                    st.error("Service temporarily unavailable. Please try again later.")
+
+                except Exception:
+                    # Unexpected failure
+                    st.error("Registration failed due to an internal error.")
                 
-                if success:
-                    st.success(f"  {message}")
-                    import time
-                    time.sleep(3)
-                    # Go back to login page
-                    st.session_state.page = "login"
-                    st.rerun()
-                else:
-                    st.error(f"  {message}")
+                
         # ---------------------------
         # BACK TO LOGIN
         # ---------------------------
-        if st.button("⬅  Back to Login", use_container_width=True):
+        if st.button("⬅️ Back to Login", use_container_width=True):
             st.session_state.page = "login"
             st.rerun()
 

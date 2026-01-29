@@ -171,23 +171,25 @@ def authenticate_user(username: str, password: str) -> bool:
 # ============================================
 
 def user_exists(email: str, employee_code: str) -> bool:
-    conn = get_db_connection()
-    if not conn:
-        return True
     try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT 1 FROM Users
-            WHERE username = %s OR employee_code = %s
-        """, (email, employee_code))
-        exists = cursor.fetchone() is not None
-        cursor.close()
-        conn.close()
-        return exists
-    except Exception as e:
-        print("❌ user_exists check failed:", e)
-        conn.close()
-        return True
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1 FROM Users
+                WHERE username = %s OR employee_code = %s
+                """,
+                (email, employee_code)
+            )
+            return cursor.fetchone() is not None
+
+    except Exception:
+        logger.exception("user_exists check failed")
+        raise
+
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 def register_user(email, name, password, employee_code, role="USER") -> tuple[bool, str]:
     if user_exists(email, employee_code):

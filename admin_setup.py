@@ -17,7 +17,7 @@ def get_db_connection():
         logger.info("Database connection established successfully")
         return conn
     except Exception as e:
-        logger.error("Database connection failed", exc_info=True)
+        logger.error("Database connection failed")
         return None
 
 def hash_password(password: str) -> str:
@@ -35,7 +35,6 @@ def initialize_admin_table():
         cursor = conn.cursor()
 
         #  Create table if not exists
-        #  Create table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS Users (
                 username VARCHAR(150) PRIMARY KEY,
@@ -69,7 +68,7 @@ def initialize_admin_table():
         conn.commit()
         
     except Exception as e:
-        logger.error("Error occurred while initializing admin table", exc_info=True)
+        logger.error("Error occurred while initializing admin table")
         conn.rollback()
     finally:
         if conn:

@@ -10,6 +10,7 @@ import hashlib
 import streamlit as st
 from datetime import datetime
 from typing import Optional
+from modules.logging_config import logger
 
 # ============================================
 # DATABASE CONFIGURATION
@@ -29,9 +30,11 @@ DB_CONFIG = {
 
 def get_db_connection():
     try:
-        return psycopg2.connect(**DB_CONFIG)
+        conn = psycopg2.connect(**DB_CONFIG)
+        logger.debug("Database connection established")
+        return conn
     except Exception as e:
-        print(" DB connection failed:", e)
+        logger.error("Database connection failed", exc_info=True)
         return None
 
 # ============================================
@@ -48,6 +51,7 @@ def hash_password(password: str) -> str:
 def create_login_history_table():
     conn = get_db_connection()
     if not conn:
+        logger.error("Failed to create login_history table due to DB connection failure")
         return False
 
     try:
@@ -65,7 +69,7 @@ def create_login_history_table():
         conn.close()
         return True
     except Exception as e:
-        print(" Error creating login_history:", e)
+        logger.error("Error creating login_history table", exc_info=True)
         conn.rollback()
         conn.close()
         return False
@@ -74,6 +78,7 @@ def create_login_history_table():
 def log_login_event(username: str, action: str):
     conn = get_db_connection()
     if not conn:
+        logger.error("Login event not logged. DB connection failed")
         return False
 
     try:
@@ -87,7 +92,7 @@ def log_login_event(username: str, action: str):
         conn.close()
         return True
     except Exception as e:
-        print(" Login history insert failed:", e)
+        logger.error("Login history insert failed", exc_info=True)
         conn.rollback()
         conn.close()
         return False
@@ -96,6 +101,7 @@ def log_login_event(username: str, action: str):
 def get_login_history(username: str = None, limit: int = 50):
     conn = get_db_connection()
     if not conn:
+        logger.error("Fetching login history failed due to DB connection failure")
         return []
 
     try:
@@ -120,7 +126,7 @@ def get_login_history(username: str = None, limit: int = 50):
         conn.close()
         return rows
     except Exception as e:
-        print(" Fetch login history failed:", e)
+        logger.error("Fetch login history failed", exc_info=True)
         conn.close()
         return []
 
@@ -131,6 +137,7 @@ def get_login_history(username: str = None, limit: int = 50):
 def verify_credentials(username: str, password: str) -> Optional[str]:
     conn = get_db_connection()
     if not conn:
+        logger.error("Login verification failed due to DB connection failure")
         return None
 
     try:
@@ -149,7 +156,7 @@ def verify_credentials(username: str, password: str) -> Optional[str]:
         return user[0] if user else None
 
     except Exception as e:
-        print(" Login verification failed:", e)
+        logger.error("Login verification failed", exc_info=True)
         conn.close()
         return None
 
@@ -193,16 +200,16 @@ def user_exists(email: str, employee_code: str) -> bool:
 
 def register_user(email, name, password, employee_code, role="USER") -> tuple[bool, str]:
     if user_exists(email, employee_code):
-        print("❌ User already exists")
+        logger.info(" User already exists")
         return False, "User with this email or employee code already exists."
     conn = get_db_connection()
     if not conn:
-        print("❌ DB connection failed")
+        logger.error(" DB connection failed")
         return False, "Database connection failed."
     try:
         cursor = conn.cursor()
         password_hash = hash_password(password)
-        print("ℹ️ Registering user:", email, name, employee_code)
+        logger.info("Registering user | email=%s | employee_code=%s | role=%s",email, employee_code, role)
         cursor.execute("""
             INSERT INTO Users (username, name, password_hash, employee_code, role, is_active)
             VALUES (%s, %s, %s, %s, %s, %s)
@@ -213,7 +220,7 @@ def register_user(email, name, password, employee_code, role="USER") -> tuple[bo
         log_login_event(username=email, action="register")
         return True, "Registration successful. Await admin activation."
     except Exception as e:
-        print("❌ Registration failed:", e)
+        logger.error("User registration failed", exc_info=True)
         conn.rollback()
         conn.close()
         return False, "Registration failed."
@@ -224,6 +231,7 @@ def is_user_pending_approval(username: str, password: str) -> bool:
     """
     conn = get_db_connection()
     if not conn:
+        logger.error("Pending approval check failed due to DB connection failure")
         return False
     try:
         cursor = conn.cursor()
@@ -243,7 +251,7 @@ def is_user_pending_approval(username: str, password: str) -> bool:
         return pending
 
     except Exception as e:
-        print("❌ Pending approval check failed:", e)
+        logger.error("Pending approval check failed", exc_info=True)
         conn.close()
         return False
 

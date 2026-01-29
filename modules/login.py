@@ -34,7 +34,7 @@ def get_db_connection():
         logger.debug("Database connection established")
         return conn
     except Exception as e:
-        logger.error("Database connection failed", exc_info=True)
+        logger.error("Database connection failed")
         return None
 
 # ============================================
@@ -69,7 +69,7 @@ def create_login_history_table():
         conn.close()
         return True
     except Exception as e:
-        logger.error("Error creating login_history table", exc_info=True)
+        logger.error("Error creating login_history table")
         conn.rollback()
         conn.close()
         return False
@@ -92,7 +92,7 @@ def log_login_event(username: str, action: str):
         conn.close()
         return True
     except Exception as e:
-        logger.error("Login history insert failed", exc_info=True)
+        logger.error("Login history insert failed")
         conn.rollback()
         conn.close()
         return False
@@ -126,7 +126,7 @@ def get_login_history(username: str = None, limit: int = 50):
         conn.close()
         return rows
     except Exception as e:
-        logger.error("Fetch login history failed", exc_info=True)
+        logger.error("Fetch login history failed")
         conn.close()
         return []
 
@@ -156,7 +156,7 @@ def verify_credentials(username: str, password: str) -> Optional[str]:
         return user[0] if user else None
 
     except Exception as e:
-        logger.error("Login verification failed", exc_info=True)
+        logger.error("Login verification failed")
         conn.close()
         return None
 
@@ -220,7 +220,7 @@ def register_user(email, name, password, employee_code, role="USER") -> tuple[bo
         log_login_event(username=email, action="register")
         return True, "Registration successful. Await admin activation."
     except Exception as e:
-        logger.error("User registration failed", exc_info=True)
+        logger.error("User registration failed")
         conn.rollback()
         conn.close()
         return False, "Registration failed."
@@ -251,7 +251,7 @@ def is_user_pending_approval(username: str, password: str) -> bool:
         return pending
 
     except Exception as e:
-        logger.error("Pending approval check failed", exc_info=True)
+        logger.error("Pending approval check failed")
         conn.close()
         return False
 

@@ -2611,11 +2611,11 @@ RAISES:
     
 from pydantic import BaseModel
 
-# Add this class near the top of routes.py with other models
+
 class TransactionAnalysisRequest(BaseModel):
     transaction_id: str
 
-# Then replace the endpoint:
+
 @router.post("/analyze-transaction-llm")
 async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
@@ -2763,10 +2763,22 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
             ]
             
             logger.info(" Calling Ollama model...")
+            analysis_start_time = time.perf_counter()
             logger.debug(f"LLM messages payload: {messages}")
             
-            response = ollama.chat(model="llama3_log_analyzer", messages=messages)
+            response = ollama.chat(model="llama3_log_analyzer", messages=messages)\
+            
+            analysis_end_time = time.perf_counter()
+            analysis_duration = round(analysis_end_time - analysis_start_time, 3)
+
             raw_response = response['message']['content'].strip()
+            logger.info(
+                f"Transaction LLM analysis completed | "
+                f"txn_id={transaction_id} | "
+                f"model=llama3_log_analyzer | "
+                f"analysis_time={analysis_duration}s"
+            )
+
             logger.info(f" LLM analysis complete ({len(raw_response)} characters)")
             
             # Structure the response
@@ -2776,7 +2788,6 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "metadata": {
                     "transaction_id": transaction_id,
-                    "model": "llama3_log_analyzer",
                     "log_length": len(transaction_log),
                     "response_length": len(raw_response),
                     "analysis_type": "anomaly_detection",
@@ -2784,7 +2795,8 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
                     "transaction_state": str(txn_data.get('End State', 'Unknown')),
                     "start_time": str(txn_data.get('Start Time', '')),
                     "end_time": str(txn_data.get('End Time', '')),
-                    "source_file": str(txn_data.get('Source File', 'Unknown'))
+                    "source_file": str(txn_data.get('Source File', 'Unknown')),
+                    "analysis_time_seconds": analysis_duration
                 }
             }
             

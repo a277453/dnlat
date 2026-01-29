@@ -400,9 +400,9 @@ class TransactionAnalyzerService:
                 tid_val = row["tid"] if row["tid"] else ""
                 msg_val = row["message"]
                 txn_log_lines.append(f"{ts} {tid_val} {msg_val}")
-            
             txn_log = "\n".join(txn_log_lines)
             
+
             # Calculate duration
             duration_seconds = 0
             if start_time and end_time:

@@ -1,0 +1,75 @@
+﻿version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: dn-postgres
+    environment:
+      POSTGRES_USER: dnuser
+      POSTGRES_PASSWORD: dnpass
+      POSTGRES_DB: dndb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dnuser -d dndb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: dn-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+  backend:
+    build: .
+    container_name: dn-backend
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: dn_logs
+      DB_USER: dn_user
+      DB_PASSWORD: dn_pass
+      OLLAMA_HOST: http://host.docker.internal:11434
+      OLLAMA_MODEL: llama3.2
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app/auth/users.json:/app/auth/users.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+
+  streamlit:
+    build: .
+    container_name: dn-streamlit
+    command: streamlit run streamlit_app.py --server.port=8501 --server.address=0.0.0.0
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: dndb
+      DB_USER: dnuser
+      DB_PASSWORD: dnpass
+      API_BASE_URL: http://backend:8000/api/v1
+      OLLAMA_BASE_URL: http://ollama:11434
+    ports:
+      - "8501:8501"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_started
+
+volumes:
+  pgdata:
+  ollama:

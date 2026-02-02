@@ -298,23 +298,46 @@ class ZipExtractionService:
                 extracted = 0
                 for filename in relevant_files:
                     try:
-                        logger.info(f"NKS 1: {filename}")
-                        logger.info(f"NKS 2: {extract_path}")
-                        # #filename = filename.replace('\\', '/')
-                        # #if filename.count('CUSTOMER/20250311.jrn') > 0:
-                        # if filename.count('.jrn') > 0:
-                                
-                        #         filename = filename.replace('/', '\\')
-                        #         logger.info(f"NKS 3: {filename}")
-                        #         continue
-                        
-                        # finalppath = extract_path / filename
-                        
-                        # if finalppath.exists():
-                        #     logger.info(f"NKS 3: {finalppath}")
-                        # else:
-                        #     zf.extract(filename, extract_path)
-                        zf.extract(filename, extract_path)
+                        # Manually extract files to handle path separator inconsistencies
+                        # that cause zf.extract() to fail (e.g., Windows vs. Linux slashes).
+
+                        # Read file data from the ZIP archive in memory.
+                        try:
+                            file_data = zf.read(filename)
+                        except zipfile.BadZipFile as e:
+                            if "differ" in str(e):
+                                logger.warning(f"Name mismatch for {filename}, attempting manual read.")
+                                zinfo = zf.getinfo(filename)
+                                f = zf.fp
+                                f.seek(zinfo.header_offset + 26)
+                                n_len = struct.unpack('<H', f.read(2))[0]
+                                e_len = struct.unpack('<H', f.read(2))[0]
+                                f.seek(zinfo.header_offset + 30 + n_len + e_len)
+                                compressed = f.read(zinfo.compress_size)
+                                if zinfo.compress_type == zipfile.ZIP_STORED:
+                                    file_data = compressed
+                                elif zinfo.compress_type == zipfile.ZIP_DEFLATED:
+                                    file_data = zlib.decompress(compressed, -zlib.MAX_WBITS)
+                                else:
+                                    raise
+                            else:
+                                raise
+
+                        logger.info(f"xxxxx Extracting: {filename}")
+                        # Normalize the filename path for the target OS.
+                        # This replaces any backslashes with forward slashes, which pathlib handles correctly.
+                        normalized_filename = filename.replace('\\', '/')
+                        logger.info(f"xxxxx1 Extracting: {normalized_filename}")   
+                        logger.info(f"xxxxx2 Extracting: {extract_path}")                        
+                        target_path = extract_path / Path(normalized_filename)
+                        logger.info(f"xxxxx3 Extracting: {target_path}")
+
+                        # Create any necessary parent directories for the file.
+                        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+                        # Write the file data to the target path.
+                        with open(target_path, 'wb') as f_out:
+                            f_out.write(file_data)
                         extracted += 1
                     except Exception as e:
                         logger.warning(f"NKS Skip {filename}: {e}")
@@ -344,6 +367,7 @@ class ZipExtractionService:
         except Exception as e:
             shutil.rmtree(extract_path, ignore_errors=True)
             raise Exception(f"Extraction failed: {str(e)}")
+        
     def cleanup_old_extracts(self, max_age_hours: int = 24):
         """
         FUNCTION: cleanup_old_extracts

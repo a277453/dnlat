@@ -142,26 +142,26 @@ RAISES:
         """
         FUNCTION: update_session
 
-DESCRIPTION:
-    Updates session data. Supports updating a single key/value pair or
-    merging an entire dictionary of updates.
+        DESCRIPTION:
+            Updates session data. Supports updating a single key/value pair or
+            merging an entire dictionary of updates.
 
-USAGE:
-    service.update_session("abc", key="selected_type", value="ui_journals")
-    OR
-    service.update_session("abc", data={"processed_data": {...}})
+        USAGE:
+            service.update_session("abc", key="selected_type", value="ui_journals")
+            OR
+            service.update_session("abc", data={"processed_data": {...}})
 
-PARAMETERS:
-    session_id (str) : Session identifier.
-    key (str?)       : A single key to update.
-    value (Any?)     : Value to set for the key.
-    data (dict?)     : Dictionary of multiple keys/values to update.
+        PARAMETERS:
+            session_id (str) : Session identifier.
+            key (str?)       : A single key to update.
+            value (Any?)     : Value to set for the key.
+            data (dict?)     : Dictionary of multiple keys/values to update.
 
-RETURNS:
-    bool : True if updated, False if session does not exist.
+        RETURNS:
+            bool : True if updated, False if session does not exist.
 
-RAISES:
-    None
+        RAISES:
+            None
         """
         if session_id in self._sessions:
             if data:
@@ -169,8 +169,8 @@ RAISES:
                 logger.debug(f"Session {session_id} updated with data: {data}")  
             elif key is not None:
                 self._sessions[session_id][key] = value
-                logger.debug(f"Session {session_id} updated key '{key}' with value: {value}")  
-            logger.info(f"Session {session_id} updated successfully")  
+                #logger.debug(f"Session {session_id} updated key '{key}' with value: {value}")  
+            logger.info(f"Session {session_id} updated successfully with {key}")  
             return True
         logger.error(f"Failed to update session {session_id}: session does not exist")  
         return False

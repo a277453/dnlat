@@ -338,7 +338,7 @@ def show_register_page():
 
     with col2:
         st.markdown(
-            "<h2 style='text-align:center; margin-top:100px;'>📝 DN Diagnostics Register</h2>",
+            "<h2 style='text-align:center; margin-top:100px;'> DN Diagnostics Register</h2>",
             unsafe_allow_html=True
         )
         st.markdown("<br>", unsafe_allow_html=True)
@@ -438,7 +438,7 @@ def show_register_page():
         # ---------------------------
         # BACK TO LOGIN
         # ---------------------------
-        if st.button("⬅️ Back to Login", use_container_width=True):
+        if st.button(" Back to Login", use_container_width=True):
             st.session_state.page = "login"
             st.rerun()
 
@@ -1422,7 +1422,7 @@ def render_registry_compare():
                         response = requests.post(
                             f"{API_BASE_URL}/process-zip", 
                             files=files, 
-                            timeout=120
+                            timeout=300   # change time (increased time)
                         )
                         
                         if response.status_code == 200:
@@ -3765,7 +3765,7 @@ RAISES:
                 else:
                     st.warning("  Could not filter sources by TRC trace files")
         except Exception as e:
-            print(f"  Error filtering sources: {e}")
+            st.error(f"  Error filtering sources: {e}")
         
         # Source file selection with unique display
         st.markdown("####   Select Source File")
@@ -4021,7 +4021,7 @@ RAISES:
                                 
                                 if selected_row['Counter Summary'] == 'View Counters':
                                     st.markdown("---")
-                                    st.markdown(f"#### 📊 Counters for Transaction: {selected_row['Transaction ID']}")
+                                    st.markdown(f"####  Counters for Transaction: {selected_row['Transaction ID']}")
                                     st.caption(f"Time: {selected_row['Date Timestamp']}")
                                     
 
@@ -4066,6 +4066,7 @@ RAISES:
                                                     if time_diff <= margin_seconds:
                                                         for counter in block.get('data', []):
                                                             if counter.get('Record_Type') == 'Logical':
+                                                                
                                                                 logical_counters.append({
                                                                     'Name (PName)': counter.get('UnitName', ''),
                                                                     'Value (Val)': counter.get('Val', ''),
@@ -4182,7 +4183,7 @@ RAISES:
                     st.error(f"  {error_detail}")
                     
             except requests.exceptions.Timeout:
-                st.error("⏱  Request timeout. Please try again.")
+                st.error("  Request timeout. Please try again.")
             except requests.exceptions.ConnectionError:
                 st.error("  Connection error. Ensure the API server is running.")
             except Exception as e:

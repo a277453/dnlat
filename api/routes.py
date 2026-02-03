@@ -2158,7 +2158,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                 unique_screens = processor.get_screen_flow(start_time, end_time)
                                 
                                 if not unique_screens or len(unique_screens) == 0:
-                                    print(" No screens found in time range")
+                                    logger.info(" No screens found in time range")
                                     continue
                                 
                                 # print(f" Found {len(unique_screens)} unique screens")
@@ -2423,8 +2423,8 @@ RAISES:
     try:
         logger.info(f" Starting consolidated flow generation for type '{transaction_type}' from source '{source_file}'")
         logger.debug(f"Session ID received: {session_id}")
-        
-        print(f" Generating consolidated flow for {transaction_type} from {source_file}")
+    
+        logger.info(f" Generating consolidated flow for {transaction_type} from {source_file}")
         
         # Check session
         if not session_service.session_exists(session_id):
@@ -2463,8 +2463,8 @@ RAISES:
                 detail=f"No transactions of type '{transaction_type}' found in source '{source_file}'"
             )
         
-        logger.info(f" {len(filtered_df)} transactions matched filters")
-        print(f" Found {len(filtered_df)} transactions")
+        
+        logger.info(f" Found {len(filtered_df)} transactions")
         
         # Get UI journals
         file_categories = session_data.get('file_categories', {})
@@ -2485,7 +2485,6 @@ RAISES:
             )
         
         logger.info(f"Matched UI journal: {matching_ui_journal}")
-        print(f" Found matching UI journal: {matching_ui_journal}")
         
         # Parse UI journal
         logger.info("Parsing UI journal file")
@@ -2499,7 +2498,6 @@ RAISES:
             )
         
         logger.info(f"UI journal parsed successfully with {len(ui_df)} events")
-        print(f" Parsed UI journal with {len(ui_df)} events")
         
         # Create processor
         logger.debug("Creating UIJournalProcessor instance")
@@ -3215,6 +3213,11 @@ def parse_counter_data_from_trc(log_lines: list) -> list:
                     # Check if it's a numeric field
                     if value.replace('-', '').isdigit():
                         counter_data[field_name] = value
+
+                        if field_name == 'Val' and value.isdigit():
+                            counter_data[field_name] = str(int(value) // 100)
+                        else:
+                            counter_data[field_name] = value
                         field_idx += 1
                     else:
                         # Stop consuming numeric fields if we hit a non-numeric
@@ -3350,7 +3353,7 @@ def extract_counter_blocks(trc_file_path: str) -> list:
             i += 1
     
     except Exception as e:
-        print(f"Error extracting counter blocks: {e}")
+        logger.error(f"Error extracting counter blocks: {e}")
         import traceback
         traceback.print_exc()
     
@@ -3843,3 +3846,4 @@ def get_counter_column_descriptions():
         'HWsens': 'HWsens',
         'Record_Type': 'Record Type'
     }
+    

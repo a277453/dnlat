@@ -172,34 +172,10 @@ class ZipExtractionService:
                         
                         try:
                             logger.debug(f"NKS Extracting: {member}")
-                            #normalized_member = zip_path / member
                             
-                            # Read file data from ZIP
-                            #file_data = zf.read(normalized_member)
-                            #file_data = zf.read(member)
                             file_data = zf.read(member)
-                            # if member.count('CUSTOMER/20250311.jrn') > 0:
-                            #     logger.debug("Found test file CUSTOMER/20250311.jrn in nested ZIP")
-                            #     member = member.replace('/', '\\')
-                            #     logger.debug(f"NKS Extracting 2: {member}")
-                            #     file_data = zf.read(member)
-                            # else:
-                            #     member = member.replace('/', '\\')
-                            #     logger.debug(f"NKS Extracting 3: {member}")
-                            #     file_data = zf.read(member)
-                            #     continue
-                            
-                            #     file_data = f.read()
-
-                            
-                            
-                            # Normalize path (convert backslashes to forward slashes)
-                            #normalized_member = member.replace('\\', '/')
-                            #normalized_member = member
-                            logger.debug(f">>sp Extracting: {member}")
                             
                             # Create target path
-                            #target_path = nested_extract_dir / normalized_member
                             target_path = nested_extract_dir / member
                             
                             # Create parent directories
@@ -210,15 +186,15 @@ class ZipExtractionService:
                                 f.write(file_data)
                             
                             extracted_count += 1
-                            logger.debug(f"  ✓ Successfully extracted: {member}")
+                            logger.debug(f"  Successfully extracted: {member}")
                             
                         except KeyError as e:
-                            logger.error(f"  ✗ File not found in ZIP: {member}")
+                            logger.error(f"  File not found in ZIP: {member}")
                             failed_count += 1
                             continue
                             
                         except Exception as e:
-                            logger.error(f"  ✗ Failed to extract {member}: {e}", exc_info=True)
+                            logger.error(f"  Failed to extract {member}: {e}", exc_info=True)
                             failed_count += 1
                             continue
                     
@@ -236,7 +212,7 @@ class ZipExtractionService:
 
                 # IMPORTANT: Do NOT delete nested ZIP file
                 # User wants to keep nested ZIPs after extraction
-                logger.info(f"✓ Keeping nested ZIP file: {zip_path.name}")
+                logger.info(f" Keeping nested ZIP file: {zip_path.name}")
                 
             except zipfile.BadZipFile as e:
                 logger.error(f"BadZipFile error for nested ZIP {zip_path.name}: {e}")

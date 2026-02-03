@@ -80,12 +80,11 @@ class CategorizationService:
         if exclude_files is None:
             exclude_files = set()
 
-        print(f"\n[INFO] Starting file categorization in: {extract_path}")
-        print(f"[INFO] Excluding {len(exclude_files)} ACU files from disk scan")
+        logger.info(f"\n Starting file categorization in: {extract_path}")
+        logger.info(f" Excluding {len(exclude_files)} ACU files from disk scan")
 
         if file_categories.get('acu_files'):
-            print(f"[OK] Pre-loaded {len(file_categories['acu_files'])} ACU files from memory extraction")
-            logger.info("Pre-loaded ACU files from memory extraction")
+            logger.info(f"Pre-loaded {len(file_categories['acu_files'])} ACU files from memory extraction")
 
         for file_path in extract_path.rglob("*"):
             if not file_path.is_file():
@@ -105,14 +104,13 @@ class CategorizationService:
                 file_categories[category].append(str(file_path))
                 processed_files.add(str(file_path))
                 logger.debug(f"File categorized: {file_path.name} -> {category}")
-                print(f"[OK] [{category}] {file_path.name}")
+
             else:
                 file_categories['unidentified'].append(str(file_path))
                 processed_files.add(str(file_path))
                 logger.debug(f"File could not be identified: {file_path.name}")
 
         logger.info("Categorization Summary:")
-        print("\n[INFO] Categorization Summary:")
 
         for category, files in file_categories.items():
             if files:
@@ -120,14 +118,12 @@ class CategorizationService:
                     xml_count = sum(1 for f in files if f.lower().endswith('.xml'))
                     xsd_count = sum(1 for f in files if f.lower().endswith('.xsd'))
                     logger.info(f"{category}: {xml_count} xml / {xsd_count} xsd")
-                    print(f"   {category}: {xml_count} xml / {xsd_count} xsd")
+                    
                 else:
                     logger.info(f"{category}: {len(files)} files")
-                    print(f"   {category}: {len(files)} files")
 
         total = sum(len(v) for v in file_categories.values())
         logger.info(f"Total files categorized: {total}")
-        print(f"\n[OK] Total: {total} files categorized\n")
 
         return file_categories
 

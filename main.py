@@ -34,9 +34,9 @@ async def lifespan(app: FastAPI):
     logger.info("DN Diagnostics and Analysis Platform API")
     logger.info("Version: 1.0.0")
     logger.info("=" * 60)
-    logger.info("✓ API started successfully")
-    logger.info("✓ Registry endpoints enabled")
-    logger.info("✓ Ready to accept requests")
+    logger.info(" API started successfully")
+    logger.info(" Registry endpoints enabled")
+    logger.info(" Ready to accept requests")
     logger.info("=" * 60)
 
     yield  # Application runs after this

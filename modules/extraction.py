@@ -210,15 +210,15 @@ class ZipExtractionService:
                                 f.write(file_data)
                             
                             extracted_count += 1
-                            logger.debug(f"  ✓ Successfully extracted: {member}")
+                            logger.debug(f"  Successfully extracted: {member}")
                             
                         except KeyError as e:
-                            logger.error(f"  ✗ File not found in ZIP: {member}")
+                            logger.error(f"  File not found in ZIP: {member}")
                             failed_count += 1
                             continue
                             
                         except Exception as e:
-                            logger.error(f"  ✗ Failed to extract {member}: {e}", exc_info=True)
+                            logger.error(f"  Failed to extract {member}: {e}", exc_info=True)
                             failed_count += 1
                             continue
                     
@@ -236,7 +236,7 @@ class ZipExtractionService:
 
                 # IMPORTANT: Do NOT delete nested ZIP file
                 # User wants to keep nested ZIPs after extraction
-                logger.info(f"✓ Keeping nested ZIP file: {zip_path.name}")
+                logger.info(f" Keeping nested ZIP file: {zip_path.name}")
                 
             except zipfile.BadZipFile as e:
                 logger.error(f"BadZipFile error for nested ZIP {zip_path.name}: {e}")

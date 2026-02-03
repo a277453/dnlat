@@ -2,6 +2,7 @@ import xmltodict  # type: ignore
 import re
 from pathlib import Path
 from typing import Optional
+from modules.logging_config import logger
 
 def xml_to_dict(xml_file):
     """
@@ -168,30 +169,30 @@ def debug_print_config(xml_file):
     try:
         real_name, start_tids, end_tids, chain_tids = xml_to_dict(xml_file)
         
-        print("=" * 60)
-        print("XML Configuration Debug Info")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("XML Configuration Debug Info")
+        logger.info("=" * 60)
         
-        print(f"\nTransaction Types ({len(real_name)}):")
+        logger.info(f"\nTransaction Types ({len(real_name)}):")
         for key, value in real_name.items():
-            print(f"  {key} → {value}")
+            logger.info(f"  {key} → {value}")
         
-        print(f"\nStart Transaction TIDs ({len(start_tids)}):")
-        print(f"  {', '.join(start_tids)}")
+        logger.info(f"\nStart Transaction TIDs ({len(start_tids)}):")
+        logger.info(f"  {', '.join(start_tids)}")
         
-        print(f"\nEnd Transaction TIDs ({len(end_tids)}):")
-        print(f"  {', '.join(end_tids)}")
+        logger.info(f"\nEnd Transaction TIDs ({len(end_tids)}):")
+        logger.info(f"  {', '.join(end_tids)}")
         
-        print(f"\nChain Transaction TIDs ({len(chain_tids)}):")
+        logger.info(f"\nChain Transaction TIDs ({len(chain_tids)}):")
         if chain_tids:
-            print(f"  {', '.join(chain_tids)}")
+            logger.info(f"  {', '.join(chain_tids)}")
         else:
-            print("  None configured")
+            logger.info("  None configured")
         
-        print("\n" + "=" * 60)
+        logger.info("\n" + "=" * 60)
         
     except Exception as e:
-        print(f"Error debugging configuration: {e}")
+        logger.error(f"Error debugging configuration: {e}")
 
 
 # Optional: Function to update XML configuration programmatically
@@ -246,7 +247,7 @@ def add_chain_tid_to_xml(xml_file, new_chain_tid, backup=True):
         return True
         
     except Exception as e:
-        print(f"Error updating XML: {e}")
+        logger.error(f"Error updating XML: {e}")
         return False
 
 
@@ -269,7 +270,7 @@ def try_read_file(filepath: str) -> Optional[str]:
             content = f.read().decode('utf-8', errors='ignore')
             return content
     except Exception as e:
-        print(f"Error reading file: {e}")
+        logger.error(f"Error reading file: {e}")
         return None
 
 def detect_ui_journal_pattern(lines: list) -> int:
@@ -550,15 +551,15 @@ if __name__ == "__main__":
         # Validate configuration
         validation = validate_xml_config(xml_file)
         if validation['valid']:
-            print("\n✅ XML Configuration is valid!")
+            logger.info("\n XML Configuration is valid!")
             if validation['warnings']:
-                print("⚠️  Warnings:")
+                logger.warning("  Warnings:")
                 for warning in validation['warnings']:
-                    print(f"  - {warning}")
+                    logger.warning(f"  - {warning}")
         else:
-            print("\n❌ XML Configuration has issues:")
+            logger.warning("\n XML Configuration has issues:")
             for missing in validation['missing_sections']:
-                print(f"  - Missing: {missing}")
+                logger.warning(f"  - Missing: {missing}")
                 
     except Exception as e:
-        print(f"Error testing configuration: {e}")
+        logger.error(f"Error testing configuration: {e}")

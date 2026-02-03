@@ -1,7 +1,7 @@
 # admin_setup.py
 import psycopg2
 import hashlib
-from modules.logging_config import logger
+from modules.streamlit_logger import logger as frontend_logger
 
 DB_CONFIG = {
     "host": "localhost",
@@ -14,10 +14,10 @@ DB_CONFIG = {
 def get_db_connection():
     try:
         conn = psycopg2.connect(**DB_CONFIG)
-        logger.info("Database connection established successfully")
+        frontend_logger.info("Database connection established successfully")
         return conn
     except Exception as e:
-        logger.error("Database connection failed")
+        frontend_logger.error("Database connection failed")
         return None
 
 def hash_password(password: str) -> str:
@@ -25,10 +25,10 @@ def hash_password(password: str) -> str:
 
 def initialize_admin_table():
     """Initializes the admin table and inserts default admin user if table is empty."""
-    logger.info(" initializing admin table")
+    frontend_logger.info(" initializing admin table")
     conn = get_db_connection()
     if not conn:
-        logger.error("Admin table initialization aborted due to DB connection failure")
+        frontend_logger.error("Admin table initialization aborted due to DB connection failure")
         return
 
     try:
@@ -56,24 +56,23 @@ def initialize_admin_table():
                 ("Admin", "Admin User", "dnadmin", "00000001", "ADMIN", True),
             ]
 
-            for email, name, password, emp_code, role, is_active in default_users:
+            for username, name, password, emp_code, role, is_active in default_users:
                 cursor.execute("""
                     INSERT INTO Users (username, name, password_hash, employee_code, role, is_active)
                     VALUES (%s, %s, %s, %s, %s, %s)
-                """, (email, name, hash_password(password), emp_code, role, is_active))
-            logger.info(" default user created with password")
+                """, (username, name, hash_password(password), emp_code, role, is_active))
+            frontend_logger.info(" default user created successfully")
         else:
-            logger.info(" users already exist, skipping insert")
+            frontend_logger.info(" users already exist, skipping insert")
 
         conn.commit()
         
     except Exception as e:
-        logger.error("Error occurred while initializing admin table")
+        frontend_logger.exception("Error occurred while initializing admin table")
         conn.rollback()
     finally:
-        if conn:
-            conn.close()
-            logger.info("Database connection closed")
+        conn.close()
+            
         
 if __name__ == "__main__":
     initialize_admin_table()

@@ -26,3 +26,7 @@ how? -
 template name:  Remove the model name from Analysis header                          (fixed)
 what ? - Redudant data is shown like model name which is not to be exposed. 
 how? - Instead replace it with time taken for analysis
+
+template name:  replace val division which is hardcoded to 100 by actual currency decimal values from iso4217 library
+what ? -           in counter function( replace val division)
+how? -     import currency and currency_table from iso4217 package, and use the dynamic currency decimal as divider. E.g. JPY 1000 => 1000, but USD 1000 => USD 10.00

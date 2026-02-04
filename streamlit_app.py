@@ -43,165 +43,631 @@ st.set_page_config(
 )
 
 # ============================================
-# CSS STYLES
+# THEME INITIALIZATION
 # ============================================
-#new change(hide icon )
-st.markdown("""
+# Initialize theme in session state
+if 'theme' not in st.session_state:
+    st.session_state.theme = 'dark'  # Default to dark theme
+
+# ============================================
+# THEME TOGGLE FUNCTION
+# ============================================
+def toggle_theme():
+    """Toggle between light and dark theme"""
+    st.session_state.theme = 'light' if st.session_state.theme == 'dark' else 'dark'
+
+# ============================================
+# THEME-SPECIFIC STYLES
+# ============================================
+def get_theme_styles():
+    """Return CSS styles based on current theme"""
+    
+    if st.session_state.theme == 'dark':
+        return """
+        <style>
+        /* Completely hide all Streamlit branding and deploy button */
+        #MainMenu {visibility: hidden !important;}
+        footer {visibility: hidden !important;}
+        header {visibility: hidden !important;}
+        
+        [data-testid="stToolbar"] {
+            display: none !important;
+        }
+        
+        [data-testid="stDecoration"] {
+            display: none !important;
+        }
+        
+        button[kind="header"] {
+            display: none !important;
+        }
+        
+        .css-1dp5vir {
+            display: none !important;
+        }
+        
+        /* Theme Toggle Button Container */
+        .theme-toggle-container {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            z-index: 999999;
+        }
+        
+        /* Global Styles - DARK THEME */
+        .main {
+            background-color: #0a0a0a;
+            color: #e0e0e0;
+        }
+        
+        .block-container {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+            max-width: 1400px;
+        }
+        
+        /* Sidebar Styles */
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #1a1a1a 0%, #0f0f0f 100%);
+            border-right: 1px solid #2a2a2a;
+        }
+        
+        /* Typography */
+        h1 {
+            color: #ffffff !important;
+            font-size: 2.5rem !important;
+            font-weight: 700 !important;
+            margin-bottom: 0.5rem !important;
+        }
+        
+        h2 {
+            color: #ffffff !important;
+            font-size: 1.75rem !important;
+            font-weight: 600 !important;
+            margin: 2rem 0 1rem 0 !important;
+            border-bottom: 2px solid #2563eb;
+            padding-bottom: 0.5rem;
+        }
+        
+        h3 {
+            color: #e0e0e0 !important;
+            font-size: 1.25rem !important;
+            font-weight: 600 !important;
+        }
+        
+        /* Button Styles */
+        .stButton > button {
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            color: #ffffff;
+            border: none;
+            padding: 0.75rem 2rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
+            width: 100%;
+            height: 48px;
+        }
+        
+        .stButton > button:hover {
+            background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+            box-shadow: 0 6px 12px rgba(37, 99, 235, 0.35);
+            transform: translateY(-1px);
+        }
+        
+        /* File Uploader */
+        [data-testid="stFileUploader"] {
+            background-color: #1a1a1a;
+            border: 2px dashed #404040;
+            border-radius: 12px;
+            padding: 2rem;
+            transition: all 0.3s ease;
+        }
+        
+        [data-testid="stFileUploader"]:hover {
+            border-color: #2563eb;
+            background-color: #1f1f1f;
+        }
+        
+        /* Select Box */
+        .stSelectbox > div > div {
+            background-color: #1a1a1a;
+            border: 1px solid #404040;
+            border-radius: 8px;
+            color: #e0e0e0;
+            height: 48px;
+        }
+        
+        /* Text Input */
+        .stTextInput > div > div > input {
+            background-color: #1a1a1a;
+            border: 1px solid #404040;
+            border-radius: 8px;
+            color: #e0e0e0;
+            height: 48px;
+            padding: 0 1rem;
+        }
+        
+        /* Metric Cards */
+        [data-testid="stMetricValue"] {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: #ffffff;
+        }
+        
+        [data-testid="stMetricLabel"] {
+            font-size: 0.875rem;
+            color: #9ca3af;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+        }
+        
+        /* Data Tables */
+        .dataframe {
+            border: 1px solid #2a2a2a !important;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .dataframe thead tr th {
+            background-color: #1a1a1a !important;
+            color: #ffffff !important;
+            font-weight: 600 !important;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            padding: 1rem !important;
+        }
+        
+        .dataframe tbody tr:hover {
+            background-color: #1f1f1f !important;
+        }
+        </style>
+        """
+    else:  # Light theme
+        return """
+        <style>
+        /* Completely hide all Streamlit branding and deploy button */
+        #MainMenu {visibility: hidden !important;}
+        footer {visibility: hidden !important;}
+        header {visibility: hidden !important;}
+        
+        [data-testid="stToolbar"] {
+            display: none !important;
+        }
+        
+        [data-testid="stDecoration"] {
+            display: none !important;
+        }
+        
+        button[kind="header"] {
+            display: none !important;
+        }
+        
+        .css-1dp5vir {
+            display: none !important;
+        }
+        
+        /* Theme Toggle Button Container */
+        .theme-toggle-container {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            z-index: 999999;
+        }
+        
+        /* Global Styles - LIGHT THEME */
+        .stApp {
+            background-color: #f8f9fa !important;
+        }
+        
+        .main {
+            background-color: #f8f9fa !important;
+            color: #1f2937 !important;
+        }
+        
+        .block-container {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+            max-width: 1400px;
+            background-color: #f8f9fa !important;
+        }
+        
+        /* Sidebar Styles */
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #ffffff 0%, #f3f4f6 100%) !important;
+            border-right: 1px solid #e5e7eb !important;
+        }
+        
+        [data-testid="stSidebar"] > div:first-child {
+            background: linear-gradient(180deg, #ffffff 0%, #f3f4f6 100%) !important;
+        }
+        
+        /* Typography */
+        h1 {
+            color: #111827 !important;
+            font-size: 2.5rem !important;
+            font-weight: 700 !important;
+            margin-bottom: 0.5rem !important;
+        }
+        
+        h2 {
+            color: #111827 !important;
+            font-size: 1.75rem !important;
+            font-weight: 600 !important;
+            margin: 2rem 0 1rem 0 !important;
+            border-bottom: 2px solid #2563eb;
+            padding-bottom: 0.5rem;
+        }
+        
+        h3 {
+            color: #374151 !important;
+            font-size: 1.25rem !important;
+            font-weight: 600 !important;
+        }
+        
+        /* All text elements */
+        p, span, div, label {
+            color: #374151 !important;
+        }
+        
+        /* Input labels */
+        .stTextInput > label,
+        [data-testid="stWidgetLabel"] {
+            color: #111827 !important;
+            font-weight: 500 !important;
+            font-size: 0.95rem !important;
+        }
+        
+        /* Form labels */
+        label {
+            color: #111827 !important;
+        }
+        
+        [data-testid="stMarkdownContainer"] {
+            color: #374151 !important;
+        }
+        
+        [data-testid="stMarkdownContainer"] p {
+            color: #374151 !important;
+        }
+        
+        /* Button Styles */
+        .stButton > button {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+            color: #ffffff !important;
+            border: none !important;
+            padding: 0.75rem 2rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+            width: 100%;
+            height: 48px;
+        }
+        
+        .stButton > button:hover {
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+            box-shadow: 0 6px 16px rgba(37, 99, 235, 0.5);
+            transform: translateY(-2px);
+        }
+        
+        /* Form submit button styling */
+        .stButton > button[kind="primary"],
+        .stButton > button[type="submit"] {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+            color: #ffffff !important;
+            font-weight: 700 !important;
+        }
+        
+        /* Form Elements */
+        [data-baseweb="base-input"] {
+            background-color: #ffffff !important;
+        }
+        
+        /* File Uploader */
+        [data-testid="stFileUploader"] {
+            background-color: #ffffff !important;
+            border: 2px dashed #d1d5db !important;
+            border-radius: 12px;
+            padding: 2rem;
+            transition: all 0.3s ease;
+        }
+        
+        [data-testid="stFileUploader"]:hover {
+            border-color: #2563eb !important;
+            background-color: #f9fafb !important;
+        }
+        
+        [data-testid="stFileUploader"] section {
+            background-color: #ffffff !important;
+        }
+        
+        /* Select Box */
+        .stSelectbox > div > div {
+            background-color: #ffffff !important;
+            border: 1px solid #d1d5db !important;
+            border-radius: 8px;
+            color: #1f2937 !important;
+            height: 48px;
+        }
+        
+        .stSelectbox [data-baseweb="select"] {
+            background-color: #ffffff !important;
+        }
+        
+        .stSelectbox [data-baseweb="select"] > div {
+            background-color: #ffffff !important;
+            border-color: #d1d5db !important;
+        }
+        
+        /* Text Input */
+        .stTextInput > div > div > input {
+            background-color: #ffffff !important;
+            border: 1px solid #d1d5db !important;
+            border-radius: 8px;
+            color: #1f2937 !important;
+            height: 48px;
+            padding: 0 1rem;
+        }
+        
+        .stTextInput input {
+            background-color: #ffffff !important;
+            color: #1f2937 !important;
+            border: 1px solid #d1d5db !important;
+        }
+        
+        /* Placeholder text */
+        .stTextInput input::placeholder {
+            color: #6b7280 !important;
+            opacity: 1 !important;
+        }
+        
+        .stTextInput input::-webkit-input-placeholder {
+            color: #6b7280 !important;
+            opacity: 1 !important;
+        }
+        
+        .stTextInput input::-moz-placeholder {
+            color: #6b7280 !important;
+            opacity: 1 !important;
+        }
+        
+        /* Password Input */
+        [data-testid="stTextInput"] input[type="password"] {
+            background-color: #ffffff !important;
+            color: #1f2937 !important;
+            border: 1px solid #d1d5db !important;
+        }
+        
+        [data-testid="stTextInput"] input[type="password"]::placeholder {
+            color: #6b7280 !important;
+            opacity: 1 !important;
+        }
+        
+        /* Password visibility toggle button (eye icon) */
+        button[data-testid="baseButton-header"] {
+            background-color: #f3f4f6 !important;
+            color: #1f2937 !important;
+            border: 1px solid #d1d5db !important;
+        }
+        
+        button[data-testid="baseButton-header"]:hover {
+            background-color: #e5e7eb !important;
+            border-color: #9ca3af !important;
+        }
+        
+        button[data-testid="baseButton-header"] svg {
+            color: #374151 !important;
+            fill: #374151 !important;
+        }
+        
+        /* Password input container */
+        [data-testid="stTextInput"] button {
+            background-color: #f3f4f6 !important;
+            border-color: #d1d5db !important;
+        }
+        
+        [data-testid="stTextInput"] button svg {
+            color: #374151 !important;
+        }
+        
+        [data-testid="stTextInput"] button:hover {
+            background-color: #e5e7eb !important;
+        }
+        
+        /* Metric Cards */
+        [data-testid="stMetricValue"] {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: #111827 !important;
+        }
+        
+        [data-testid="stMetricLabel"] {
+            font-size: 0.875rem;
+            color: #6b7280 !important;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+        }
+        
+        /* Metric containers */
+        [data-testid="metric-container"] {
+            background-color: #ffffff !important;
+            border: 1px solid #e5e7eb !important;
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        
+        /* Data Tables */
+        .dataframe {
+            border: 1px solid #e5e7eb !important;
+            border-radius: 8px;
+            overflow: hidden;
+            background-color: #ffffff !important;
+        }
+        
+        .dataframe thead tr th {
+            background-color: #f3f4f6 !important;
+            color: #111827 !important;
+            font-weight: 600 !important;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            padding: 1rem !important;
+        }
+        
+        .dataframe tbody tr {
+            background-color: #ffffff !important;
+        }
+        
+        .dataframe tbody tr:hover {
+            background-color: #f9fafb !important;
+        }
+        
+        .dataframe tbody tr td {
+            color: #374151 !important;
+        }
+        
+        /* Expander */
+        [data-testid="stExpander"] {
+            background-color: #ffffff !important;
+            border: 1px solid #e5e7eb !important;
+            border-radius: 8px;
+        }
+        
+        /* Tabs */
+        .stTabs [data-baseweb="tab-list"] {
+            background-color: #f3f4f6 !important;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            background-color: #f3f4f6 !important;
+            color: #374151 !important;
+        }
+        
+        .stTabs [aria-selected="true"] {
+            background-color: #ffffff !important;
+            color: #2563eb !important;
+        }
+        
+        /* Radio buttons */
+        .stRadio > label {
+            color: #374151 !important;
+        }
+        
+        .stRadio [data-testid="stMarkdownContainer"] {
+            color: #374151 !important;
+        }
+        
+        /* Info/Warning/Error boxes */
+        .stAlert {
+            background-color: #ffffff !important;
+            border: 1px solid #e5e7eb !important;
+            color: #374151 !important;
+        }
+        
+        /* Spinner */
+        .stSpinner > div {
+            border-top-color: #2563eb !important;
+        }
+        
+        /* Code blocks */
+        .stCodeBlock {
+            background-color: #f3f4f6 !important;
+        }
+        
+        code {
+            background-color: #f3f4f6 !important;
+            color: #1f2937 !important;
+        }
+        
+        /* Container backgrounds */
+        [data-testid="stVerticalBlock"] > div {
+            background-color: transparent !important;
+        }
+        
+        [data-testid="column"] {
+            background-color: transparent !important;
+        }
+        
+        /* Form container */
+        [data-testid="stForm"] {
+            background-color: #ffffff !important;
+            border: 1px solid #e5e7eb !important;
+            border-radius: 12px;
+            padding: 2rem;
+        }
+        
+        /* Caption text */
+        .css-16huue1, .css-1om1ktf {
+            color: #6b7280 !important;
+        }
+        </style>
+        """
+
+# Apply theme styles
+st.markdown(get_theme_styles(), unsafe_allow_html=True)
+
+# ============================================
+# THEME TOGGLE BUTTON UI
+# ============================================
+# Create single toggle switch button
+col1, col2 = st.columns([10, 1])
+with col2:
+    # Determine current state
+    is_light = st.session_state.theme == 'light'
+    toggle_bg = "#2196F3" if is_light else "#555555"
+    circle_left = "33px" if is_light else "3px"
+    
+    # Single toggle switch with custom styling
+    st.markdown(f"""
     <style>
-    /* Completely hide all Streamlit branding and deploy button */
-    #MainMenu {visibility: hidden !important;}
-    footer {visibility: hidden !important;}
-    header {visibility: hidden !important;}
+    /* Style the single toggle button */
+    .stButton[data-baseweb="button"] button {{
+        background: {toggle_bg} !important;
+        border: none !important;
+        border-radius: 15px !important;
+        width: 60px !important;
+        height: 30px !important;
+        padding: 0 !important;
+        position: relative !important;
+        cursor: pointer !important;
+        transition: background 0.3s ease !important;
+    }}
     
-    [data-testid="stToolbar"] {
+    .stButton[data-baseweb="button"] button:hover {{
+        background: {toggle_bg} !important;
+        opacity: 0.9 !important;
+        box-shadow: none !important;
+    }}
+    
+    /* White circle slider */
+    .stButton[data-baseweb="button"] button::before {{
+        content: '' !important;
+        position: absolute !important;
+        width: 24px !important;
+        height: 24px !important;
+        background: white !important;
+        border-radius: 50% !important;
+        top: 3px !important;
+        left: {circle_left} !important;
+        transition: left 0.3s ease !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.2) !important;
+    }}
+    
+    /* Hide button text */
+    .stButton[data-baseweb="button"] button div[data-testid="stMarkdownContainer"] {{
         display: none !important;
-    }
-    
-    [data-testid="stDecoration"] {
-        display: none !important;
-    }
-    
-    button[kind="header"] {
-        display: none !important;
-    }
-    
-    .css-1dp5vir {
-        display: none !important;
-    }
-    
-    /* Your existing styles below... */        
-    #------------------------------------------------
-    /* Global Styles */
-    .main {
-        background-color: #0a0a0a;
-        color: #e0e0e0;
-    }
-    
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-        max-width: 1400px;
-    }
-    
-    /* Sidebar Styles */
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1a1a 0%, #0f0f0f 100%);
-        border-right: 1px solid #2a2a2a;
-    }
-    
-    /* Typography */
-    h1 {
-        color: #ffffff !important;
-        font-size: 2.5rem !important;
-        font-weight: 700 !important;
-        margin-bottom: 0.5rem !important;
-    }
-    
-    h2 {
-        color: #ffffff !important;
-        font-size: 1.75rem !important;
-        font-weight: 600 !important;
-        margin: 2rem 0 1rem 0 !important;
-        border-bottom: 2px solid #2563eb;
-        padding-bottom: 0.5rem;
-    }
-    
-    h3 {
-        color: #e0e0e0 !important;
-        font-size: 1.25rem !important;
-        font-weight: 600 !important;
-    }
-    
-    /* Button Styles */
-    .stButton > button {
-        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-        color: #ffffff;
-        border: none;
-        padding: 0.75rem 2rem;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.95rem;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
-        width: 100%;
-        height: 48px;
-    }
-    
-    .stButton > button:hover {
-        background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
-        box-shadow: 0 6px 12px rgba(37, 99, 235, 0.35);
-        transform: translateY(-1px);
-    }
-    
-    /* File Uploader */
-    [data-testid="stFileUploader"] {
-        background-color: #1a1a1a;
-        border: 2px dashed #404040;
-        border-radius: 12px;
-        padding: 2rem;
-        transition: all 0.3s ease;
-    }
-    
-    [data-testid="stFileUploader"]:hover {
-        border-color: #2563eb;
-        background-color: #1f1f1f;
-    }
-    
-    /* Select Box */
-    .stSelectbox > div > div {
-        background-color: #1a1a1a;
-        border: 1px solid #404040;
-        border-radius: 8px;
-        color: #e0e0e0;
-        height: 48px;
-    }
-    
-    /* Text Input */
-    .stTextInput > div > div > input {
-        background-color: #1a1a1a;
-        border: 1px solid #404040;
-        border-radius: 8px;
-        color: #e0e0e0;
-        height: 48px;
-        padding: 0 1rem;
-    }
-    
-    /* Metric Cards */
-    [data-testid="stMetricValue"] {
-        font-size: 1.75rem;
-        font-weight: 700;
-        color: #ffffff;
-    }
-    
-    [data-testid="stMetricLabel"] {
-        font-size: 0.875rem;
-        color: #9ca3af;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        font-weight: 500;
-    }
-    
-    /* Data Tables */
-    .dataframe {
-        border: 1px solid #2a2a2a !important;
-        border-radius: 8px;
-        overflow: hidden;
-    }
-    
-    .dataframe thead tr th {
-        background-color: #1a1a1a !important;
-        color: #ffffff !important;
-        font-weight: 600 !important;
-        text-transform: uppercase;
-        font-size: 0.75rem;
-        padding: 1rem !important;
-    }
-    
-    .dataframe tbody tr:hover {
-        background-color: #1f1f1f !important;
-    }
+    }}
     </style>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
+    
+    # Single button that acts as toggle
+    if st.button("", key="theme_toggle", help="Dark/Light"):
+        toggle_theme()
+        st.rerun()
 
 # ============================================
 # GLOBAL VARIABLES
@@ -264,8 +730,6 @@ def show_login_page():
                     else:
                         st.error("  Invalid username or password")
 
-
-
         # ---------------------------
         # REGISTER BUTTON (NEW)
         # ---------------------------
@@ -320,7 +784,7 @@ def is_valid_password(password: str) -> bool:
     if not any(c.islower() for c in password):
         return False
 
-    # 🔹 MINIMUM 2 DIGITS CHECK
+    #  MINIMUM 2 DIGITS CHECK
     if sum(c.isdigit() for c in password) < 2:
         return False
 

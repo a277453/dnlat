@@ -14,6 +14,7 @@ from fastapi.logger import logger
 from modules.streamlit_logger import logger as frontend_logger
 import time
 from modules.login import register_user
+from modules.newuser_constant import NewUserUI
 
 
 # Import authentication functions
@@ -687,56 +688,58 @@ def show_login_page():
 
     with col2:
         st.markdown(
-            "<h2 style='text-align:center; margin-top:100px;'>🔒 DN Diagnostics Login</h2>", 
+            f"<h2 style='text-align:center; margin-top:100px;'>{NewUserUI.LOGIN_TITLE.value}</h2>", 
             unsafe_allow_html=True
         )
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(NewUserUI.HTML_BREAK.value, unsafe_allow_html=True)
 
         # Login form
-        with st.form("login_form"):
+        with st.form(NewUserUI.LOGIN_FORM_KEY.value):
             username = st.text_input(
-                "Username", 
-                placeholder="Enter your username",
-                key="login_username"
+                NewUserUI.LOGIN_USERNAME_LABEL.value, 
+                placeholder=NewUserUI.LOGIN_USERNAME_PLACEHOLDER.value,
+                key=NewUserUI.LOGIN_USERNAME_KEY.value
             )
             password = st.text_input(
-                "Password", 
+                NewUserUI.LOGIN_PASSWORD_LABEL.value, 
                 type="password",
-                placeholder="Enter your password",
-                key="login_password"
+                placeholder=NewUserUI.LOGIN_PASSWORD_PLACEHOLDER.value,
+                key=NewUserUI.LOGIN_PASSWORD_KEY.value
             )
-            submit = st.form_submit_button("Login", use_container_width=True)
+            submit = st.form_submit_button(NewUserUI.LOGIN_BUTTON.value, use_container_width=True)
 
         # Handle login
         if submit:
             if not username or not password:
-                st.error("  Please enter username and password")
+                st.error(NewUserUI.LOGIN_EMPTY_ERROR.value)
             else:
-                with st.spinner("Authenticating..."):
+                with st.spinner(NewUserUI.AUTHENTICATING_SPINNER.value):
                     if authenticate_user(username, password):
                         user = get_current_user()
-                        st.success(f"  Welcome {user['username']}!")
+                        st.success(
+                            NewUserUI.LOGIN_SUCCESS.value.format(
+                                username=user["username"]
+                            )
+                        )
 
-                        st.session_state.login_success = True
-                        st.session_state.username = user["username"]
+                        st.session_state[NewUserUI.SESSION_LOGIN_SUCCESS.value] = True
+                        st.session_state[NewUserUI.SESSION_USERNAME.value] = user["username"]
 
                         st.rerun()  # Reload to show main app
                     elif is_user_pending_approval(username, password):
                         st.warning(
-                            f"  {username}  is pending admin approval.\n\n"
-                            "Please contact the administrator to activate your account."
+                            NewUserUI.LOGIN_PENDING_WARNING.value.format(username=username)
                         )
 
                     else:
-                        st.error("  Invalid username or password")
-
+                        st.error(NewUserUI.LOGIN_INVALID_ERROR.value)
         # ---------------------------
         # REGISTER BUTTON (NEW)
         # ---------------------------
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(NewUserUI.HTML_BREAK.value, unsafe_allow_html=True)
 
-        if st.button(" Register New User", use_container_width=True):
-            st.session_state.page = "register"
+        if st.button(NewUserUI.REGISTER_BUTTON.value, use_container_width=True):
+            st.session_state[NewUserUI.SESSION_PAGE.value]= NewUserUI.PAGE_REGISTER.value
             st.rerun()
 def is_invalid_emp_code(emp_code: str) -> bool:
     """
@@ -802,76 +805,75 @@ def show_register_page():
 
     with col2:
         st.markdown(
-            "<h2 style='text-align:center; margin-top:100px;'> DN Diagnostics Register</h2>",
+            f"<h2 style='text-align:center; margin-top:100px;'>{NewUserUI.REGISTER_TITLE.value}</h2>",
             unsafe_allow_html=True
         )
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(NewUserUI.HTML_BREAK.value, unsafe_allow_html=True)
 
-        with st.form("newUser_Form"):
+        with st.form(NewUserUI.REGISTER_FORM_KEY.value):
             email = st.text_input(
-                "Email ID",
-                placeholder="Enter DN Official Email",
-                key="register_email"
+                NewUserUI.REGISTER_EMAIL_LABEL.value,
+                placeholder=NewUserUI.REGISTER_EMAIL_PLACEHOLDER.value,
+                key=NewUserUI.REGISTER_EMAIL_KEY.value
             )
             name = st.text_input(
-                "Name",
-                placeholder="Enter your name",
-                key="register_name"
+                NewUserUI.REGISTER_NAME_LABEL.value,
+                placeholder=NewUserUI.REGISTER_NAME_PLACEHOLDER.value,
+                key=NewUserUI.REGISTER_NAME_KEY.value
             )
             password = st.text_input(
-                "Password",
+                NewUserUI.REGISTER_PASSWORD_LABEL.value,
                 type="password",
-                placeholder="Enter your password",
-                key="register_password"
+                placeholder=NewUserUI.REGISTER_PASSWORD_PLACEHOLDER.value,
+                key=NewUserUI.REGISTER_PASSWORD_KEY.value
             )
             confirm_password = st.text_input(
-                "Confirm Password",
+                NewUserUI.REGISTER_CONFIRM_PASSWORD_LABEL.value,
                 type="password",
-                placeholder="Re-enter your password",
-                key="register_confirm_password"
+                placeholder=NewUserUI.REGISTER_CONFIRM_PASSWORD_PLACEHOLDER.value,
+                key=NewUserUI.REGISTER_CONFIRM_PASSWORD_KEY.value
             )
             employee_code = st.text_input(
-                "Employee Code",
-                placeholder="Enter 8 digit employee code",
-                key="register_emp_code"
+                NewUserUI.REGISTER_EMP_CODE_LABEL.value,
+                placeholder=NewUserUI.REGISTER_EMP_CODE_PLACEHOLDER.value,
+                key=NewUserUI.REGISTER_EMP_CODE_KEY.value
             )
             role_type = st.text_input(
-                "Role Type",
-                placeholder="USER",
-                key="register_role",
+                NewUserUI.REGISTER_ROLE_LABEL.value,
+                placeholder=NewUserUI.REGISTER_DEFAULT_ROLE.value,
+                key=NewUserUI.REGISTER_ROLE_KEY.value,
                 disabled=True
             )
 
-            submit = st.form_submit_button("Register", use_container_width=True)
+            submit = st.form_submit_button(NewUserUI.REGISTER_SUBMIT_BUTTON.value, use_container_width=True)
 
         # ---------------------------
         # FORM SUBMIT HANDLING
         # ---------------------------
         if submit:
-            email_pattern = r"^[a-zA-Z]+\.[a-zA-Z]+@dieboldnixdorf\.com$"
-            name_pattern = r"^[A-Za-z ]+$"
+            email_pattern = NewUserUI.EMAIL_PATTERN.value
+            name_pattern = NewUserUI.NAME_PATTERN.value
 
             email = email.strip().lower()
             name = name.strip().title()
             
             if not all([email, name, password, confirm_password, employee_code]):
-                st.error("  All fields are required")
+                st.error(NewUserUI.ALL_FIELDS_REQUIRED.value)
 
             elif not re.match(email_pattern, email):
-                st.error("Please use your official Diebold Nixdorf email ID")
+                st.error(NewUserUI.INVALID_EMAIL.value)
 
             elif not re.match(name_pattern, name):
-                st.error("  Name must contain only letters and spaces")    
+                st.error(NewUserUI.INVALID_NAME.value)    
             
             elif not is_valid_password(password):
-                st.error("Password must be at least 8 characters long and include uppercase, lowercase, Min 2 digits, and special character.")
+                st.error(NewUserUI.PASSWORD_RULES_ERROR.value)
 
             elif password != confirm_password:
-                st.error("  Passwords do not match with confirm password")
+                st.error(NewUserUI.PASSWORD_MISMATCH.value)
 
             elif is_invalid_emp_code(employee_code):
-                st.error("  Please enter a valid 8-digit employee code")
-
+                st.error(NewUserUI.INVALID_EMP_CODE.value)
 
             else:
                 # ---------------------------
@@ -879,31 +881,31 @@ def show_register_page():
                 # ---------------------------
                 try:
                     success, message = register_user(
-                        email, name, password, employee_code, role_type or "USER"
+                        email, name, password, employee_code, role_type 
                     )
 
                     if success:
                         st.success(message)
                         time.sleep(3)
-                        st.session_state.page = "login"
+                        st.session_state[NewUserUI.SESSION_PAGE.value] = NewUserUI.PAGE_LOGIN.value
                         st.rerun()
                     else:
                         st.error(message)
 
                 except RuntimeError:
                     # DB / infra issue
-                    st.error("Service temporarily unavailable. Please try again later.")
+                    st.error(NewUserUI.SERVICE_UNAVAILABLE.value)
 
                 except Exception:
                     # Unexpected failure
-                    st.error("Registration failed due to an internal error.")
+                    st.error(NewUserUI.REGISTRATION_INTERNAL_ERROR.value)
                 
                 
         # ---------------------------
         # BACK TO LOGIN
         # ---------------------------
-        if st.button(" Back to Login", use_container_width=True):
-            st.session_state.page = "login"
+        if st.button(NewUserUI.BACK_TO_LOGIN_BUTTON.value, use_container_width=True):
+            st.session_state[NewUserUI.SESSION_PAGE.value] = NewUserUI.PAGE_LOGIN.value
             st.rerun()
 
 

@@ -14,7 +14,6 @@ from modules.logging_config import logger
 
 
 logger.info("Transaction Analyzer Service loaded")
-
             
 class TransactionAnalyzerService:
     """
@@ -86,6 +85,29 @@ class TransactionAnalyzerService:
         
         self.real_dict, self.start_key, self.end_key, self.chain_key = xml_to_dict(config_path)
         logger.info("Configuration loaded successfully from %s", config_path)
+
+    def _map_transaction_type(self, raw_func: str) -> str:
+        """
+        Map raw function string to final transaction type.
+
+        Logic:
+        - Extract prefix before '/' (e.g., 'COUT/GA' -> 'COUT')
+        - Look up ONLY the prefix in config (self.real_dict)
+        - If not found, return the prefix itself
+        """
+        if not raw_func:
+            return raw_func
+
+        prefix = raw_func.split('/')[0].strip()
+        txn_type = self.real_dict.get(prefix, prefix)
+
+        logger.debug(
+            "Transaction type mapped: raw='%s' -> prefix='%s' -> type='%s'",
+            raw_func, prefix, txn_type
+        )
+
+        return txn_type
+
     
     # ============================================
     # NEW METHOD - ADDED TO FIX THE ERROR
@@ -386,11 +408,21 @@ class TransactionAnalyzerService:
             txn_type = "Unknown"
             func_matches = txn_segment[txn_segment["tid"] == "3217"]
             if not func_matches.empty:
+                #  16:21:02  3217 Function 'COUT/GA' selected
                 for _, func_row in func_matches.iterrows():
                     func_match = re.search(r"Function\s+'([^']+)'", func_row["message"])
+                    # 16:21:02  3217 Function 'COUT/GA' selected
                     if func_match:
                         raw_func = func_match.group(1).strip()
-                        txn_type = self.real_dict.get(raw_func, raw_func)
+                        # raw_fun = COUT/GA
+                        # check in mapping_dictrionary, if not found
+                            # extract using _get_transaction_type_from_raw
+                            # insert into dictionary dict[raw_fun] = txn_type
+                        # else
+                            # lookup in dict and provide txn_type
+                        #
+                        txn_type = self._map_transaction_type(raw_func)
+                        logger.info(f"Transaction type: raw='{raw_func}' -> type='{txn_type}'")
                         break
             
             # Collect full transaction log

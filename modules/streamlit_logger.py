@@ -14,7 +14,7 @@ log_folder.mkdir(exist_ok=True)
 main_log_file = log_folder / "streamlit_app.log"
 
 logger = logging.getLogger("streamlit_logger")
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.ERROR)
 logger.propagate = False
 
 formatter = logging.Formatter(

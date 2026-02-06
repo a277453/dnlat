@@ -7,7 +7,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
-from .configManager import xml_to_dict
+from modules.configManager import xml_to_dict
 import os
 from datetime import datetime, time
 from modules.logging_config import logger

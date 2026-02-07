@@ -8,6 +8,7 @@ Updated to match admins table with ONLY:
 import psycopg2
 import hashlib
 import streamlit as st
+import os
 from datetime import datetime
 from typing import Optional
 from modules.logging_config import logger
@@ -17,11 +18,11 @@ from modules.logging_config import logger
 # ============================================
 
 DB_CONFIG = {
-    "host": "localhost",
-    "database": "dn_diagnostics",
-    "user": "dn_user",
-    "password": "12345",
-    "port": "5432"
+    "host": os.getenv("DB_HOST", "localhost"),
+    "database": os.getenv("DB_NAME", "dn_diagnostics"),
+    "user": os.getenv("DB_USER", "dn_user"),
+    "password": os.getenv("DB_PASSWORD", "12345"),
+    "port": os.getenv("DB_PORT", "5432")
 }
 
 # ============================================

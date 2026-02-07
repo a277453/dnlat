@@ -1,14 +1,15 @@
 # admin_setup.py
 import psycopg2
 import hashlib
+import os
 from modules.streamlit_logger import logger as frontend_logger
 
 DB_CONFIG = {
-    "host": "localhost",
-    "database": "dn_diagnostics",
-    "user": "dn_user",
-    "password": "12345",
-    "port": "5432"
+    "host": os.getenv("DB_HOST", "localhost"),
+    "database": os.getenv("DB_NAME", "dn_diagnostics"),
+    "user": os.getenv("DB_USER", "dn_user"),
+    "password": os.getenv("DB_PASSWORD", "12345"),
+    "port": os.getenv("DB_PORT", "5432")
 }
 
 def get_db_connection():

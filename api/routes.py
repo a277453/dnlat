@@ -1453,7 +1453,7 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
         logger.debug(f"Fetching session data for session {session_id}")
         session_data = session_service.get_session(session_id)
         transaction_data = session_data.get('transaction_data')
-        
+            
         if not transaction_data:
             logger.error("No transaction data found in session.")
             raise HTTPException(
@@ -1471,6 +1471,8 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
             successful = len(type_df[type_df['End State'] == 'Successful'])
             unsuccessful = len(type_df[type_df['End State'] == 'Unsuccessful'])
             total = len(type_df)
+
+            map
             
             # Calculate average duration
             if 'Duration (seconds)' in type_df.columns:
@@ -2794,6 +2796,7 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
                     "start_time": str(txn_data.get('Start Time', '')),
                     "end_time": str(txn_data.get('End Time', '')),
                     "source_file": str(txn_data.get('Source File', 'Unknown')),
+                    "model": "llama3_log_analyzer",
                     "analysis_time_seconds": analysis_duration
                 }
             }
@@ -2825,6 +2828,8 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
     
 # Add this Pydantic model near the top with other models
 class FeedbackSubmission(BaseModel):
+    model_config = {'protected_namespaces': ()}
+    
     transaction_id: str
     rating: int
     alternative_cause: str

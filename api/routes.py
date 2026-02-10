@@ -3677,7 +3677,7 @@ async def get_counter_data(
 
         # Filter only CIN/CI and COUT/GA transactions
         transactions_subset = transactions_subset[
-            transactions_subset['Transaction Type'].isin(['CIN/CI', 'COUT/GA'])
+            transactions_subset['Transaction Type'].isin(['Cash Deposit', 'Cash Withdrawal'])
         ]
 
         # print(f"  Building counter per transaction table for {len(transactions_subset)} transactions (CIN/COUT only)")
@@ -3728,7 +3728,7 @@ async def get_counter_data(
                 # 1. No cancellation + successful
                 # 2. Cancellation + successful + (card presented OR banknotes presented)
                 
-                if txn_type == 'COUT/GA':
+                if txn_type == 'Cash Withdrawal':
                     # COUT pattern: "Dispense info - 1 note(s) of 500,00 INR from cassette 5 (SLOT3)"
                     for log_line in txn_log.split('\n'):
                         match = re.search(r'(\d+)\s+note\(s\)\s+of\s+([\d,\.]+)\s+([A-Z]{3})', log_line, re.IGNORECASE)
@@ -3738,7 +3738,7 @@ async def get_counter_data(
                             currency = match.group(3)
                             count_info.append(f"{currency} {amount} x{note_count}")
                 
-                elif txn_type == 'CIN/CI':
+                elif txn_type == 'Cash Deposit':
                     # CIN pattern: "Identified notes:     1 x    500 INR"
                     for log_line in txn_log.split('\n'):
                         match = re.search(r'(\d+)\s+x\s+([\d,\.]+)\s+([A-Z]{3})', log_line, re.IGNORECASE)

@@ -3809,7 +3809,7 @@ RAISES:
         source_only_transactions = txn_df[txn_df['Source File'] == selected_source].copy()
 
         # Count CIN/CI and COUT/GA transactions
-        cin_cout_count = len(source_only_transactions[source_only_transactions['Transaction Type'].isin(['CIN/CI', 'COUT/GA'])])
+        cin_cout_count = len(source_only_transactions[source_only_transactions['Transaction Type'].isin(['Cash Deposit', 'Cash Withdrawal'])])
         other_count = len(source_only_transactions) - cin_cout_count
 
         # Build transaction options - only CIN/COUT are selectable
@@ -3820,7 +3820,7 @@ RAISES:
             txn_type = txn['Transaction Type']
             display = f"{txn_id} | {txn_type} | {txn['End State']} | {txn['Start Time']}"
             
-            if txn_type in ['CIN/CI', 'COUT/GA']:
+            if txn_type in ['Cash Deposit', 'Cash Withdrawal']:
                 transaction_options[display] = txn_id
             else:
                 # Add to options but mark as disabled with "(Not available)" suffix
@@ -3829,18 +3829,18 @@ RAISES:
 
         # Show info message if there are disabled transactions
         if other_count > 0:
-            st.info(f"  Counter analysis is only available for CIN/CI and COUT/GA transactions.")
+            st.info(f"  Counter analysis is only available for Cash Deposit/Withdrawal transactions.")
 
         selected_display = st.selectbox(
             "Transaction",
             options=list(transaction_options.keys()),
             key="counters_txn_select",
-            help="Only CIN/CI and COUT/GA transactions are available for counter analysis"
+            help="Only Cash Deposit/Withdrawal transactions are available for counter analysis"
         )
 
         # Check if selected option is disabled
         if "(Not available)" in selected_display:
-            st.warning("  This transaction type is not supported for counter analysis. Please select a CIN/CI or COUT/GA transaction.")
+            st.warning("  This transaction type is not supported for counter analysis. Please select a Cash Deposit/Withdrawal transaction.")
             return
 
         selected_txn_id = transaction_options[selected_display]
@@ -3971,7 +3971,7 @@ RAISES:
                         txn_column_config = {
                             'Date Timestamp': st.column_config.TextColumn('Date Timestamp', help='Transaction date and time'),
                             'Transaction ID': st.column_config.TextColumn('Transaction ID', help='Unique transaction identifier'),
-                            'Transaction Type': st.column_config.TextColumn('Transaction Type', help='Type of transaction (CIN/CI or COUT/GA)'),
+                            'Transaction Type': st.column_config.TextColumn('Transaction Type', help='Type of transaction (Cash Deposit or Cash Withdrawal)'),
                             'Transaction Summary with Result': st.column_config.TextColumn('Transaction Summary with Result', help='Success or failure status'),
                             'Count': st.column_config.TextColumn('Count', help='Denomination and count information'),
                             'Counter Summary': st.column_config.TextColumn('Counter Summary', help='Click to view detailed counter data'),

@@ -431,10 +431,14 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         # ⏱️ END TOTAL TIME MEASUREMENT
         # -----------------------------------------------------------
         end_time = time.perf_counter()
-        logger.info(f"TOTAL ZIP PROCESSING TIME: {end_time - start_time:.4f} s")
+        total_time = round(end_time - start_time, 2)
+        logger.info(f"TOTAL ZIP PROCESSING TIME: {total_time:.4f} s")
         # -----------------------------------------------------------
 
-        return result
+        # Attach processing time to response dict so frontend can display it
+        result_dict = result.dict() if hasattr(result, "dict") else dict(result)
+        result_dict["processing_time_seconds"] = total_time
+        return result_dict
     except HTTPException:
         raise   
     except Exception as e:
@@ -520,6 +524,162 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
         raise HTTPException(
             status_code=500,
             detail=f"Error extracting files: {str(e)}\n{traceback.format_exc()}"
+        )
+
+@router.post("/extract-registry-from-zip")
+async def extract_registry_from_zip(file: UploadFile = File(...)):
+    """
+    FUNCTION:
+        extract_registry_from_zip
+
+    DESCRIPTION:
+        Lightweight endpoint that scans an uploaded ZIP archive and extracts
+        ONLY registry-related files without performing full package processing.
+        This avoids the overhead of ACU extraction, categorization, session
+        creation, and disk writes that the full /process-zip pipeline incurs.
+
+        A file is treated as a registry file when ANY of these conditions holds:
+            1. Its extension is .reg
+            2. Its name contains 'reg' and its extension is .txt  (e.g. reg.txt,
+               machine_reg.txt)
+            3. It lives inside a folder whose name contains 'registry' or 'reg'
+               and has one of these extensions: .reg .txt .ini .cfg .conf
+
+        The returned contents are base64-encoded raw bytes so the caller can
+        decode them with any supported encoding without a second API round-trip.
+
+    USAGE:
+        result = await extract_registry_from_zip(file=some_zip_file)
+
+    PARAMETERS:
+        file (UploadFile) : The ZIP file uploaded via multipart/form-data.
+
+    RETURNS:
+        dict :
+            {
+                "registry_contents" : dict   # filename -> base64-encoded bytes
+                "count"             : int    # number of registry files found
+                "message"           : str    # human-readable summary
+            }
+
+    RAISES:
+        HTTPException :
+            - 400 if the uploaded file is not a ZIP
+            - 500 for unexpected errors during extraction
+    """
+    logger.info(f"Received request: /extract-registry-from-zip for file: {file.filename}")
+
+    if not file.filename.lower().endswith('.zip'):
+        raise HTTPException(status_code=400, detail="Only ZIP files are accepted")
+
+    try:
+        import base64
+
+        zip_bytes = await file.read()
+        logger.info(f"Read {len(zip_bytes)} bytes from {file.filename}")
+
+        # Registry-file detection rules (mirrors categorization.py logic)
+        REGISTRY_EXTENSIONS     = {'.reg', 'reg.txt'}
+        REGISTRY_FOLDER_MARKERS = {'registry', 'reg'}
+
+        def _is_registry_file(zip_member_name: str) -> bool:
+            """Return True when the ZIP member looks like a registry file."""
+            norm        = zip_member_name.replace('\\\\', '/')
+            parts       = [p.lower() for p in norm.split('/')]
+            fname       = parts[-1] if parts else ''
+            ext         = os.path.splitext(fname)[1]
+            name_no_ext = os.path.splitext(fname)[0]
+
+            # Rule 1 – plain .reg file anywhere in the archive
+            if ext == '.reg':
+                return True
+
+            # Rule 2 – .txt file whose name contains 'reg'
+            if ext == '.txt' and 'reg' in name_no_ext:
+                return True
+
+            # Rule 3 – file inside a folder that contains 'registry' or 'reg'
+            parent_parts = parts[:-1]
+            in_registry_folder = any(
+                marker in part
+                for part in parent_parts
+                for marker in REGISTRY_FOLDER_MARKERS
+            )
+            if in_registry_folder and ext in REGISTRY_EXTENSIONS:
+                return True
+
+            return False
+
+        def _dedup_key(basename: str, existing: dict) -> str:
+            """Return a unique key by appending a counter when needed."""
+            key = basename
+            counter = 1
+            while key in existing:
+                name_part, ext_part = os.path.splitext(basename)
+                key = f"{name_part}_{counter}{ext_part}"
+                counter += 1
+            return key
+
+        registry_contents: dict = {}
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    member_name = info.filename
+                    if _is_registry_file(member_name):
+                        try:
+                            raw = zf.read(member_name)
+                            basename = os.path.basename(member_name.replace('\\\\', '/'))
+                            key = _dedup_key(basename, registry_contents)
+                            registry_contents[key] = base64.b64encode(raw).decode('utf-8')
+                            logger.info(f"Extracted registry file: {member_name} -> key={key}")
+                        except Exception as e:
+                            logger.warning(f"Could not read {member_name} from ZIP: {e}")
+                    elif member_name.lower().endswith('.zip'):
+                        # Also scan one level of nested ZIPs
+                        try:
+                            inner_bytes = zf.read(member_name)
+                            with zipfile.ZipFile(io.BytesIO(inner_bytes)) as inner_zf:
+                                for inner_info in inner_zf.infolist():
+                                    if inner_info.is_dir():
+                                        continue
+                                    if _is_registry_file(inner_info.filename):
+                                        raw = inner_zf.read(inner_info.filename)
+                                        basename = os.path.basename(inner_info.filename.replace('\\\\', '/'))
+                                        key = _dedup_key(basename, registry_contents)
+                                        registry_contents[key] = base64.b64encode(raw).decode('utf-8')
+                                        logger.info(f"Extracted registry file from nested ZIP [{member_name}]: {inner_info.filename} -> key={key}")
+                        except Exception as e:
+                            logger.warning(f"Could not open nested ZIP {member_name}: {e}")
+
+        except zipfile.BadZipFile as e:
+            raise HTTPException(status_code=400, detail=f"Invalid or corrupt ZIP file: {e}")
+
+        count = len(registry_contents)
+        logger.info(f"Registry extraction complete: {count} file(s) found in {file.filename}")
+
+        if count == 0:
+            return {
+                "registry_contents": {},
+                "count": 0,
+                "message": "No registry files found in the uploaded ZIP"
+            }
+
+        return {
+            "registry_contents": registry_contents,
+            "count": count,
+            "message": f"Successfully extracted {count} registry file(s)"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in /extract-registry-from-zip: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error extracting registry files: {str(e)}"
         )
 
 @router.get("/get-registry-contents")

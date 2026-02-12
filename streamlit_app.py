@@ -1049,7 +1049,7 @@ def render_side_by_side_diff(content1: str, content2: str, filename1: str, filen
             " Show Diff Lines Only",
             value=False,
             key=f"hide_identical_{filename1}_{filename2}",
-            help="Hide identical lines and show only the lines that differ between the two files"
+            help="show only the lines that differ between the two files"
         )
 
     # Summary bar - only show when diff-only mode is active

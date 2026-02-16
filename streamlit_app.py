@@ -200,6 +200,132 @@ st.markdown("""
     .dataframe tbody tr:hover {
         background-color: #1f1f1f !important;
     }
+    
+    /* File Comparison Styles */
+    .legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        background-color: #1a1a1a;
+        border-radius: 6px;
+        font-size: 0.875rem;
+        color: #e0e0e0;
+    }
+    
+    .legend-color {
+        width: 20px;
+        height: 20px;
+        border-radius: 4px;
+    }
+    
+    /* Single scroll wrapper for both panes */
+    .diff-scroll-wrapper {
+        overflow-x: auto;
+        overflow-y: auto;
+        max-height: 600px;
+        border: 1px solid #2a2a2a;
+        border-radius: 8px;
+        background-color: #0f0f0f;
+    }
+    
+    .diff-container {
+        display: flex;
+        gap: 1px;
+        background-color: #2a2a2a;
+        min-width: max-content;
+    }
+    
+    .diff-pane-col {
+        flex: 1;
+        min-width: 600px;
+        background-color: #0f0f0f;
+    }
+    
+    .diff-col-title {
+        color: #ffffff !important;
+        font-size: 1.25rem !important;
+        font-weight: 600 !important;
+        padding: 12px 16px;
+        margin: 0 !important;
+        background-color: #1a1a1a;
+        border-bottom: 1px solid #2a2a2a;
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif !important;
+    }
+    
+    .diff-pane {
+        background-color: #0f0f0f;
+        border: none;
+        font-family: 'Courier New', monospace;
+    }
+    
+    .diff-pane-header {
+        background-color: #1a1a1a;
+        color: #ffffff;
+        padding: 12px 16px;
+        font-weight: 600;
+        font-size: 0.875rem;
+        border-bottom: 1px solid #2a2a2a;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif !important;
+    }
+    
+    .diff-line {
+        display: flex;
+        padding: 6px 12px;
+        font-size: 13px;
+        line-height: 1.6;
+        color: #e0e0e0;
+        border-bottom: 1px solid #1a1a1a;
+        white-space: pre;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        min-height: 24px;
+    }
+    
+    .diff-line:hover {
+        background-color: #1a1a1a;
+    }
+    
+    /* Hide empty lines when both sides are empty */
+    .diff-line.diff-empty-line {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: none !important;
+    }
+    
+    .diff-line-number {
+        display: inline-block;
+        min-width: 50px;
+        color: #666666;
+        text-align: right;
+        padding-right: 16px;
+        user-select: none;
+        flex-shrink: 0;
+        font-weight: 500;
+    }
+    
+    .diff-content-change {
+        background-color: rgba(239, 68, 68, 0.40);
+        border-left: 4px solid #ef4444;
+        color: #ffffff;
+    }
+    
+    .diff-whitespace-change {
+        background-color: rgba(168, 85, 247, 0.30);
+        border-left: 4px solid #a855f7;
+        color: #ffffff;
+    }
+    
+    .diff-identical {
+        background-color: transparent;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -320,7 +446,7 @@ def is_valid_password(password: str) -> bool:
     if not any(c.islower() for c in password):
         return False
 
-    # 🔹 MINIMUM 2 DIGITS CHECK
+    #  MINIMUM 2 DIGITS CHECK
     if sum(c.isdigit() for c in password) < 2:
         return False
 
@@ -818,7 +944,7 @@ def detect_line_difference(line1: str, line2: str) -> str:
         Compares two text lines and determines the type of difference between them.
         It classifies the difference as:
             - "identical"  : Exact text match
-            - "whitespace" : Text matches after removing spaces and tabs
+            - "whitespace" : Text matches after removing spaces and tabs, OR one line is empty/blank
             - "content"    : Actual text/content differs
 
     USAGE:
@@ -843,6 +969,16 @@ def detect_line_difference(line1: str, line2: str) -> str:
     """
     if line1 == line2:
         return "identical"
+    
+    # Check if one or both lines are empty/whitespace-only
+    line1_stripped = line1.strip()
+    line2_stripped = line2.strip()
+    
+    # If one is empty and the other is not, it's a whitespace difference (missing line)
+    if (not line1_stripped and line2_stripped) or (line1_stripped and not line2_stripped):
+        return "whitespace"
+    
+    # If both have content, check if they're the same after removing all spaces/tabs
     if line1.replace(' ', '').replace('\t', '') == line2.replace(' ', '').replace('\t', ''):
         return "whitespace"
     return "content"
@@ -895,66 +1031,101 @@ def render_side_by_side_diff(content1: str, content2: str, filename1: str, filen
     st.markdown("### File Comparison")
     st.caption(f"Comparing: {filename1} vs {filename2}")
     
-    # Legend
+    # Pre-compute diff types for all lines once
+    line_diff_types = []
+    for i in range(max_lines):
+        line1 = lines1[i] if i < len(lines1) else ""
+        line2 = lines2[i] if i < len(lines2) else ""
+        line_diff_types.append(detect_line_difference(line1, line2))
+
+    diff_only_count = sum(1 for dt in line_diff_types if dt != "identical")
+
+    # Legend row — first two are static, third is a clickable toggle
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown('<div class="legend-item"><div class="legend-color" style="background-color: rgba(239, 68, 68, 0.15);"></div>Content Changes</div>', unsafe_allow_html=True)
+        st.markdown('<div class="legend-item"><div class="legend-color" style="background-color: rgba(239, 68, 68, 0.40); border-left: 4px solid #ef4444;"></div>Content Changes</div>', unsafe_allow_html=True)
     with col2:
-        st.markdown('<div class="legend-item"><div class="legend-color" style="background-color: rgba(168, 85, 247, 0.12);"></div>Whitespace Only</div>', unsafe_allow_html=True)
+        st.markdown('<div class="legend-item"><div class="legend-color" style="background-color: rgba(168, 85, 247, 0.30); border-left: 4px solid #a855f7;"></div>Whitespace Only</div>', unsafe_allow_html=True)
     with col3:
-        st.markdown('<div class="legend-item"><div class="legend-color" style="background-color: transparent; border: 1px solid #404040;"></div>Identical Lines</div>', unsafe_allow_html=True)
-    
+        hide_identical = st.checkbox(
+            " Show Diff Lines Only",
+            value=False,
+            key=f"hide_identical_{filename1}_{filename2}",
+            help="show only the lines that differ between the two files"
+        )
+
+    # Summary bar - only show when diff-only mode is active
+    if hide_identical:
+        st.info(f"Showing **{diff_only_count}** differing line(s).")
+
     st.markdown("---")
     
-    col_left, col_right = st.columns(2)
+    # Build HTML with single scroll container wrapping both panes
+    html_comparison = '<div class="diff-scroll-wrapper">'
+    html_comparison += '<div class="diff-container">'
     
-    with col_left:
-        st.markdown(f"#### {filename1}")
-        html_left = '<div class="diff-pane"><div class="diff-pane-header">Original File</div>'
-        
-        for i in range(max_lines):
-            line1 = lines1[i] if i < len(lines1) else ""
-            line2 = lines2[i] if i < len(lines2) else ""
-            
-            diff_type = detect_line_difference(line1, line2)
-            
-            if diff_type == "content":
-                css_class = "diff-content-change"
-            elif diff_type == "whitespace":
-                css_class = "diff-whitespace-change"
-            else:
-                css_class = "diff-identical"
-            
-            line1_escaped = line1.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            
-            html_left += f'<div class="diff-line {css_class}"><span class="diff-line-number">{i+1}</span>{line1_escaped}</div>'
-        
-        html_left += '</div>'
-        st.markdown(html_left, unsafe_allow_html=True)
+    # Left pane
+    html_comparison += f'<div class="diff-pane-col"><h4 class="diff-col-title">Source A: {filename1}</h4>'
+    html_comparison += '<div class="diff-pane"><div class="diff-pane-header">ORIGINAL FILE</div>'
     
-    with col_right:
-        st.markdown(f"#### {filename2}")
-        html_right = '<div class="diff-pane"><div class="diff-pane-header">Modified File</div>'
+    for i in range(max_lines):
+        line1 = lines1[i] if i < len(lines1) else ""
+        line2 = lines2[i] if i < len(lines2) else ""
         
-        for i in range(max_lines):
-            line1 = lines1[i] if i < len(lines1) else ""
-            line2 = lines2[i] if i < len(lines2) else ""
-            
-            diff_type = detect_line_difference(line1, line2)
-            
-            if diff_type == "content":
-                css_class = "diff-content-change"
-            elif diff_type == "whitespace":
-                css_class = "diff-whitespace-change"
-            else:
-                css_class = "diff-identical"
-            
-            line2_escaped = line2.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            
-            html_right += f'<div class="diff-line {css_class}"><span class="diff-line-number">{i+1}</span>{line2_escaped}</div>'
+        # Skip rendering if both lines are empty
+        if not line1.strip() and not line2.strip():
+            continue
+
+        diff_type = line_diff_types[i]
+
+        # When diff-only mode is on, skip identical lines
+        if hide_identical and diff_type == "identical":
+            continue
         
-        html_right += '</div>'
-        st.markdown(html_right, unsafe_allow_html=True)
+        if diff_type == "content":
+            css_class = "diff-content-change"
+        elif diff_type == "whitespace":
+            css_class = "diff-whitespace-change"
+        else:
+            css_class = "diff-identical"
+        
+        line1_escaped = line1.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        html_comparison += f'<div class="diff-line {css_class}"><span class="diff-line-number">{i+1}</span>{line1_escaped}</div>'
+    
+    html_comparison += '</div></div>'
+    
+    # Right pane
+    html_comparison += f'<div class="diff-pane-col"><h4 class="diff-col-title">Source B: {filename2}</h4>'
+    html_comparison += '<div class="diff-pane"><div class="diff-pane-header">MODIFIED FILE</div>'
+    
+    for i in range(max_lines):
+        line1 = lines1[i] if i < len(lines1) else ""
+        line2 = lines2[i] if i < len(lines2) else ""
+        
+        # Skip rendering if both lines are empty
+        if not line1.strip() and not line2.strip():
+            continue
+
+        diff_type = line_diff_types[i]
+
+        # When diff-only mode is on, skip identical lines
+        if hide_identical and diff_type == "identical":
+            continue
+        
+        if diff_type == "content":
+            css_class = "diff-content-change"
+        elif diff_type == "whitespace":
+            css_class = "diff-whitespace-change"
+        else:
+            css_class = "diff-identical"
+        
+        line2_escaped = line2.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        html_comparison += f'<div class="diff-line {css_class}"><span class="diff-line-number">{i+1}</span>{line2_escaped}</div>'
+    
+    html_comparison += '</div></div>'
+    html_comparison += '</div></div>'
+    
+    st.markdown(html_comparison, unsafe_allow_html=True)
 
 # ============================================
 # ANALYSIS FUNCTIONS
@@ -1409,6 +1580,10 @@ def render_registry_compare():
             help="Upload another ZIP file to compare registry files",
             key="compare_zip_upload"
         )
+
+        # If user cleared the uploader (clicked ✕), wipe the stored package B data
+        if uploaded_file_b is None and 'compare_package_b' in st.session_state:
+            del st.session_state['compare_package_b']
         
         if uploaded_file_b is not None:
             file_size_mb = len(uploaded_file_b.getvalue()) / (1024 * 1024)
@@ -1416,49 +1591,35 @@ def render_registry_compare():
             
             # Process second ZIP button
             if st.button("Process Second Package", use_container_width=True, key="process_second_zip"):
-                with st.spinner("Processing second package..."):
+                with st.spinner("Extracting registry files from second package..."):
                     try:
                         files = {"file": (uploaded_file_b.name, uploaded_file_b.getvalue(), "application/zip")}
                         response = requests.post(
-                            f"{API_BASE_URL}/process-zip", 
-                            files=files, 
-                            timeout=300   # change time (increased time)
+                            f"{API_BASE_URL}/extract-registry-from-zip",
+                            files=files,
+                            timeout=120
                         )
-                        
+
                         if response.status_code == 200:
                             result_b = response.json()
-                            
-                            # Get registry contents from second package
-                            # Note: The second package is now in the main session (it replaces Package A)
-                            # So we need to fetch it immediately
-                            reg_response = requests.get(
-                                f"{API_BASE_URL}/get-registry-contents",
-                                timeout=30
-                            )
-                            
-                            if reg_response.status_code == 200:
-                                reg_data = reg_response.json()
-                                registry_contents_b = reg_data.get('registry_contents', {})
-                                
-                                if not registry_contents_b:
-                                    st.error("  No registry files found in second package.")
-                                    return
-                                
+                            registry_contents_b = result_b.get('registry_contents', {})
+
+                            if not registry_contents_b:
+                                st.error("  No registry files found in second package.")
+                            else:
                                 # Store second package contents in session state
                                 st.session_state['compare_package_b'] = {
                                     'zip_name': uploaded_file_b.name,
                                     'registry_contents': registry_contents_b
                                 }
-                                
                                 st.success(f"  Second package processed: {len(registry_contents_b)} registry file(s) found")
                                 st.rerun()
-                            else:
-                                st.error("Failed to load registry files from second package")
                         else:
-                            st.error(f"Error processing second package: {response.json().get('detail')}")
-                    
+                            error_detail = response.json().get('detail', 'Unknown error')
+                            st.error(f"Error extracting registry files from second package: {error_detail}")
+
                     except requests.exceptions.Timeout:
-                        st.error("⏱  Request timeout. Please try again.")
+                        st.error(" Request timeout. Please try again.")
                     except requests.exceptions.ConnectionError:
                         st.error("  Connection error. Ensure the API server is running.")
                     except Exception as e:
@@ -1470,7 +1631,13 @@ def render_registry_compare():
         # If second package is loaded, show comparison UI
         if 'compare_package_b' in st.session_state:
             package_b = st.session_state['compare_package_b']
-            registry_contents_b = package_b['registry_contents']
+            # (safe — auto-clears and prompts re-upload)
+            registry_contents_b = package_b.get('registry_contents')
+            if not registry_contents_b:
+                del st.session_state['compare_package_b']
+                st.info("Previous package data was outdated and has been cleared. Please re-upload the second package.")
+                st.rerun()
+                return
             
             st.markdown("---")
             st.markdown("#### Step 3: Select Files to Compare")
@@ -1524,19 +1691,36 @@ def render_registry_compare():
                             text_a = safe_decode(content_a)
                             text_b = safe_decode(content_b)
                             
-                            # Render side-by-side comparison
-                            fname_a = f"Package 1: {selected_filename}"
-                            fname_b = f"Package 2: {selected_filename}"
-                            render_side_by_side_diff(text_a, text_b, fname_a, fname_b)
+                            # Store in session state so it persists across checkbox reruns
+                            st.session_state.registry_comparison = {
+                                'text_a': text_a,
+                                'text_b': text_b,
+                                'fname_a': f"Package 1: {selected_filename}",
+                                'fname_b': f"Package 2: {selected_filename}",
+                                'selected_file': selected_filename
+                            }
+                            st.rerun()
 
                         except Exception as e:
                             st.error(f"Error comparing files: {str(e)}")
                             import traceback
                             with st.expander("  Debug Information"):
                                 st.code(traceback.format_exc())
+
+            # Render comparison if it exists in session state
+            # Clear comparison if user changed the file selection
+            if 'registry_comparison' in st.session_state:
+                if st.session_state.registry_comparison.get('selected_file') != selected_filename:
+                    # User changed file selection, clear old comparison
+                    del st.session_state.registry_comparison
+                else:
+                    # Same file selected, show the comparison
+                    comp = st.session_state.registry_comparison
+                    st.markdown("---")
+                    render_side_by_side_diff(comp['text_a'], comp['text_b'], comp['fname_a'], comp['fname_b'])
     
     except requests.exceptions.Timeout:
-        st.error("⏱  Request timeout. Please try again.")
+        st.error("  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
         st.error("  Connection error. Ensure the API server is running on localhost:8000.")
     except Exception as e:
@@ -1545,7 +1729,6 @@ def render_registry_compare():
         import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
-    
 
 def render_transaction_comparison():
     """
@@ -4540,32 +4723,47 @@ RAISES:
                 key="acu_comp_file_select"
             )
             
-            if selected_basename and st.button("  Compare Files", key="acu_do_compare", type="primary"):
-                # Find full paths
-                file1 = next(f for f in files1_list if os.path.basename(f) == selected_basename)
-                file2 = next(f for f in files2_list if os.path.basename(f) == selected_basename)
-                
-                
-                with st.spinner("Comparing files..."):
-                    try:
-                        content1 = comp_data['files1_all'][file1]
-                        content2 = comp_data['files2_all'][file2]
-                        
-                        st.markdown("---")
-                        st.markdown("####   File Comparison")
-                        
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.markdown(f"**{comp_data['zip1_name']}**")
-                            st.code(content1, language='xml', line_numbers=True)
-                        
-                        with col2:
-                            st.markdown(f"**{comp_data['zip2_name']}**")
-                            st.code(content2, language='xml', line_numbers=True)
+            if selected_basename:
+                if st.button("  Compare Files", key="acu_do_compare", type="primary"):
+                    # Find full paths
+                    file1 = next(f for f in files1_list if os.path.basename(f) == selected_basename)
+                    file2 = next(f for f in files2_list if os.path.basename(f) == selected_basename)
                     
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
+                    with st.spinner("Comparing files..."):
+                        try:
+                            content1 = comp_data['files1_all'][file1]
+                            content2 = comp_data['files2_all'][file2]
+
+                            # Ensure both contents are plain strings
+                            if isinstance(content1, bytes):
+                                content1 = safe_decode(content1)
+                            if isinstance(content2, bytes):
+                                content2 = safe_decode(content2)
+
+                            # Store in session state so it persists across checkbox reruns
+                            st.session_state.acu_comparison = {
+                                'content1': content1,
+                                'content2': content2,
+                                'fname_a': f"Source A: {selected_basename}",
+                                'fname_b': f"Source B: {selected_basename}",
+                                'selected_file': selected_basename
+                            }
+                            st.rerun()
+                        
+                        except Exception as e:
+                            st.error(f"Error: {str(e)}")
+
+            # Render comparison if it exists in session state
+            # Clear comparison if user changed the file selection
+            if 'acu_comparison' in st.session_state:
+                if st.session_state.acu_comparison.get('selected_file') != selected_basename:
+                    # User changed file selection, clear old comparison
+                    del st.session_state.acu_comparison
+                else:
+                    # Same file selected, show the comparison
+                    comp = st.session_state.acu_comparison
+                    st.markdown("---")
+                    render_side_by_side_diff(comp['content1'], comp['content2'], comp['fname_a'], comp['fname_b'])
 
 # ============================================
 # MAIN APPLICATION UI
@@ -4627,18 +4825,34 @@ def show_main_app():
     )
     # Check if file was deleted (uploader is now empty but we had processed a file before)
     if uploaded_file is None and st.session_state.zip_processed:
+        # Keys to reset to a fixed value
         st.session_state.zip_processed = False
         st.session_state.processing_result = None
         st.session_state.last_processed_file = None
         st.session_state.selected_function = None
-        # Clear ACU-related session states
-        if 'acu_extracted_files' in st.session_state:
-            del st.session_state.acu_extracted_files
-        if 'acu_parsed_df' in st.session_state:
-            del st.session_state.acu_parsed_df
-        if 'acu_files_loaded' in st.session_state:
-            del st.session_state.acu_files_loaded
-        # Clear cache
+        st.session_state.processing_time = None
+
+        # Keys to delete entirely (analysis / feature-specific state)
+        _keys_to_delete = [
+            # ACU
+            'acu_extracted_files',
+            'acu_parsed_df',
+            'acu_files_loaded',
+            'acu_compare_data',
+            'acu_comparison',
+            # Registry
+            'registry_comparison',
+            # Individual transaction analysis
+            'current_analysis_txn',
+            'analysis_result',
+            # Selectbox widget state (forces it back to "Select a function")
+            'function_selector',
+        ]
+        for _k in _keys_to_delete:
+            if _k in st.session_state:
+                del st.session_state[_k]
+
+        # Clear API response cache
         clear_cache()
         st.info("  File removed. Please upload a new ZIP file to continue.")
         st.rerun()
@@ -4660,17 +4874,20 @@ def show_main_app():
                 try:
                     files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/zip")}
                     
+                    _t_start = time.time()
                     response = requests.post(
                         f"{API_BASE_URL}/process-zip", 
                         files=files,
                         timeout=300  # Increased to 5 minutes for larger files
                     )
+                    _t_elapsed = round(time.time() - _t_start, 2)
                     
                     if response.status_code == 200:
                         result = response.json()
                         st.session_state.zip_processed = True
                         st.session_state.processing_result = result
                         st.session_state.last_processed_file = current_file_id
+                        st.session_state.processing_time = _t_elapsed
                         
                         # Clear cache when new ZIP is uploaded
                         clear_cache()
@@ -4697,7 +4914,7 @@ def show_main_app():
         categories = result['categories']
         
         st.markdown("## Detected Files")
-        cols = st.columns(6)
+        cols = st.columns(7)
         
         category_display = {
             'customer_journals': ('Customer Journals', '📋'),
@@ -4712,6 +4929,14 @@ def show_main_app():
             count = categories.get(category, {}).get('count', 0)
             with cols[idx]:
                 st.metric(label, count)
+
+        # Processing time — prefer backend value from response, fall back to frontend measurement
+        _proc_time = result.get('processing_time_seconds') or st.session_state.get('processing_time')
+        with cols[6]:
+            if _proc_time is not None:
+                st.metric(" Process Time", f"{_proc_time}s")
+            else:
+                st.metric(" Process Time", "—")
         
         st.markdown("---")
         

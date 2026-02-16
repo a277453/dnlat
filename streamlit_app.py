@@ -253,6 +253,7 @@ st.markdown("""
         position: sticky;
         top: 0;
         z-index: 20;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif !important;
     }
     
     .diff-pane {
@@ -270,6 +271,7 @@ st.markdown("""
         border-bottom: 1px solid #2a2a2a;
         text-transform: uppercase;
         letter-spacing: 0.5px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif !important;
     }
     
     .diff-line {
@@ -1063,8 +1065,8 @@ def render_side_by_side_diff(content1: str, content2: str, filename1: str, filen
     html_comparison += '<div class="diff-container">'
     
     # Left pane
-    html_comparison += f'<div class="diff-pane-col"><h4 class="diff-col-title">{filename1}</h4>'
-    html_comparison += '<div class="diff-pane"><div class="diff-pane-header">Original File</div>'
+    html_comparison += f'<div class="diff-pane-col"><h4 class="diff-col-title">Source A: {filename1}</h4>'
+    html_comparison += '<div class="diff-pane"><div class="diff-pane-header">ORIGINAL FILE</div>'
     
     for i in range(max_lines):
         line1 = lines1[i] if i < len(lines1) else ""
@@ -1093,8 +1095,8 @@ def render_side_by_side_diff(content1: str, content2: str, filename1: str, filen
     html_comparison += '</div></div>'
     
     # Right pane
-    html_comparison += f'<div class="diff-pane-col"><h4 class="diff-col-title">{filename2}</h4>'
-    html_comparison += '<div class="diff-pane"><div class="diff-pane-header">Modified File</div>'
+    html_comparison += f'<div class="diff-pane-col"><h4 class="diff-col-title">Source B: {filename2}</h4>'
+    html_comparison += '<div class="diff-pane"><div class="diff-pane-header">MODIFIED FILE</div>'
     
     for i in range(max_lines):
         line1 = lines1[i] if i < len(lines1) else ""

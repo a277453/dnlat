@@ -1641,7 +1641,7 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
             
             stats.append({
                 'Transaction Type': txn_type,
-                'Total': total,
+                'Count': total,
                 'Successful': successful,
                 'Unsuccessful': unsuccessful,
                 'Success Rate': f"{(successful/total*100):.1f}%" if total > 0 else "0%",

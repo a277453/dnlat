@@ -14,6 +14,7 @@ from fastapi.logger import logger
 from modules.streamlit_logger import logger as frontend_logger
 import time
 from modules.login import register_user
+import re as _re; from datetime import datetime as _dt
 
 
 # Import authentication functions
@@ -2268,7 +2269,6 @@ def render_transaction_comparison():
                         with source_col1:
                             _s1 = str(txn1_data.get('Source File', 'Unknown'))
                             try:
-                                import re as _re; from datetime import datetime as _dt
                                 _s1 = _re.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), _s1)
                             except Exception: pass
                             st.info(f"**Transaction 1 Source:**\n\n{_s1}")
@@ -2276,7 +2276,6 @@ def render_transaction_comparison():
                         with source_col2:
                             _s2 = str(txn2_data.get('Source File', 'Unknown'))
                             try:
-                                import re as _re; from datetime import datetime as _dt
                                 _s2 = _re.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), _s2)
                             except Exception: pass
                             st.info(f"**Transaction 2 Source:**\n\n{_s2}")
@@ -2627,7 +2626,11 @@ def render_ui_flow_individual():
                     with col5:
                         st.metric("End Time", viz_data.get('end_time', 'N/A'))
                     with col6:
-                        st.metric("Source File", viz_data.get('source_file', 'N/A'))
+                        _sf = str(viz_data.get('source_file', 'N/A'))
+                        try:
+                            _sf = _re.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), _sf)
+                        except Exception: pass
+                        st.metric("Source File", _sf)
                     
                     # Display UI flow
                     st.markdown("---")

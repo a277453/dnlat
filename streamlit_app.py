@@ -1198,10 +1198,20 @@ def render_transaction_stats():
             if 'statistics' in data:
                 stats_df = pd.DataFrame(data['statistics'])
 
+                # Convert to numeric so Streamlit auto right-aligns, use column_config to show units
+                col_config = {}
+                if 'Success Rate' in stats_df.columns:
+                    stats_df['Success Rate'] = pd.to_numeric(stats_df['Success Rate'].astype(str).str.replace('%', '', regex=False), errors='coerce')
+                    col_config['Success Rate'] = st.column_config.NumberColumn('Success Rate', format='%.1f%%')
+                if 'Avg Duration' in stats_df.columns:
+                    stats_df['Avg Duration'] = pd.to_numeric(stats_df['Avg Duration'].astype(str).str.replace('s', '', regex=False), errors='coerce')
+                    col_config['Avg Duration'] = st.column_config.NumberColumn('Avg Duration', format='%.1f s')
+
                 st.dataframe(
                     stats_df,
                     use_container_width=True,
-                    hide_index=True
+                    hide_index=True,
+                    column_config=col_config
                 )
             # ========================================
             # SECTION 2: Source File Filter
@@ -1259,6 +1269,9 @@ def render_transaction_stats():
                                         })
                                     
                                     txn_df = pd.DataFrame(txn_display_data)
+
+                                    # Sort by Source File ascending so data appears grouped by file in date order
+                                    txn_df = txn_df.sort_values('Source File', ascending=True).reset_index(drop=True)
                                     
                                     # Add additional filters
                                     col1, col2 = st.columns(2)
@@ -1310,13 +1323,6 @@ def render_transaction_stats():
                                         st.info(f"Filtered to {len(display_df)} transaction(s)")
                                     
                                     
-                                    # Display the transactions table
-                                    st.dataframe(
-                                        display_df,
-                                        use_container_width=True,
-                                        hide_index=True
-                                    )
-                                    
                                     # Statistics for filtered data
                                     st.markdown("#####   Statistics for Filtered Transactions")
                                     
@@ -1339,6 +1345,19 @@ def render_transaction_stats():
                                             st.metric("Success Rate", f"{success_rate:.1f}%")
                                         else:
                                             st.metric("Success Rate", "0%")
+                                    
+                                    st.markdown("---")
+                                    
+                                    # Display the transactions table
+                                    # Convert Duration to string so it left-aligns (numeric cols auto right-align)
+                                    display_df_show = display_df.copy()
+                                    display_df_show['Duration (s)'] = display_df_show['Duration (s)'].astype(str)
+                                    st.dataframe(
+                                        display_df_show,
+                                        use_container_width=True,
+                                        hide_index=True
+                                    )
+                                    
                                     
                                     # Download button
                                     st.markdown("---")
@@ -1579,7 +1598,8 @@ def render_registry_compare():
             st.info(f"  File: {uploaded_file_b.name} ({file_size_mb:.2f} MB)")
             
             # Process second ZIP button
-            if st.button("Process Second Package", use_container_width=True, key="process_second_zip"):
+            st.markdown('<style>#process_second_zip { width: auto !important; padding: 0.375rem 1rem !important; }</style>', unsafe_allow_html=True)
+            if st.button("Process Second Package", key="process_second_zip"):
                 with st.spinner("Extracting registry files from second package..."):
                     try:
                         files = {"file": (uploaded_file_b.name, uploaded_file_b.getvalue(), "application/zip")}
@@ -1663,7 +1683,8 @@ def render_registry_compare():
             )
             
             if selected_filename:
-                if st.button("Compare Selected Files", use_container_width=True, key="do_compare"):
+                st.markdown('<style>#do_compare { width: auto !important; padding: 0.375rem 1rem !important; }</style>', unsafe_allow_html=True)
+                if st.button("Compare Selected Files", key="do_compare"):
                     with st.spinner("Comparing files..."):
                         try:
                             # Get contents from both packages
@@ -1976,7 +1997,7 @@ def render_transaction_comparison():
             
             # Use filtered list for Transaction 1
             txn1_options = [
-                f"{txn['Transaction ID']} - {txn['Transaction Type']} ({txn['End State']})"
+                f"{txn['Transaction ID']} - {txn['Transaction Type']} | {txn['End State']} | {txn.get('Source File', 'Unknown')}"
                 for txn in filtered_txn1_list
             ]
             
@@ -1999,12 +2020,16 @@ def render_transaction_comparison():
                 )
                 
                 if txn1_data:
+                    try:
+                        import re as _re1; from datetime import datetime as _dt1
+                        _src1 = _re1.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt1.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), str(txn1_data.get('Source File', 'Unknown')))
+                    except Exception: _src1 = txn1_data.get('Source File', 'Unknown')
                     st.info(
                         f"**ID:** {txn1_data['Transaction ID']}\n\n"
                         f"**Type:** {txn1_data['Transaction Type']}\n\n"
                         f"**State:** {txn1_data['End State']}\n\n"
                         f"**Duration:** {txn1_data.get('Duration (seconds)', 0)}s\n\n"
-                        f"**Source:** {txn1_data.get('Source File', 'Unknown')}"
+                        f"**Source:** {_src1}"
                     )
         
         # Transaction 2 selector
@@ -2014,7 +2039,7 @@ def render_transaction_comparison():
             # Use filtered list for Transaction 2 AND exclude selected txn1
             txn2_options = [
                 opt for opt in [
-                    f"{txn['Transaction ID']} - {txn['Transaction Type']} ({txn['End State']})"
+                    f"{txn['Transaction ID']} - {txn['Transaction Type']} | {txn['End State']} | {txn.get('Source File', 'Unknown')}"
                     for txn in filtered_txn2_list
                 ]
                 if opt.split(' - ')[0] != (txn1_id if txn1_selection else None)
@@ -2039,12 +2064,16 @@ def render_transaction_comparison():
                 )
                 
                 if txn2_data:
+                    try:
+                        import re as _re2; from datetime import datetime as _dt2
+                        _src2 = _re2.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt2.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), str(txn2_data.get('Source File', 'Unknown')))
+                    except Exception: _src2 = txn2_data.get('Source File', 'Unknown')
                     st.info(
                         f"**ID:** {txn2_data['Transaction ID']}\n\n"
                         f"**Type:** {txn2_data['Transaction Type']}\n\n"
                         f"**State:** {txn2_data['End State']}\n\n"
                         f"**Duration:** {txn2_data.get('Duration (seconds)', 0)}s\n\n"
-                        f"**Source:** {txn2_data.get('Source File', 'Unknown')}"
+                        f"**Source:** {_src2}"
                     )
         
         # Check if both transactions are selected
@@ -2237,10 +2266,20 @@ def render_transaction_comparison():
                         source_col1, source_col2 = st.columns(2)
                         
                         with source_col1:
-                            st.info(f"**Transaction 1 Source:**\n\n{txn1_data.get('Source File', 'Unknown')}")
+                            _s1 = str(txn1_data.get('Source File', 'Unknown'))
+                            try:
+                                import re as _re; from datetime import datetime as _dt
+                                _s1 = _re.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), _s1)
+                            except Exception: pass
+                            st.info(f"**Transaction 1 Source:**\n\n{_s1}")
                         
                         with source_col2:
-                            st.info(f"**Transaction 2 Source:**\n\n{txn2_data.get('Source File', 'Unknown')}")
+                            _s2 = str(txn2_data.get('Source File', 'Unknown'))
+                            try:
+                                import re as _re; from datetime import datetime as _dt
+                                _s2 = _re.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), _s2)
+                            except Exception: pass
+                            st.info(f"**Transaction 2 Source:**\n\n{_s2}")
                         
                         # Check if from same source
                         if txn1_data.get('Source File') == txn2_data.get('Source File'):
@@ -2541,7 +2580,7 @@ def render_ui_flow_individual():
             txn_state = txn.get('End State', 'Unknown')
             source_file = txn.get('Source File', 'Unknown')
             start_time = txn.get('Start Time', 'N/A')
-            transaction_options.append(f"{txn_id} | {txn_type} | {txn_state} | {start_time} | {source_file}")
+            transaction_options.append(f"{txn_id} | {txn_type} | {txn_state} | {source_file} | {start_time}")
         
         selected_option = st.selectbox(
             "Select a transaction to visualize",
@@ -3504,7 +3543,7 @@ RAISES:
         transaction_options = {}
         for _, txn in filtered_df.iterrows():
             txn_id = txn['Transaction ID']
-            display = f"{txn_id} | {txn['Transaction Type']} | {txn['End State']} | {txn['Start Time']} | {txn['Source File']}"
+            display = f"{txn_id} | {txn['Transaction Type']} | {txn['End State']} | {txn['Source File']} | {txn['Start Time']}"
             transaction_options[display] = txn_id
         
         selected_display = st.selectbox(
@@ -3528,7 +3567,18 @@ RAISES:
             st.markdown(f"**State:** {selected_txn_data['End State']}")
             st.markdown(f"**Start Time:** {selected_txn_data['Start Time']}")
             st.markdown(f"**End Time:** {selected_txn_data['End Time']}")
-            st.markdown(f"**Source File:** {selected_txn_data['Source File']}")
+            # Format source file date (e.g. 20250423 -> 23 April 2025)
+            _src = selected_txn_data['Source File']
+            try:
+                import re as _re
+                _match = _re.search(r'(\d{4})(\d{2})(\d{2})', _src)
+                if _match:
+                    from datetime import datetime as _dt
+                    _readable = _dt.strptime(_match.group(), '%Y%m%d').strftime('%d %B %Y')
+                    _src = _re.sub(r'\d{8}', _readable, _src)
+            except Exception:
+                pass
+            st.markdown(f"**Source File:** {_src}")
         
         with col2:
             st.markdown("####   Transaction Log Preview")
@@ -3643,11 +3693,9 @@ RAISES:
                 # User authentication data
                 users = {
                     "Select User": {"email": "", "passcode": ""},
-                    "John Smith (john.smith@company.com)": {"email": "john.smith@company.com", "passcode": "1234"},
-                    "Sarah Johnson (sarah.johnson@company.com)": {"email": "sarah.johnson@company.com", "passcode": "5678"},
-                    "Michael Brown (michael.brown@company.com)": {"email": "michael.brown@company.com", "passcode": "9012"},
-                    "Emily Davis (emily.davis@company.com)": {"email": "emily.davis@company.com", "passcode": "3456"},
-                    "Robert Wilson (robert.wilson@company.com)": {"email": "robert.wilson@company.com", "passcode": "7890"}
+                    "Ashish Trivedi (ashish.trivedi@dieboldnixdorf.com)": {"email": "ashish.trivedi@dieboldnixdorf.com", "passcode": "1234"},
+                    "Arthav Deshpande (arthav.deshpande@dieboldnixdorf.com)": {"email": "arthav.deshpande@dieboldnixdorf.com", "passcode": "5678"},
+                    "Prasad Avasare (prasad.avasare@dieboldnixdorf.com)": {"email": "prasad.avasare@dieboldnixdorf.com", "passcode": "9012"},
                 }
                 
                 # Question 1: Rating
@@ -3844,7 +3892,7 @@ RAISES:
     Exception                           : For any unexpected errors during execution
 """
 
-    st.markdown("###   Counters Analysis")
+    st.markdown("###   Counters Analysis ( Under Development )")
     
     need_analysis = False
     

@@ -3504,7 +3504,7 @@ RAISES:
         transaction_options = {}
         for _, txn in filtered_df.iterrows():
             txn_id = txn['Transaction ID']
-            display = f"{txn_id} | {txn['Transaction Type']} | {txn['End State']} | {txn['Source File']} | {txn['Start Time']}"
+            display = f"{txn_id} | {txn['Transaction Type']} | {txn['End State']} | {txn['Start Time']} | {txn['Source File']}"
             transaction_options[display] = txn_id
         
         selected_display = st.selectbox(

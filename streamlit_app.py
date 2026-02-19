@@ -333,7 +333,7 @@ st.markdown("""
 # ============================================
 # GLOBAL VARIABLES
 # ============================================
-API_BASE_URL = "http://Backend:8000/api/v1"
+API_BASE_URL = "http://localhost:8000/api/v1"
 
 # ============================================
 # LOGIN PAGE UI
@@ -1057,7 +1057,11 @@ def render_side_by_side_diff(content1: str, content2: str, filename1: str, filen
 
     # Summary bar - only show when diff-only mode is active
     if hide_identical:
-        st.info(f"Showing **{diff_only_count}** differing line(s).")
+        if diff_only_count == 0:
+            st.success(" No differences found — the two files are identical.")
+            return
+        else:
+            st.info(f"Showing **{diff_only_count}** differing line(s).")
 
     st.markdown("---")
     

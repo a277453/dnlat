@@ -333,7 +333,7 @@ st.markdown("""
 # ============================================
 # GLOBAL VARIABLES
 # ============================================
-API_BASE_URL = "http://localhost:8000/api/v1"
+API_BASE_URL = "http://Backend:8000/api/v1"
 
 # ============================================
 # LOGIN PAGE UI
@@ -1174,7 +1174,7 @@ def render_transaction_stats():
                     st.error("⏱  Analysis timeout. The file may be too large.")
                     return
                 except requests.exceptions.ConnectionError:
-                    st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+                    st.error("  Connection error. Ensure the API server is running on Backend:8000.")
                     return
                 except Exception as e:
                     st.error(f"  Error during analysis: {str(e)}")
@@ -1407,7 +1407,7 @@ def render_transaction_stats():
     except requests.exceptions.Timeout:
         st.error("  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error loading transaction statistics: {str(e)}")
         import traceback
@@ -1538,7 +1538,7 @@ RAISES:
     except requests.exceptions.Timeout:
         st.error("  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error: {str(e)}")
         logger.exception("Error in render_registry_single")
@@ -1733,7 +1733,7 @@ def render_registry_compare():
     except requests.exceptions.Timeout:
         st.error("  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error in comparison setup: {str(e)}")
         logger.exception("Error in render_registry_compare")
@@ -1827,7 +1827,7 @@ def render_transaction_comparison():
                     st.error("  Analysis timeout. The file may be too large.")
                     return
                 except requests.exceptions.ConnectionError:
-                    st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+                    st.error("  Connection error. Ensure the API server is running on Backend:8000.")
                     return
                 except Exception as e:
                     st.error(f"  Error during analysis: {str(e)}")
@@ -2351,7 +2351,7 @@ def render_transaction_comparison():
     except requests.exceptions.Timeout:
         st.error("⏱  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error in transaction comparison: {str(e)}")
         import traceback
@@ -2443,7 +2443,7 @@ def render_ui_flow_individual():
                     st.error("  Analysis timeout. The file may be too large.")
                     return
                 except requests.exceptions.ConnectionError:
-                    st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+                    st.error("  Connection error. Ensure the API server is running on Backend:8000.")
                     return
                 except Exception as e:
                     st.error(f"  Error during analysis: {str(e)}")
@@ -2671,7 +2671,7 @@ def render_ui_flow_individual():
             except requests.exceptions.Timeout:
                 st.error("⏱  Request timeout. Please try again.")
             except requests.exceptions.ConnectionError:
-                st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+                st.error("  Connection error. Ensure the API server is running on Backend:8000.")
             except Exception as e:
                 st.error(f"  Error in UI flow visualization: {str(e)}")
                 import traceback
@@ -2681,7 +2681,7 @@ def render_ui_flow_individual():
     except requests.exceptions.Timeout:
         st.error("⏱  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error loading UI flow: {str(e)}")
         import traceback
@@ -4947,7 +4947,7 @@ def show_main_app():
                 except requests.exceptions.Timeout:
                     st.error("Request timeout. The file may be too large or the server is not responding.")
                 except requests.exceptions.ConnectionError:
-                    st.error("Connection error. Please ensure the FastAPI server is running on localhost:8000.")
+                    st.error("Connection error. Please ensure the FastAPI server is running on Backend:8000.")
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
         else:

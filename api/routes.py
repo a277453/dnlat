@@ -2946,6 +2946,7 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "metadata": {
                     "transaction_id": transaction_id,
+                    "model": "llama3_log_analyzer",
                     "log_length": len(transaction_log),
                     "response_length": len(raw_response),
                     "analysis_type": "anomaly_detection",

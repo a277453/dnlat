@@ -79,9 +79,57 @@ st.markdown("""
     }
     
     .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
+        padding-top: 0.75rem;
+        padding-bottom: 0.75rem;
         max-width: 1400px;
+    }
+    
+    /* Reduce gap between Streamlit elements */
+    .element-container {
+        margin-bottom: 0 !important;
+    }
+    
+    [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"],
+    [data-testid="stVerticalBlock"] > div {
+        gap: 0.25rem !important;
+    }
+    
+    /* Kill Streamlit's default 1rem top padding on every block wrapper */
+    div[data-testid="stVerticalBlock"] > div {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    
+    /* Reduce metric padding */
+    [data-testid="stMetric"] {
+        padding: 0.4rem 0 !important;
+    }
+    
+    /* Reduce horizontal block gaps */
+    [data-testid="stHorizontalBlock"] {
+        gap: 0.5rem !important;
+    }
+    
+    /* Tighten dividers (--- markdown) */
+    hr {
+        margin: 0.4rem 0 !important;
+    }
+    
+    /* Reduce stMarkdown paragraph spacing */
+    [data-testid="stMarkdownContainer"] p {
+        margin-bottom: 0.2rem !important;
+    }
+    
+    /* Reduce column gaps */
+    [data-testid="column"] {
+        padding: 0 0.3rem !important;
+    }
+    
+    /* Tighten selectbox and uploader top gap */
+    [data-testid="stFileUploader"],
+    [data-testid="stSelectbox"] {
+        margin-top: 0 !important;
+        margin-bottom: 0.3rem !important;
     }
     
     /* Sidebar Styles */
@@ -102,9 +150,24 @@ st.markdown("""
         color: #ffffff !important;
         font-size: 1.75rem !important;
         font-weight: 600 !important;
-        margin: 2rem 0 1rem 0 !important;
+        margin: 0 0 0.25rem 0 !important;
+        padding-top: 0 !important;
         border-bottom: 2px solid #2563eb;
-        padding-bottom: 0.5rem;
+        padding-bottom: 0.25rem;
+    }
+    
+    /* Remove space Streamlit wraps around markdown h2 blocks */
+    [data-testid="stMarkdownContainer"] h2 {
+        margin-top: 0 !important;
+        padding-top: 0 !important;
+    }
+    
+    /* Target the element-container div wrapping h2 sections */
+    div[data-testid="stVerticalBlock"] > div:has(> [data-testid="stMarkdownContainer"] > h2) {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        margin-top: 0.4rem !important;
+        margin-bottom: 0 !important;
     }
     
     h3 {
@@ -118,14 +181,14 @@ st.markdown("""
         background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
         color: #ffffff;
         border: none;
-        padding: 0.75rem 2rem;
-        border-radius: 8px;
+        padding: 0.4rem 0.8rem;
+        border-radius: 6px;
         font-weight: 600;
-        font-size: 0.95rem;
+        font-size: 0.85rem;
         transition: all 0.3s ease;
-        box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
+        box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
         width: 100%;
-        height: 48px;
+        height: 36px;
     }
     
     .stButton > button:hover {
@@ -222,9 +285,9 @@ st.markdown("""
     
     /* Single scroll wrapper for both panes */
     .diff-scroll-wrapper {
-        overflow-x: auto;
+        overflow-x: hidden;
         overflow-y: auto;
-        max-height: 600px;
+        max-height: 70vh;
         border: 1px solid #2a2a2a;
         border-radius: 8px;
         background-color: #0f0f0f;
@@ -234,12 +297,13 @@ st.markdown("""
         display: flex;
         gap: 1px;
         background-color: #2a2a2a;
-        min-width: max-content;
+        width: 100%;
     }
     
     .diff-pane-col {
         flex: 1;
-        min-width: 600px;
+        min-width: 0;
+        overflow: hidden;
         background-color: #0f0f0f;
     }
     
@@ -277,12 +341,14 @@ st.markdown("""
     
     .diff-line {
         display: flex;
+        align-items: flex-start;
         padding: 6px 12px;
         font-size: 13px;
         line-height: 1.6;
         color: #e0e0e0;
         border-bottom: 1px solid #1a1a1a;
-        white-space: pre;
+        white-space: pre-wrap;
+        word-break: break-all;
         font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
         min-height: 24px;
     }
@@ -310,6 +376,8 @@ st.markdown("""
         user-select: none;
         flex-shrink: 0;
         font-weight: 500;
+        align-self: flex-start;
+        padding-top: 1px;
     }
     
     .diff-content-change {
@@ -1140,7 +1208,7 @@ def render_transaction_stats():
     """
     Render transaction statistics with source file filter
     """
-    st.markdown("###   Transaction Type Statistics")
+    st.markdown("## Transaction Type Statistics")
     
     # Initialize a flag to track if we need to analyze
     need_analysis = False
@@ -1198,7 +1266,7 @@ def render_transaction_stats():
             # ========================================
             # SECTION 1: Overall Statistics
             # ========================================
-            st.markdown("#### Overall Transaction Statistics")
+            st.markdown("##### Overall Transaction Statistics")
             
             if 'statistics' in data:
                 stats_df = pd.DataFrame(data['statistics'])
@@ -1308,21 +1376,6 @@ def render_transaction_stats():
                                     if filter_state != 'All':
                                         display_df = display_df[display_df['State'] == filter_state]
 
-                                    # Search Transaction ID
-                                    st.markdown("---")
-                                    search_txn_id = st.text_input(
-                                        "  Search Transaction ID",
-                                        placeholder="Enter Transaction ID to search...",
-                                        key="ui_flow_txn_search"
-                                    )
-                                    
-                                    if search_txn_id:
-                                        display_df = display_df[display_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
-                                        if len(display_df) == 0:
-                                            st.warning("  No transactions match the search term")
-                                            return
-                                        st.info(f"Search filtered to {len(display_df)} transaction(s)")
-
                                     # Display filtered count
                                     if len(display_df) != len(txn_df):
                                         st.info(f"Filtered to {len(display_df)} transaction(s)")
@@ -1352,28 +1405,91 @@ def render_transaction_stats():
                                             st.metric("Success Rate", "0%")
                                     
                                     st.markdown("---")
-                                    
-                                    # Display the transactions table
-                                    # Convert Duration to string so it left-aligns (numeric cols auto right-align)
-                                    display_df_show = display_df.copy()
-                                    display_df_show['Duration (s)'] = display_df_show['Duration (s)'].astype(str)
-                                    st.dataframe(
-                                        display_df_show,
-                                        use_container_width=True,
-                                        hide_index=True
-                                    )
-                                    
-                                    
-                                    # Download button
-                                    st.markdown("---")
+
+                                    if 'show_txn_table_search' not in st.session_state:
+                                        st.session_state.show_txn_table_search = False
+
+                                    def _toggle_search():
+                                        st.session_state.show_txn_table_search = not st.session_state.show_txn_table_search
+
+                                    # Row: spacer | search input (small, only when open) | icon button
+                                    st.markdown("""<style>
+                                        [data-testid="stDownloadButton"] button,
+                                        [data-testid="stDownloadButton"] button:focus,
+                                        [data-testid="stDownloadButton"] button:active {
+                                            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+                                            color: #ffffff !important;
+                                            border: none !important;
+                                            border-radius: 6px !important;
+                                            padding: 0.4rem 0.8rem !important;
+                                            font-weight: 600 !important;
+                                            font-size: 0.85rem !important;
+                                            box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2) !important;
+                                            width: 100% !important;
+                                            height: 36px !important;
+                                            min-height: 36px !important;
+                                            max-height: 36px !important;
+                                        }
+                                        [data-testid="stDownloadButton"] button:hover {
+                                            background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%) !important;
+                                            box-shadow: 0 4px 8px rgba(37, 99, 235, 0.35) !important;
+                                            transform: none !important;
+                                        }
+                                        /* Match search button height to download button */
+                                        div[data-testid="stButton"]:has(button[data-testid="baseButton-secondary"]) > button {
+                                            height: 36px !important;
+                                            min-height: 36px !important;
+                                            max-height: 36px !important;
+                                            padding: 0.4rem 0.8rem !important;
+                                            font-size: 0.85rem !important;
+                                            border-radius: 6px !important;
+                                        }
+                                        /* Reduce gap between the two button columns */
+                                        div[data-testid="stHorizontalBlock"] > div:nth-last-child(-n+2) {
+                                            padding-left: 2px !important;
+                                            padding-right: 2px !important;
+                                        }
+                                    </style>""", unsafe_allow_html=True)
+
                                     csv = display_df.to_csv(index=False)
-                                    st.download_button(
-                                        label=" Download Filtered Transactions as CSV",
-                                        data=csv,
-                                        file_name=f"transactions_filtered_{len(selected_sources)}_sources.csv",
-                                        mime="text/csv",
-                                        key="download_filtered_txns"
-                                    )
+
+                                    if st.session_state.show_txn_table_search:
+                                        _sp, _si, _sb, _db = st.columns([3, 2, 0.4, 0.4])
+                                        with _sb:
+                                            st.button("✕", key="toggle_txn_table_search", on_click=_toggle_search)
+                                        with _si:
+                                            table_search = st.text_input(
+                                                "", placeholder="Search Transaction ID...",
+                                                key="txn_table_search_input",
+                                                label_visibility="collapsed"
+                                            )
+                                            if table_search:
+                                                mask = display_df['Transaction ID'].astype(str).str.contains(table_search, case=False, na=False)
+                                                display_df = display_df[mask]
+                                                if len(display_df) == 0:
+                                                    st.caption(f"0 results for '{table_search}'")
+                                                else:
+                                                    st.caption(f"{len(display_df)} result(s)")
+                                        with _db:
+                                            st.download_button("⬇", data=csv, file_name=f"transactions_filtered_{len(selected_sources)}_sources.csv", mime="text/csv", key="download_filtered_txns")
+                                    else:
+                                        _sp, _sb, _db = st.columns([5, 0.4, 0.4])
+                                        with _sb:
+                                            st.button("⌕", key="toggle_txn_table_search", on_click=_toggle_search)
+                                        with _db:
+                                            st.download_button("⬇", data=csv, file_name=f"transactions_filtered_{len(selected_sources)}_sources.csv", mime="text/csv", key="download_filtered_txns")
+
+                                    # Display the transactions table only if results exist
+                                    if len(display_df) == 0:
+                                        pass
+                                    else:
+                                        display_df_show = display_df.copy()
+                                        display_df_show['Duration (s)'] = display_df_show['Duration (s)'].astype(str)
+                                        st.dataframe(
+                                            display_df_show,
+                                            use_container_width=True,
+                                            hide_index=True
+                                        )
                                     
                                 else:
                                     st.warning("  No transactions found for the selected source files.")
@@ -1446,7 +1562,7 @@ RAISES:
     Exception                           : For any unexpected errors during execution
 """
 
-    st.markdown("###  Registry File Viewer")
+    st.markdown("####  Registry File Viewer")
 
     # Get registry contents from session via API
     try:
@@ -1554,7 +1670,7 @@ def render_registry_compare():
     """
     Render registry file comparison interface with in-memory content loading
     """
-    st.markdown("### Registry File Comparison")
+    st.markdown("#### Registry File Comparison")
     
     # Get registry contents from Package A (main session)
     try:
@@ -1779,7 +1895,7 @@ def render_transaction_comparison():
             Any unexpected error during API calls, analysis, or comparison is
             caught and displayed via Streamlit.
     """
-    st.markdown("###   Transaction Comparison Analysis")
+    st.markdown("####   Transaction Comparison Analysis")
     
     need_analysis = False
     
@@ -2395,7 +2511,7 @@ def render_ui_flow_individual():
             Any unexpected errors during API calls, analysis, filtering, or visualization
             are caught and displayed via Streamlit.
     """
-    st.markdown("###   UI Flow of Individual Transaction")
+    st.markdown("####   UI Flow of Individual Transaction")
     
     need_analysis = False
     
@@ -3212,7 +3328,7 @@ def render_consolidated_flow():
         - Detailed transaction flows can be expanded to review each transaction's UI path.
     """
 
-    st.markdown("###   Consolidated Transaction UI Flow and Analysis")
+    st.markdown("####  Consolidated Transaction UI Flow and Analysis")
     
     need_analysis = False
     
@@ -3407,7 +3523,7 @@ RAISES:
     requests.exceptions.ConnectionError: If the API server is unreachable.
     Exception                         : For general errors during transaction retrieval, analysis, or feedback submission.
 """
-    st.markdown("###  Individual Transaction Analysis")
+    st.markdown("##  Individual Transaction Analysis")
     
     need_analysis = False
     
@@ -3478,7 +3594,7 @@ RAISES:
             return
         
         # STEP 4: Filters
-        st.markdown("####   Select Transaction")
+        st.markdown("####  Select Transaction")
         
         txn_df = pd.DataFrame(all_transactions)
         
@@ -3899,7 +4015,7 @@ RAISES:
     Exception                           : For any unexpected errors during execution
 """
 
-    st.markdown("###   Counters Analysis ( Under Development )")
+    st.markdown("####   Counters Analysis ")
     
     need_analysis = False
     
@@ -4463,7 +4579,7 @@ def render_acu_single_parse(): # MODIFIED
     """
     #st.write("SESSION STATE DEBUG:", st.session_state)   # debug Added
 
-    st.markdown("###   ACU Configuration Parser")
+    st.markdown("####   ACU Configuration Parser")
     
     
     # Initialize session state
@@ -4637,7 +4753,7 @@ RAISES:
     requests.exceptions.ConnectionError: If the API server is unreachable.
     Exception                         : For general errors during file loading, extraction, or comparison.
 """
-    st.markdown("###   ACU Configuration Comparison")
+    st.markdown("####   ACU Configuration Comparison")
     st.info("Compare ACU configuration files from two different ZIP archives.")
     
     # Initialize session state

@@ -1471,8 +1471,6 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
             successful = len(type_df[type_df['End State'] == 'Successful'])
             unsuccessful = len(type_df[type_df['End State'] == 'Unsuccessful'])
             total = len(type_df)
-
-            map
             
             # Calculate average duration
             if 'Duration (seconds)' in type_df.columns:

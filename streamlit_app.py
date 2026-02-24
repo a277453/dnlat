@@ -332,7 +332,7 @@ st.markdown("""
 # ============================================
 # GLOBAL VARIABLES
 # ============================================
-API_BASE_URL = "http://localhost:8000/api/v1"
+API_BASE_URL = "http://backend:8000/api/v1"
 
 # ============================================
 # LOGIN PAGE UI
@@ -515,24 +515,24 @@ def show_register_page():
 
             email = email.strip().lower()
             name = name.strip().title()
-            
+            #CAtharv_0702:Changed the spacing in logging.
             if not all([email, name, password, confirm_password, employee_code]):
-                st.error("  All fields are required")
+                st.error("All fields are required")
 
             elif not re.match(email_pattern, email):
                 st.error("Please use your official Diebold Nixdorf email ID")
 
             elif not re.match(name_pattern, name):
-                st.error("  Name must contain only letters and spaces")    
+                st.error("Name must contain only letters and spaces")    
             
             elif not is_valid_password(password):
                 st.error("Password must be at least 8 characters long and include uppercase, lowercase, Min 2 digits, and special character.")
 
             elif password != confirm_password:
-                st.error("  Passwords do not match with confirm password")
+                st.error("Passwords do not match with confirm password")
 
             elif is_invalid_emp_code(employee_code):
-                st.error("  Please enter a valid 8-digit employee code")
+                st.error("Please enter a valid 8-digit employee code")
 
 
             else:
@@ -1691,15 +1691,15 @@ def render_registry_compare():
                             text_a = safe_decode(content_a)
                             text_b = safe_decode(content_b)
                             
-                            # Store in session state so it persists across checkbox reruns
-                            st.session_state.registry_comparison = {
-                                'text_a': text_a,
-                                'text_b': text_b,
-                                'fname_a': f"Package 1: {selected_filename}",
-                                'fname_b': f"Package 2: {selected_filename}",
-                                'selected_file': selected_filename
-                            }
-                            st.rerun()
+                            # Check if files are identical
+                            if text_a == text_b:
+                                st.success("No changes in Registry - Files are identical")
+                                st.info(f"**{selected_filename}** has no differences between Package 1 and Package 2")
+                            else:
+                                # Render side-by-side comparison
+                                fname_a = f"Package 1: {selected_filename}"
+                                fname_b = f"Package 2: {selected_filename}"
+                                render_side_by_side_diff(text_a, text_b, fname_a, fname_b)
 
                         except Exception as e:
                             st.error(f"Error comparing files: {str(e)}")
@@ -3618,6 +3618,7 @@ RAISES:
             st.markdown("---")
             st.markdown("####   AI Analysis")
             
+            logger.info(f"Ollama output was:- {result}")
             analysis_text = result.get('analysis', 'No analysis available')
             
             # Display in a nice box
@@ -3761,7 +3762,7 @@ RAISES:
                                         "comment": st.session_state.get(f"{feedback_key_prefix}_comment", ""),
                                         "user_name": user_name,
                                         "user_email": user_email,
-                                        "model_version": result['metadata']['model'],
+                                        "model_version": result.get('metadata', {}).get('model', 'llama3_log_analyzer'),
                                         "original_llm_response": result.get('analysis', '')
                                     }
                                     

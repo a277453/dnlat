@@ -14,6 +14,7 @@ from fastapi.logger import logger
 from modules.streamlit_logger import logger as frontend_logger
 import time
 from modules.login import register_user
+import re as _re; from datetime import datetime as _dt
 
 
 # Import authentication functions
@@ -78,9 +79,57 @@ st.markdown("""
     }
     
     .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
+        padding-top: 0.75rem;
+        padding-bottom: 0.75rem;
         max-width: 1400px;
+    }
+    
+    /* Reduce gap between Streamlit elements */
+    .element-container {
+        margin-bottom: 0 !important;
+    }
+    
+    [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"],
+    [data-testid="stVerticalBlock"] > div {
+        gap: 0.25rem !important;
+    }
+    
+    /* Kill Streamlit's default 1rem top padding on every block wrapper */
+    div[data-testid="stVerticalBlock"] > div {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    
+    /* Reduce metric padding */
+    [data-testid="stMetric"] {
+        padding: 0.4rem 0 !important;
+    }
+    
+    /* Reduce horizontal block gaps */
+    [data-testid="stHorizontalBlock"] {
+        gap: 0.5rem !important;
+    }
+    
+    /* Tighten dividers (--- markdown) */
+    hr {
+        margin: 0.4rem 0 !important;
+    }
+    
+    /* Reduce stMarkdown paragraph spacing */
+    [data-testid="stMarkdownContainer"] p {
+        margin-bottom: 0.2rem !important;
+    }
+    
+    /* Reduce column gaps */
+    [data-testid="column"] {
+        padding: 0 0.3rem !important;
+    }
+    
+    /* Tighten selectbox and uploader top gap */
+    [data-testid="stFileUploader"],
+    [data-testid="stSelectbox"] {
+        margin-top: 0 !important;
+        margin-bottom: 0.3rem !important;
     }
     
     /* Sidebar Styles */
@@ -101,9 +150,24 @@ st.markdown("""
         color: #ffffff !important;
         font-size: 1.75rem !important;
         font-weight: 600 !important;
-        margin: 2rem 0 1rem 0 !important;
+        margin: 0 0 0.25rem 0 !important;
+        padding-top: 0 !important;
         border-bottom: 2px solid #2563eb;
-        padding-bottom: 0.5rem;
+        padding-bottom: 0.25rem;
+    }
+    
+    /* Remove space Streamlit wraps around markdown h2 blocks */
+    [data-testid="stMarkdownContainer"] h2 {
+        margin-top: 0 !important;
+        padding-top: 0 !important;
+    }
+    
+    /* Target the element-container div wrapping h2 sections */
+    div[data-testid="stVerticalBlock"] > div:has(> [data-testid="stMarkdownContainer"] > h2) {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        margin-top: 0.4rem !important;
+        margin-bottom: 0 !important;
     }
     
     h3 {
@@ -117,14 +181,14 @@ st.markdown("""
         background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
         color: #ffffff;
         border: none;
-        padding: 0.75rem 2rem;
-        border-radius: 8px;
+        padding: 0.4rem 0.8rem;
+        border-radius: 6px;
         font-weight: 600;
-        font-size: 0.95rem;
+        font-size: 0.85rem;
         transition: all 0.3s ease;
-        box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
+        box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
         width: 100%;
-        height: 48px;
+        height: 36px;
     }
     
     .stButton > button:hover {
@@ -221,9 +285,9 @@ st.markdown("""
     
     /* Single scroll wrapper for both panes */
     .diff-scroll-wrapper {
-        overflow-x: auto;
+        overflow-x: hidden;
         overflow-y: auto;
-        max-height: 600px;
+        max-height: 70vh;
         border: 1px solid #2a2a2a;
         border-radius: 8px;
         background-color: #0f0f0f;
@@ -233,12 +297,13 @@ st.markdown("""
         display: flex;
         gap: 1px;
         background-color: #2a2a2a;
-        min-width: max-content;
+        width: 100%;
     }
     
     .diff-pane-col {
         flex: 1;
-        min-width: 600px;
+        min-width: 0;
+        overflow: hidden;
         background-color: #0f0f0f;
     }
     
@@ -276,12 +341,14 @@ st.markdown("""
     
     .diff-line {
         display: flex;
+        align-items: flex-start;
         padding: 6px 12px;
         font-size: 13px;
         line-height: 1.6;
         color: #e0e0e0;
         border-bottom: 1px solid #1a1a1a;
-        white-space: pre;
+        white-space: pre-wrap;
+        word-break: break-all;
         font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
         min-height: 24px;
     }
@@ -309,6 +376,8 @@ st.markdown("""
         user-select: none;
         flex-shrink: 0;
         font-weight: 500;
+        align-self: flex-start;
+        padding-top: 1px;
     }
     
     .diff-content-change {
@@ -1056,7 +1125,11 @@ def render_side_by_side_diff(content1: str, content2: str, filename1: str, filen
 
     # Summary bar - only show when diff-only mode is active
     if hide_identical:
-        st.info(f"Showing **{diff_only_count}** differing line(s).")
+        if diff_only_count == 0:
+            st.success(" No differences found — the two files are identical.")
+            return
+        else:
+            st.info(f"Showing **{diff_only_count}** differing line(s).")
 
     st.markdown("---")
     
@@ -1135,7 +1208,7 @@ def render_transaction_stats():
     """
     Render transaction statistics with source file filter
     """
-    st.markdown("###   Transaction Type Statistics")
+    st.markdown("## Transaction Type Statistics")
     
     # Initialize a flag to track if we need to analyze
     need_analysis = False
@@ -1173,7 +1246,7 @@ def render_transaction_stats():
                     st.error("⏱  Analysis timeout. The file may be too large.")
                     return
                 except requests.exceptions.ConnectionError:
-                    st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+                    st.error("  Connection error. Ensure the API server is running on Backend:8000.")
                     return
                 except Exception as e:
                     st.error(f"  Error during analysis: {str(e)}")
@@ -1193,15 +1266,25 @@ def render_transaction_stats():
             # ========================================
             # SECTION 1: Overall Statistics
             # ========================================
-            st.markdown("#### Overall Transaction Statistics")
+            st.markdown("##### Overall Transaction Statistics")
             
             if 'statistics' in data:
                 stats_df = pd.DataFrame(data['statistics'])
 
+                # Convert to numeric so Streamlit auto right-aligns, use column_config to show units
+                col_config = {}
+                if 'Success Rate' in stats_df.columns:
+                    stats_df['Success Rate'] = pd.to_numeric(stats_df['Success Rate'].astype(str).str.replace('%', '', regex=False), errors='coerce')
+                    col_config['Success Rate'] = st.column_config.NumberColumn('Success Rate', format='%.1f%%')
+                if 'Avg Duration' in stats_df.columns:
+                    stats_df['Avg Duration'] = pd.to_numeric(stats_df['Avg Duration'].astype(str).str.replace('s', '', regex=False), errors='coerce')
+                    col_config['Avg Duration'] = st.column_config.NumberColumn('Avg Duration', format='%.1f s')
+
                 st.dataframe(
                     stats_df,
                     use_container_width=True,
-                    hide_index=True
+                    hide_index=True,
+                    column_config=col_config
                 )
             # ========================================
             # SECTION 2: Source File Filter
@@ -1259,9 +1342,12 @@ def render_transaction_stats():
                                         })
                                     
                                     txn_df = pd.DataFrame(txn_display_data)
+
+                                    # Sort by Source File ascending so data appears grouped by file in date order
+                                    txn_df = txn_df.sort_values('Source File', ascending=True).reset_index(drop=True)
                                     
                                     # Add additional filters
-                                    col1, col2, col3 = st.columns(3)
+                                    col1, col2 = st.columns(2)
                                     
                                     with col1:
                                         # Get unique transaction types
@@ -1281,14 +1367,6 @@ def render_transaction_stats():
                                             key="stats_state_filter"
                                         )
                                     
-                                    with col3:
-                                        # Transaction ID search
-                                        search_txn_id = st.text_input(
-                                            "Transaction ID",
-                                            placeholder="Search ID...",
-                                            key="stats_txn_id_search"
-                                        )
-                                    
                                     # Apply filters
                                     display_df = txn_df.copy()
                                     
@@ -1298,35 +1376,10 @@ def render_transaction_stats():
                                     if filter_state != 'All':
                                         display_df = display_df[display_df['State'] == filter_state]
 
-                                    if search_txn_id:
-                                        display_df = display_df[display_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
-                                    
                                     # Display filtered count
                                     if len(display_df) != len(txn_df):
                                         st.info(f"Filtered to {len(display_df)} transaction(s)")
                                     
-                            # Transaction ID search
-                                    st.markdown("---")
-                                    search_txn_id = st.text_input(
-                                        "  Search Transaction ID",
-                                        placeholder="Enter Transaction ID to search...",
-                                        key="ui_flow_txn_search"
-                                    )
-                                    
-                                    if search_txn_id:
-                                        display_df = display_df[display_df['Transaction ID'].str.contains(search_txn_id, case=False, na=False)]
-                                        if len(display_df) == 0:
-                                            st.warning("  No transactions match the search term")
-                                            return
-                                        st.info(f"Search filtered to {len(display_df)} transaction(s)")
-                                    
-                                    
-                                    # Display the transactions table
-                                    st.dataframe(
-                                        display_df,
-                                        use_container_width=True,
-                                        hide_index=True
-                                    )
                                     
                                     # Statistics for filtered data
                                     st.markdown("#####   Statistics for Filtered Transactions")
@@ -1334,7 +1387,7 @@ def render_transaction_stats():
                                     stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
                                     
                                     with stat_col1:
-                                        st.metric("Total", len(display_df))
+                                        st.metric("Count", len(display_df))
                                     
                                     with stat_col2:
                                         successful = len(display_df[display_df['State'] == 'Successful'])
@@ -1351,16 +1404,92 @@ def render_transaction_stats():
                                         else:
                                             st.metric("Success Rate", "0%")
                                     
-                                    # Download button
                                     st.markdown("---")
+
+                                    if 'show_txn_table_search' not in st.session_state:
+                                        st.session_state.show_txn_table_search = False
+
+                                    def _toggle_search():
+                                        st.session_state.show_txn_table_search = not st.session_state.show_txn_table_search
+
+                                    # Row: spacer | search input (small, only when open) | icon button
+                                    st.markdown("""<style>
+                                        [data-testid="stDownloadButton"] button,
+                                        [data-testid="stDownloadButton"] button:focus,
+                                        [data-testid="stDownloadButton"] button:active {
+                                            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+                                            color: #ffffff !important;
+                                            border: none !important;
+                                            border-radius: 6px !important;
+                                            padding: 0.4rem 0.8rem !important;
+                                            font-weight: 600 !important;
+                                            font-size: 0.85rem !important;
+                                            box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2) !important;
+                                            width: 100% !important;
+                                            height: 36px !important;
+                                            min-height: 36px !important;
+                                            max-height: 36px !important;
+                                        }
+                                        [data-testid="stDownloadButton"] button:hover {
+                                            background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%) !important;
+                                            box-shadow: 0 4px 8px rgba(37, 99, 235, 0.35) !important;
+                                            transform: none !important;
+                                        }
+                                        /* Match search button height to download button */
+                                        div[data-testid="stButton"]:has(button[data-testid="baseButton-secondary"]) > button {
+                                            height: 36px !important;
+                                            min-height: 36px !important;
+                                            max-height: 36px !important;
+                                            padding: 0.4rem 0.8rem !important;
+                                            font-size: 0.85rem !important;
+                                            border-radius: 6px !important;
+                                        }
+                                        /* Reduce gap between the two button columns */
+                                        div[data-testid="stHorizontalBlock"] > div:nth-last-child(-n+2) {
+                                            padding-left: 2px !important;
+                                            padding-right: 2px !important;
+                                        }
+                                    </style>""", unsafe_allow_html=True)
+
                                     csv = display_df.to_csv(index=False)
-                                    st.download_button(
-                                        label="📥 Download Filtered Transactions as CSV",
-                                        data=csv,
-                                        file_name=f"transactions_filtered_{len(selected_sources)}_sources.csv",
-                                        mime="text/csv",
-                                        key="download_filtered_txns"
-                                    )
+
+                                    if st.session_state.show_txn_table_search:
+                                        _sp, _si, _sb, _db = st.columns([3, 2, 0.4, 0.4])
+                                        with _sb:
+                                            st.button("✕", key="toggle_txn_table_search", on_click=_toggle_search)
+                                        with _si:
+                                            table_search = st.text_input(
+                                                "", placeholder="Search Transaction ID...",
+                                                key="txn_table_search_input",
+                                                label_visibility="collapsed"
+                                            )
+                                            if table_search:
+                                                mask = display_df['Transaction ID'].astype(str).str.contains(table_search, case=False, na=False)
+                                                display_df = display_df[mask]
+                                                if len(display_df) == 0:
+                                                    st.caption(f"0 results for '{table_search}'")
+                                                else:
+                                                    st.caption(f"{len(display_df)} result(s)")
+                                        with _db:
+                                            st.download_button("⬇", data=csv, file_name=f"transactions_filtered_{len(selected_sources)}_sources.csv", mime="text/csv", key="download_filtered_txns")
+                                    else:
+                                        _sp, _sb, _db = st.columns([5, 0.4, 0.4])
+                                        with _sb:
+                                            st.button("⌕", key="toggle_txn_table_search", on_click=_toggle_search)
+                                        with _db:
+                                            st.download_button("⬇", data=csv, file_name=f"transactions_filtered_{len(selected_sources)}_sources.csv", mime="text/csv", key="download_filtered_txns")
+
+                                    # Display the transactions table only if results exist
+                                    if len(display_df) == 0:
+                                        pass
+                                    else:
+                                        display_df_show = display_df.copy()
+                                        display_df_show['Duration (s)'] = display_df_show['Duration (s)'].astype(str)
+                                        st.dataframe(
+                                            display_df_show,
+                                            use_container_width=True,
+                                            hide_index=True
+                                        )
                                     
                                 else:
                                     st.warning("  No transactions found for the selected source files.")
@@ -1375,9 +1504,9 @@ def render_transaction_stats():
                     st.error(f"Failed to retrieve source file information. Status: {sources_response.status_code}")
             
             except requests.exceptions.Timeout:
-                st.error("⏱  Request timeout while fetching source files. Please try again.")
+                st.error("  Request timeout while fetching source files. Please try again.")
             except requests.exceptions.ConnectionError:
-                st.error("🔌 Connection error. Ensure the API server is running.")
+                st.error(" Connection error. Ensure the API server is running.")
             except Exception as e:
                 st.error(f"  Error loading source file filter: {str(e)}")
         
@@ -1396,9 +1525,9 @@ def render_transaction_stats():
                 pass
             
     except requests.exceptions.Timeout:
-        st.error("⏱  Request timeout. Please try again.")
+        st.error("  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error loading transaction statistics: {str(e)}")
         import traceback
@@ -1433,7 +1562,7 @@ RAISES:
     Exception                           : For any unexpected errors during execution
 """
 
-    st.markdown("###  Registry File Viewer")
+    st.markdown("####  Registry File Viewer")
 
     # Get registry contents from session via API
     try:
@@ -1527,9 +1656,9 @@ RAISES:
                         st.code(traceback.format_exc())
                     
     except requests.exceptions.Timeout:
-        st.error("⏱  Request timeout. Please try again.")
+        st.error("  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error: {str(e)}")
         logger.exception("Error in render_registry_single")
@@ -1541,7 +1670,7 @@ def render_registry_compare():
     """
     Render registry file comparison interface with in-memory content loading
     """
-    st.markdown("### Registry File Comparison")
+    st.markdown("#### Registry File Comparison")
     
     # Get registry contents from Package A (main session)
     try:
@@ -1590,7 +1719,8 @@ def render_registry_compare():
             st.info(f"  File: {uploaded_file_b.name} ({file_size_mb:.2f} MB)")
             
             # Process second ZIP button
-            if st.button("Process Second Package", use_container_width=True, key="process_second_zip"):
+            st.markdown('<style>#process_second_zip { width: auto !important; padding: 0.375rem 1rem !important; }</style>', unsafe_allow_html=True)
+            if st.button("Process Second Package", key="process_second_zip"):
                 with st.spinner("Extracting registry files from second package..."):
                     try:
                         files = {"file": (uploaded_file_b.name, uploaded_file_b.getvalue(), "application/zip")}
@@ -1674,7 +1804,8 @@ def render_registry_compare():
             )
             
             if selected_filename:
-                if st.button("Compare Selected Files", use_container_width=True, key="do_compare"):
+                st.markdown('<style>#do_compare { width: auto !important; padding: 0.375rem 1rem !important; }</style>', unsafe_allow_html=True)
+                if st.button("Compare Selected Files", key="do_compare"):
                     with st.spinner("Comparing files..."):
                         try:
                             # Get contents from both packages
@@ -1722,7 +1853,7 @@ def render_registry_compare():
     except requests.exceptions.Timeout:
         st.error("  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error in comparison setup: {str(e)}")
         logger.exception("Error in render_registry_compare")
@@ -1764,7 +1895,7 @@ def render_transaction_comparison():
             Any unexpected error during API calls, analysis, or comparison is
             caught and displayed via Streamlit.
     """
-    st.markdown("###   Transaction Comparison Analysis")
+    st.markdown("####   Transaction Comparison Analysis")
     
     need_analysis = False
     
@@ -1813,10 +1944,10 @@ def render_transaction_comparison():
                         return
                         
                 except requests.exceptions.Timeout:
-                    st.error("⏱  Analysis timeout. The file may be too large.")
+                    st.error("  Analysis timeout. The file may be too large.")
                     return
                 except requests.exceptions.ConnectionError:
-                    st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+                    st.error("  Connection error. Ensure the API server is running on Backend:8000.")
                     return
                 except Exception as e:
                     st.error(f"  Error during analysis: {str(e)}")
@@ -1987,7 +2118,7 @@ def render_transaction_comparison():
             
             # Use filtered list for Transaction 1
             txn1_options = [
-                f"{txn['Transaction ID']} - {txn['Transaction Type']} ({txn['End State']})"
+                f"{txn['Transaction ID']} - {txn['Transaction Type']} | {txn['End State']} | {txn.get('Source File', 'Unknown')}"
                 for txn in filtered_txn1_list
             ]
             
@@ -2010,12 +2141,16 @@ def render_transaction_comparison():
                 )
                 
                 if txn1_data:
+                    try:
+                        import re as _re1; from datetime import datetime as _dt1
+                        _src1 = _re1.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt1.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), str(txn1_data.get('Source File', 'Unknown')))
+                    except Exception: _src1 = txn1_data.get('Source File', 'Unknown')
                     st.info(
                         f"**ID:** {txn1_data['Transaction ID']}\n\n"
                         f"**Type:** {txn1_data['Transaction Type']}\n\n"
                         f"**State:** {txn1_data['End State']}\n\n"
                         f"**Duration:** {txn1_data.get('Duration (seconds)', 0)}s\n\n"
-                        f"**Source:** {txn1_data.get('Source File', 'Unknown')}"
+                        f"**Source:** {_src1}"
                     )
         
         # Transaction 2 selector
@@ -2025,7 +2160,7 @@ def render_transaction_comparison():
             # Use filtered list for Transaction 2 AND exclude selected txn1
             txn2_options = [
                 opt for opt in [
-                    f"{txn['Transaction ID']} - {txn['Transaction Type']} ({txn['End State']})"
+                    f"{txn['Transaction ID']} - {txn['Transaction Type']} | {txn['End State']} | {txn.get('Source File', 'Unknown')}"
                     for txn in filtered_txn2_list
                 ]
                 if opt.split(' - ')[0] != (txn1_id if txn1_selection else None)
@@ -2050,12 +2185,16 @@ def render_transaction_comparison():
                 )
                 
                 if txn2_data:
+                    try:
+                        import re as _re2; from datetime import datetime as _dt2
+                        _src2 = _re2.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt2.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), str(txn2_data.get('Source File', 'Unknown')))
+                    except Exception: _src2 = txn2_data.get('Source File', 'Unknown')
                     st.info(
                         f"**ID:** {txn2_data['Transaction ID']}\n\n"
                         f"**Type:** {txn2_data['Transaction Type']}\n\n"
                         f"**State:** {txn2_data['End State']}\n\n"
                         f"**Duration:** {txn2_data.get('Duration (seconds)', 0)}s\n\n"
-                        f"**Source:** {txn2_data.get('Source File', 'Unknown')}"
+                        f"**Source:** {_src2}"
                     )
         
         # Check if both transactions are selected
@@ -2248,10 +2387,18 @@ def render_transaction_comparison():
                         source_col1, source_col2 = st.columns(2)
                         
                         with source_col1:
-                            st.info(f"**Transaction 1 Source:**\n\n{txn1_data.get('Source File', 'Unknown')}")
+                            _s1 = str(txn1_data.get('Source File', 'Unknown'))
+                            try:
+                                _s1 = _re.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), _s1)
+                            except Exception: pass
+                            st.info(f"**Transaction 1 Source:**\n\n{_s1}")
                         
                         with source_col2:
-                            st.info(f"**Transaction 2 Source:**\n\n{txn2_data.get('Source File', 'Unknown')}")
+                            _s2 = str(txn2_data.get('Source File', 'Unknown'))
+                            try:
+                                _s2 = _re.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), _s2)
+                            except Exception: pass
+                            st.info(f"**Transaction 2 Source:**\n\n{_s2}")
                         
                         # Check if from same source
                         if txn1_data.get('Source File') == txn2_data.get('Source File'):
@@ -2324,7 +2471,7 @@ def render_transaction_comparison():
     except requests.exceptions.Timeout:
         st.error("⏱  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error in transaction comparison: {str(e)}")
         import traceback
@@ -2364,7 +2511,7 @@ def render_ui_flow_individual():
             Any unexpected errors during API calls, analysis, filtering, or visualization
             are caught and displayed via Streamlit.
     """
-    st.markdown("###   UI Flow of Individual Transaction")
+    st.markdown("####   UI Flow of Individual Transaction")
     
     need_analysis = False
     
@@ -2403,7 +2550,7 @@ def render_ui_flow_individual():
                     
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
-                        st.success(f"✓ Analysis complete! Found {analyze_data.get('total_transactions', 0)} transactions")
+                        st.success(f" Analysis complete! Found {analyze_data.get('total_transactions', 0)} transactions")
                         import time
                         time.sleep(0.5)
                         st.rerun()
@@ -2413,10 +2560,10 @@ def render_ui_flow_individual():
                         return
                         
                 except requests.exceptions.Timeout:
-                    st.error("⏱  Analysis timeout. The file may be too large.")
+                    st.error("  Analysis timeout. The file may be too large.")
                     return
                 except requests.exceptions.ConnectionError:
-                    st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+                    st.error("  Connection error. Ensure the API server is running on Backend:8000.")
                     return
                 except Exception as e:
                     st.error(f"  Error during analysis: {str(e)}")
@@ -2552,7 +2699,7 @@ def render_ui_flow_individual():
             txn_state = txn.get('End State', 'Unknown')
             source_file = txn.get('Source File', 'Unknown')
             start_time = txn.get('Start Time', 'N/A')
-            transaction_options.append(f"{txn_id} | {txn_type} | {txn_state} | {start_time} | {source_file}")
+            transaction_options.append(f"{txn_id} | {txn_type} | {txn_state} | {source_file} | {start_time}")
         
         selected_option = st.selectbox(
             "Select a transaction to visualize",
@@ -2599,7 +2746,11 @@ def render_ui_flow_individual():
                     with col5:
                         st.metric("End Time", viz_data.get('end_time', 'N/A'))
                     with col6:
-                        st.metric("Source File", viz_data.get('source_file', 'N/A'))
+                        _sf = str(viz_data.get('source_file', 'N/A'))
+                        try:
+                            _sf = _re.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), _sf)
+                        except Exception: pass
+                        st.metric("Source File", _sf)
                     
                     # Display UI flow
                     st.markdown("---")
@@ -2640,7 +2791,7 @@ def render_ui_flow_individual():
             except requests.exceptions.Timeout:
                 st.error("⏱  Request timeout. Please try again.")
             except requests.exceptions.ConnectionError:
-                st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+                st.error("  Connection error. Ensure the API server is running on Backend:8000.")
             except Exception as e:
                 st.error(f"  Error in UI flow visualization: {str(e)}")
                 import traceback
@@ -2650,7 +2801,7 @@ def render_ui_flow_individual():
     except requests.exceptions.Timeout:
         st.error("⏱  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
-        st.error("  Connection error. Ensure the API server is running on localhost:8000.")
+        st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error loading UI flow: {str(e)}")
         import traceback
@@ -2739,9 +2890,14 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
     
     max_screens = len(flow_screens)
     
+    # Step controls vertical spacing between boxes (smaller = tighter)
+    step = 0.65
+    box_h = 0.42   # height of each rectangle
+    gap = step - box_h  # gap between boxes (~0.23)
+    
     # Add boxes for each screen
     for i, screen_data in enumerate(flow_screens):
-        y_pos = max_screens - 1 - i
+        y_pos = (max_screens - 1 - i) * step
         
         # Extract screen name and duration
         if has_details:
@@ -2762,25 +2918,26 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
         # Add box
         fig.add_shape(
             type="rect",
-            x0=0.1, x1=0.9, y0=y_pos, y1=y_pos + 0.7,
+            x0=0.3, x1=0.7, y0=y_pos, y1=y_pos + box_h,
             fillcolor=box_color,
             line=dict(color=box_color, width=2)
         )
         
         # Add text with duration
         fig.add_annotation(
-            x=0.5, y=y_pos + 0.35,
+            x=0.5, y=y_pos + box_h / 2,
             text=text_label,
             showarrow=False,
-            font=dict(color="white", size=11, family="Arial"),
+            font=dict(color="white", size=14, family="Arial"),
             xanchor="center", yanchor="middle"
         )
         
         # Add arrow to next screen (if not last)
         if i < len(flow_screens) - 1:
+            next_y_pos = (max_screens - 1 - (i + 1)) * step
             fig.add_annotation(
-                x=0.5, y=(y_pos - 1) + 0.7, # Arrow tip: top of the next box
-                ax=0.5, ay=y_pos,           # Arrow tail: bottom of the current box
+                x=0.5, y=next_y_pos + box_h,  # Arrow tip: top of the next box
+                ax=0.5, ay=y_pos,              # Arrow tail: bottom of current box
                 xref='x', yref='y',
                 axref='x', ayref='y',
                 showarrow=True,
@@ -2791,7 +2948,7 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
             )
     
     # Calculate height based on number of screens
-    height = max(400, max_screens * 100)
+    height = max(400, max_screens * 75)
     
     # Update layout
     fig.update_layout(
@@ -2820,7 +2977,7 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
         showgrid=False, 
         showticklabels=False, 
         zeroline=False,
-        range=[-0.5, max_screens]
+        range=[-0.3, max_screens * step]
     )
     
     return fig
@@ -3171,7 +3328,7 @@ def render_consolidated_flow():
         - Detailed transaction flows can be expanded to review each transaction's UI path.
     """
 
-    st.markdown("###   Consolidated Transaction UI Flow and Analysis")
+    st.markdown("####  Consolidated Transaction UI Flow and Analysis")
     
     need_analysis = False
     
@@ -3366,7 +3523,7 @@ RAISES:
     requests.exceptions.ConnectionError: If the API server is unreachable.
     Exception                         : For general errors during transaction retrieval, analysis, or feedback submission.
 """
-    st.markdown("###  Individual Transaction Analysis")
+    st.markdown("##  Individual Transaction Analysis")
     
     need_analysis = False
     
@@ -3437,7 +3594,7 @@ RAISES:
             return
         
         # STEP 4: Filters
-        st.markdown("####   Select Transaction")
+        st.markdown("####  Select Transaction")
         
         txn_df = pd.DataFrame(all_transactions)
         
@@ -3533,7 +3690,18 @@ RAISES:
             st.markdown(f"**State:** {selected_txn_data['End State']}")
             st.markdown(f"**Start Time:** {selected_txn_data['Start Time']}")
             st.markdown(f"**End Time:** {selected_txn_data['End Time']}")
-            st.markdown(f"**Source File:** {selected_txn_data['Source File']}")
+            # Format source file date (e.g. 20250423 -> 23 April 2025)
+            _src = selected_txn_data['Source File']
+            try:
+                import re as _re
+                _match = _re.search(r'(\d{4})(\d{2})(\d{2})', _src)
+                if _match:
+                    from datetime import datetime as _dt
+                    _readable = _dt.strptime(_match.group(), '%Y%m%d').strftime('%d %B %Y')
+                    _src = _re.sub(r'\d{8}', _readable, _src)
+            except Exception:
+                pass
+            st.markdown(f"**Source File:** {_src}")
         
         with col2:
             st.markdown("####   Transaction Log Preview")
@@ -3649,11 +3817,9 @@ RAISES:
                 # User authentication data
                 users = {
                     "Select User": {"email": "", "passcode": ""},
-                    "John Smith (john.smith@company.com)": {"email": "john.smith@company.com", "passcode": "1234"},
-                    "Sarah Johnson (sarah.johnson@company.com)": {"email": "sarah.johnson@company.com", "passcode": "5678"},
-                    "Michael Brown (michael.brown@company.com)": {"email": "michael.brown@company.com", "passcode": "9012"},
-                    "Emily Davis (emily.davis@company.com)": {"email": "emily.davis@company.com", "passcode": "3456"},
-                    "Robert Wilson (robert.wilson@company.com)": {"email": "robert.wilson@company.com", "passcode": "7890"}
+                    "Ashish Trivedi (ashish.trivedi@dieboldnixdorf.com)": {"email": "ashish.trivedi@dieboldnixdorf.com", "passcode": "1234"},
+                    "Arthav Deshpande (arthav.deshpande@dieboldnixdorf.com)": {"email": "arthav.deshpande@dieboldnixdorf.com", "passcode": "5678"},
+                    "Prasad Avasare (prasad.avasare@dieboldnixdorf.com)": {"email": "prasad.avasare@dieboldnixdorf.com", "passcode": "9012"},
                 }
                 
                 # Question 1: Rating
@@ -3850,7 +4016,7 @@ RAISES:
     Exception                           : For any unexpected errors during execution
 """
 
-    st.markdown("###   Counters Analysis")
+    st.markdown("####   Counters Analysis ")
     
     need_analysis = False
     
@@ -4414,7 +4580,7 @@ def render_acu_single_parse(): # MODIFIED
     """
     #st.write("SESSION STATE DEBUG:", st.session_state)   # debug Added
 
-    st.markdown("###   ACU Configuration Parser")
+    st.markdown("####   ACU Configuration Parser")
     
     
     # Initialize session state
@@ -4588,7 +4754,7 @@ RAISES:
     requests.exceptions.ConnectionError: If the API server is unreachable.
     Exception                         : For general errors during file loading, extraction, or comparison.
 """
-    st.markdown("###   ACU Configuration Comparison")
+    st.markdown("####   ACU Configuration Comparison")
     st.info("Compare ACU configuration files from two different ZIP archives.")
     
     # Initialize session state
@@ -4788,7 +4954,7 @@ def show_main_app():
                 font-size: 24px;
                 font-weight: 700;
             ">
-                Welcome, {display_name}
+                Welcome {display_name}
             </div>
             """,
             unsafe_allow_html=True
@@ -4816,7 +4982,7 @@ def show_main_app():
     st.title("DN Diagnostics Platform")
     st.caption("Comprehensive analysis tool for Diebold Nixdorf diagnostic files.")
 
-    st.markdown("## Upload Zip Package")
+    st.markdown("## Upload Zip Package( VCP Pro)")
 
     uploaded_file = st.file_uploader(
         "Select ZIP Archive",
@@ -4902,7 +5068,7 @@ def show_main_app():
                 except requests.exceptions.Timeout:
                     st.error("Request timeout. The file may be too large or the server is not responding.")
                 except requests.exceptions.ConnectionError:
-                    st.error("Connection error. Please ensure the FastAPI server is running on localhost:8000.")
+                    st.error("Connection error. Please ensure the FastAPI server is running on Backend:8000.")
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
         else:
@@ -4940,7 +5106,138 @@ def show_main_app():
                 st.metric(" Process Time", "—")
         
         st.markdown("---")
-        
+
+        # ── Transaction Summary (inline) ──
+        cj_available = categories.get('customer_journals', {}).get('count', 0) > 0
+        if cj_available:
+            st.markdown("## Transaction Summary")
+
+            
+            _ts_data = None
+            try:
+                with st.spinner("Building transaction summary…"):
+                    requests.post(f"{API_BASE_URL}/analyze-customer-journals", timeout=120)
+                _ts_resp = requests.get(f"{API_BASE_URL}/transaction-statistics", timeout=30)
+                if _ts_resp.status_code == 200:
+                    _ts_data = _ts_resp.json()
+            except Exception:
+                pass
+
+            # --- Date Range row ---(commented for demo)
+            # Extracts date directly from source file names (pattern: YYYYMMDD).
+            # _date_range_str = "N/A"
+            # _date_range_warn = None
+            # try:
+            #     _src_resp = requests.get(f"{API_BASE_URL}/get-transactions-with-sources", timeout=30)
+            #     if _src_resp.status_code == 200:
+            #         _all_sources = _src_resp.json().get('source_files', [])
+            #         if _all_sources:
+            #             import re as _re
+            #             _file_date_map = {}
+            #             for _fname in _all_sources:
+            #                 # Match exactly 8-digit sequences (YYYYMMDD) not surrounded by other digits
+            #                 _matches = _re.findall(r'(?<!\d)(\d{8})(?!\d)', str(_fname))
+            #                 for _m in _matches:
+            #                     try:
+            #                         _fd = datetime.strptime(_m, '%Y%m%d').date()
+            #                         if 2000 <= _fd.year <= 2099:  # sanity check
+            #                             _file_date_map[_fname] = _fd
+            #                             break
+            #                     except ValueError:
+            #                         continue
+            #
+            #             if _file_date_map:
+            #                 _unique_dates = sorted(set(_file_date_map.values()))
+            #                 _gaps = [
+            #                     (_unique_dates[_i] - _unique_dates[_i - 1]).days
+            #                     for _i in range(1, len(_unique_dates))
+            #                 ]
+            #                 _is_sequential = all(_g <= 1 for _g in _gaps) if _gaps else True
+            #
+            #                 if _is_sequential:
+            #                     _start = _unique_dates[0]
+            #                     _end   = _unique_dates[-1]
+            #                     if _start == _end:
+            #                         _date_range_str = _start.strftime('%d %b %Y')
+            #                     else:
+            #                         _date_range_str = (
+            #                             f"{_start.strftime('%d %b %Y')}"
+            #                             f"  -  "
+            #                             f"{_end.strftime('%d %b %Y')}"
+            #                         )
+            #                 else:
+            #                     _max_gap_idx = _gaps.index(max(_gaps))
+            #                     _g1 = _unique_dates[_max_gap_idx].strftime('%d %b %Y')
+            #                     _g2 = _unique_dates[_max_gap_idx + 1].strftime('%d %b %Y')
+            #                     _date_range_warn = f"Files not sequential (gap: {_g1} to {_g2})"
+            #             else:
+            #                 # Fallback: parse from transaction timestamps if no date in filenames
+            #                 _txns_resp = requests.post(
+            #                     f"{API_BASE_URL}/filter-transactions-by-sources",
+            #                     json={"source_files": _all_sources}, timeout=30
+            #                 )
+            #                 if _txns_resp.status_code == 200:
+            #                     _txns = _txns_resp.json().get('transactions', [])
+            #                     _parsed = []
+            #                     for _t in _txns:
+            #                         _st = _t.get('Start Time')
+            #                         if not _st: continue
+            #                         for _fmt in ('%d %B %Y %H:%M:%S', '%Y-%m-%d %H:%M:%S',
+            #                                      '%d/%m/%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S'):
+            #                             try:
+            #                                 _parsed.append(datetime.strptime(_st, _fmt)); break
+            #                             except ValueError:
+            #                                 continue
+            #                     if _parsed:
+            #                         _date_range_str = (
+            #                             f"{min(_parsed).strftime('%d %b %Y')}"
+            #                             f"  ->  "
+            #                             f"{max(_parsed).strftime('%d %b %Y')}"
+            #                         )
+            # except Exception as _e:
+            #     _date_range_warn = f"Could not parse dates: {_e}"
+
+            # # Date range metric (full-width single column)
+            # st.metric(" Date Range", _date_range_str)
+            # if _date_range_warn:
+            #     st.caption(f"i {_date_range_warn}")
+
+            # --- Transaction type metrics ---
+            if _ts_data and 'statistics' in _ts_data and _ts_data['statistics']:
+                _raw = _ts_data['statistics']
+                _summary = []
+                for _row in _raw:
+                    _name = (
+                        _row.get('Transaction Type') or _row.get('transaction_type')
+                        or _row.get('Type') or _row.get('type') or 'Unknown'
+                    )
+                    _cnt = (
+                        _row.get('Count') or _row.get('count')
+                        or _row.get('Total') or _row.get('total') or 0
+                    )
+                    _summary.append((_name, int(_cnt)))
+
+                # Filter out Unknown transactions
+                _summary = [(_name, _cnt) for (_name, _cnt) in _summary if _name.strip().lower() != 'unknown']
+
+                if _summary:
+                    # Prioritize Cash Withdrawal and Cash Deposit first, then remaining
+                    _priority_types = ['Cash Withdrawal', 'Cash Deposit']
+                    _priority = [(_name, _cnt) for (_name, _cnt) in _summary if _name in _priority_types]
+                    _remaining = [(_name, _cnt) for (_name, _cnt) in _summary if _name not in _priority_types]
+                    _sorted_summary = _priority + _remaining
+
+                    # Chunk into rows of 10 cards 
+                    _chunk_size = 6
+                    for _i in range(0, len(_sorted_summary), _chunk_size):
+                        _chunk = _sorted_summary[_i:_i + _chunk_size]
+                        _cols = st.columns(len(_chunk))
+                        for _ci, (_name, _cnt) in enumerate(_chunk):
+                            with _cols[_ci]:
+                                st.metric(_name, _cnt)
+
+            st.markdown("---")
+
         st.markdown("## Analysis Functions")
 
         functionalities = {

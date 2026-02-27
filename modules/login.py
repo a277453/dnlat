@@ -1,11 +1,41 @@
 """
-login.py - Authentication and Database Logic
-Updated to match admins table with ONLY:
-- username
-- password_hash
+    This module handles authentication, user registration, login history tracking,
+    and session management for the Streamlit application.
+
+    Main Responsibilities:
+    ----------------------
+    1. Database connection handling.
+    2. Password hashing using SHA-256.
+    3. User authentication and credential verification.
+    4. User registration with inactive-by-default accounts.
+    5. Login history tracking (login, logout, register events).
+    6. Streamlit session state management.
+
+    Database Used:
+    --------------
+    dn_diagnostics
+
+    Tables Used:
+    ------------
+    - Users
+    - login_history
+
+    Security Features:
+    ------------------
+    - Passwords stored as SHA-256 hashes.
+    - Only active users (is_active = TRUE) can log in.
+    - Pending users (is_active = FALSE) can be detected separately.
+
+    Designed For:
+    -------------
+    Streamlit-based authentication system with role-based access.
+
+    Author: Your Name
+    Purpose: Centralized authentication & session control layer.
 """
 
 import psycopg2
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import hashlib
 import streamlit as st
 from datetime import datetime
@@ -19,8 +49,8 @@ from modules.logging_config import logger
 DB_CONFIG = {
     "host": "localhost",
     "database": "dn_diagnostics",
-    "user": "dn_user",
-    "password": "12345",
+    "user": "postgres",
+    "password": "mise",
     "port": "5432"
 }
 
@@ -29,6 +59,19 @@ DB_CONFIG = {
 # ============================================
 
 def get_db_connection():
+    """
+        Establishes and returns a PostgreSQL database connection.
+
+        Returns:
+        --------
+        connection object if successful.
+        None if connection fails.
+
+        Notes:
+        ------
+        Uses DB_CONFIG dictionary for connection parameters.
+        Logs debug on success and error on failure.
+    """
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         logger.debug("Database connection established")
@@ -42,6 +85,23 @@ def get_db_connection():
 # ============================================
 
 def hash_password(password: str) -> str:
+    """
+        Generates SHA-256 hash for a given password.
+
+        Parameters:
+        -----------
+        password : str
+            Plain text password.
+
+        Returns:
+        --------
+        str
+            Hexadecimal SHA-256 hashed password.
+
+        Purpose:
+        --------
+        Ensures passwords are never stored in plain text.
+    """
     return hashlib.sha256(password.encode()).hexdigest()
 
 # ============================================
@@ -49,7 +109,26 @@ def hash_password(password: str) -> str:
 # ============================================
 
 def create_login_history_table():
-    conn = get_db_connection()
+    """
+        Creates the login_history table if it does not exist.
+
+        Table Structure:
+        ----------------
+        - serial_no (Auto Increment Primary Identifier)
+        - user_id
+        - timestamp
+        - action (login, logout, register)
+
+        Returns:
+        --------
+        True if table created successfully.
+        False if creation fails.
+
+        Purpose:
+        --------
+        Tracks user authentication activities for auditing.
+    """
+    conn = psycopg2.connect(**DB_CONFIG)
     if not conn:
         logger.error("Failed to create login_history table due to DB connection failure")
         return False
@@ -76,6 +155,25 @@ def create_login_history_table():
 
 
 def log_login_event(username: str, action: str):
+    """
+        Inserts a login-related event into login_history table.
+
+        Parameters:
+        -----------
+        username : str
+            User performing the action.
+        action : str
+            Type of action (e.g., 'login', 'logout', 'register').
+
+        Returns:
+        --------
+        True if event logged successfully.
+        False if logging fails.
+
+        Purpose:
+        --------
+        Maintains audit trail of user activities.
+    """
     conn = get_db_connection()
     if not conn:
         logger.error("Login event not logged. DB connection failed")
@@ -99,6 +197,25 @@ def log_login_event(username: str, action: str):
 
 
 def get_login_history(username: str = None, limit: int = 50):
+    """
+        Fetches login history records.
+
+        Parameters:
+        -----------
+        username : str (optional)
+            If provided, filters history for that user only.
+        limit : int
+            Maximum number of records to return.
+
+        Returns:
+        --------
+        list of tuples:
+            (serial_no, user_id, timestamp, action)
+
+        Notes:
+        ------
+        Records are ordered by most recent first.
+    """
     conn = get_db_connection()
     if not conn:
         logger.error("Fetching login history failed due to DB connection failure")
@@ -135,6 +252,34 @@ def get_login_history(username: str = None, limit: int = 50):
 # ============================================
 
 def verify_credentials(username: str, password: str) -> Optional[str]:
+    """
+        Verifies user credentials against Users table.
+
+        Parameters:
+        -----------
+        username : str
+        password : str (plain text)
+
+        Process:
+        --------
+        - Hashes password using SHA-256.
+        - Checks username + password_hash + is_active = TRUE.
+
+        Returns:
+        --------
+        dict:
+            {
+                "username": str,
+                "employee_code": str,
+                "role": str
+            }
+        OR
+        None if authentication fails.
+
+        Security:
+        ---------
+        Only active users are allowed to authenticate.
+    """
     conn = get_db_connection()
     if not conn:
         logger.error("Login verification failed due to DB connection failure")
@@ -145,7 +290,7 @@ def verify_credentials(username: str, password: str) -> Optional[str]:
         password_hash = hash_password(password)
 
         cursor.execute("""
-            SELECT username
+            SELECT username,employee_code,role
             FROM Users
             WHERE username = %s AND password_hash = %s AND is_active = TRUE
         """, (username, password_hash))
@@ -153,7 +298,7 @@ def verify_credentials(username: str, password: str) -> Optional[str]:
         user = cursor.fetchone()
         cursor.close()
         conn.close()
-        return user[0] if user else None
+        return {"username": user[0], "employee_code": user[1],"role": user[2]} if user else None
 
     except Exception as e:
         logger.error("Login verification failed")
@@ -162,13 +307,38 @@ def verify_credentials(username: str, password: str) -> Optional[str]:
 
 
 def authenticate_user(username: str, password: str) -> bool:
+    """
+        Authenticates user and initializes session state.
+
+        Parameters:
+        -----------
+        username : str
+        password : str
+
+        Behavior:
+        ---------
+        - Verifies credentials.
+        - Sets Streamlit session variables:
+            logged_in
+            username
+            employee_code
+            role
+        - Logs login event.
+
+        Returns:
+        --------
+        True if authentication successful.
+        False otherwise.
+    """
     user = verify_credentials(username, password)
 
     if user:
         st.session_state.logged_in = True
-        st.session_state.username = user
+        st.session_state.username = user["username"]
+        st.session_state.employee_code = user["employee_code"]
+        st.session_state.role          = user["role"]
 
-        log_login_event(username=user, action="login")
+        log_login_event(username=user["username"], action="login")
         return True
 
     return False
@@ -178,6 +348,23 @@ def authenticate_user(username: str, password: str) -> bool:
 # ============================================
 
 def user_exists(email: str, employee_code: str) -> bool:
+    """
+        Checks whether a user already exists.
+
+        Parameters:
+        -----------
+        email : str
+        employee_code : str
+
+        Returns:
+        --------
+        True if user exists (username OR employee_code match).
+        False otherwise.
+
+        Purpose:
+        --------
+        Prevents duplicate user registrations.
+    """
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
@@ -199,6 +386,34 @@ def user_exists(email: str, employee_code: str) -> bool:
             conn.close()
 
 def register_user(email, name, password, employee_code, role="USER") -> tuple[bool, str]:
+    """
+        Registers a new user account.
+
+        Parameters:
+        -----------
+        email : str
+        name : str
+        password : str
+        employee_code : str
+        role : str (default = "USER")
+
+        Behavior:
+        ---------
+        - Checks if user already exists.
+        - Hashes password.
+        - Inserts new user into Users table.
+        - Sets is_active = FALSE (admin approval required).
+        - Logs registration event.
+
+        Returns:
+        --------
+        (True, success_message) if registration successful.
+        (False, error_message) otherwise.
+
+        Security:
+        ---------
+        New users must be activated by admin before login.
+    """
     if user_exists(email, employee_code):
         logger.info(" User already exists")
         return False, "User with this email or employee code already exists."
@@ -227,7 +442,23 @@ def register_user(email, name, password, employee_code, role="USER") -> tuple[bo
     
 def is_user_pending_approval(username: str, password: str) -> bool:
     """
-    Returns True if user exists, password is correct, but is_active = FALSE
+        Checks whether user credentials are correct
+        but account is not yet activated.
+
+        Parameters:
+        -----------
+        username : str
+        password : str
+
+        Returns:
+        --------
+        True  -> If user exists and is_active = FALSE.
+        False -> Otherwise.
+
+        Purpose:
+        --------
+        Allows UI to display:
+        "Your account is pending admin approval."
     """
     conn = get_db_connection()
     if not conn:
@@ -261,6 +492,22 @@ def is_user_pending_approval(username: str, password: str) -> bool:
 # ============================================
 
 def initialize_session():
+    """
+        Initializes default Streamlit session variables.
+
+        Sets:
+        -----
+        page
+        logged_in
+        username
+        employee_code
+        role
+
+        Purpose:
+        --------
+        Ensures session keys exist before application logic runs.
+        Prevents KeyError in Streamlit.
+    """
 
     if "page" not in st.session_state:
         st.session_state.page = "login"
@@ -269,23 +516,67 @@ def initialize_session():
         st.session_state.logged_in = False
     if "username" not in st.session_state:
         st.session_state.username = None
+    if "employee_code" not in st.session_state:
+        st.session_state.employee_code = None
+    if "role" not in st.session_state:
+        st.session_state.role = None
 
 
 def is_logged_in() -> bool:
+    """
+        Checks whether user is currently logged in.
+
+        Returns:
+        --------
+        True if session_state.logged_in is True.
+        False otherwise.
+    """
     return st.session_state.get("logged_in", False)
 
 
 def get_current_user():
+    """
+        Retrieves current logged-in user information.
+
+        Returns:
+        --------
+        dict:
+            {
+                "username": str
+            }
+
+        Note:
+        -----
+        Returns None values if user is not logged in.
+    """
     return {
         "username": st.session_state.get("username")
     }
 
 
 def logout_user():
+    """
+        Logs out the current user.
+
+        Behavior:
+        ---------
+        - Logs logout event into login_history.
+        - Clears session_state variables:
+            logged_in
+            username
+            employee_code
+            role
+
+        Purpose:
+        --------
+        Properly terminates authenticated session.
+    """
     username = st.session_state.get("username")
 
     if username:
         log_login_event(username=username, action="logout")
 
-    st.session_state.logged_in = False
-    st.session_state.username = None
+    st.session_state.logged_in     = False
+    st.session_state.username      = None
+    st.session_state.employee_code = None
+    st.session_state.role          = None

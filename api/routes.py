@@ -36,6 +36,7 @@ import time
 #  Import our central logger
 from modules.logging_config import logger
 from fastapi import FastAPI
+from modules.analysis import store_metadata, store_feedback, get_user_role, get_analysis_records, get_feedback_records
 
 import logging
 
@@ -2772,6 +2773,7 @@ from pydantic import BaseModel
 
 class TransactionAnalysisRequest(BaseModel):
     transaction_id: str
+    employee_code: str
 
 
 @router.post("/analyze-transaction-llm")
@@ -2930,6 +2932,8 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
             analysis_duration = round(analysis_end_time - analysis_start_time, 3)
 
             raw_response = response['message']['content'].strip()
+            #logger.info(f"Type of raw_response: {type(raw_response)}")
+            #logger.debug(raw_response)
             logger.info(
                 f"Transaction LLM analysis completed | "
                 f"txn_id={transaction_id} | "
@@ -2955,11 +2959,31 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
                     "start_time": str(txn_data.get('Start Time', '')),
                     "end_time": str(txn_data.get('End Time', '')),
                     "source_file": str(txn_data.get('Source File', 'Unknown')),
-                    "analysis_time_seconds": analysis_duration
+                    "analysis_time_seconds": analysis_duration,
+                    "llm_raw_response": raw_response  #  store raw response here
                 }
             }
             
             logger.debug(f"Structured response prepared for transaction {transaction_id}")
+            # -------------------------------------------------------
+            # STORE OLLAMA METADATA INTO userresponse DB
+            # -------------------------------------------------------
+            store_metadata(
+                transaction_id        = transaction_id,
+                employee_code  = request.employee_code, 
+                model                 = "llama3_log_analyzer",
+                transaction_type      = str(txn_data.get('Transaction Type', 'Unknown')),
+                transaction_state     = str(txn_data.get('End State', 'Unknown')),
+                source_file           = str(txn_data.get('Source File', 'Unknown')),
+                start_time            = str(txn_data.get('Start Time', '')),
+                end_time              = str(txn_data.get('End Time', '')),
+                log_length            = len(transaction_log),
+                response_length       = len(raw_response),
+                analysis_time_seconds = analysis_duration,
+                llm_analysis          = raw_response
+            )
+            logger.info(f"Ollama metadata stored for txn: {transaction_id}")
+            # -------------------------------------------------------
             return structured_response
             
         except ImportError:
@@ -3075,7 +3099,31 @@ RAISES:
             logger.info(f" Feedback saved to file: {feedback_file}")
         except Exception as e:
             logger.error(f" Could not save feedback to file {feedback_file}: {str(e)}")
-        
+
+        # Only USER role can store feedback in database
+        role = get_user_role(feedback.user_name)
+        if role != "USER":
+            raise HTTPException(
+                status_code=403,
+                detail="Only users with USER role can submit feedback."
+            )
+
+        # Store feedback in database
+        result = store_feedback(
+            transaction_id    = feedback.transaction_id,
+            user_name         = feedback.user_name,
+            rating            = feedback.rating,
+            alternative_cause = feedback.alternative_cause,
+            comment           = feedback.comment,
+            model_version     = feedback.model_version
+        )
+
+        if result == "LIMIT_REACHED":
+            raise HTTPException(
+                status_code=429,
+                detail="You have already submitted feedback for this transaction."
+            )
+
         # Also store in session for immediate retrieval
         if not session_service.session_exists(session_id):
             session_service.create_session(session_id)
@@ -4007,4 +4055,186 @@ def get_counter_column_descriptions():
         'HWsens': 'HWsens',
         'Record_Type': 'Record Type'
     }
-    
+
+# ============================================
+# GET ANALYSIS RECORDS
+# ============================================
+
+@router.get("/get-analysis-records")
+async def fetch_analysis_records(
+    transaction_id: str = Query(..., description="Transaction ID to look up"),
+    employee_code:  str = Query(..., description="Employee code of logged in user"),
+):
+    """
+        Retrieve analysis records for a specific transaction and employee.
+
+        Endpoint:
+        ---------
+        GET /get-analysis-records
+
+        Description:
+        ------------
+        Fetches all analysis records from the database that match the
+        provided transaction_id and employee_code.
+
+        This endpoint is typically used by the frontend to display
+        previously generated LLM analysis results for a logged-in user.
+
+        Query Parameters:
+        -----------------
+        transaction_id : str (required)
+            Unique transaction identifier to search for.
+
+        employee_code : str (required)
+            Employee code of the authenticated user.
+            Ensures users can only access their own records.
+
+        Returns:
+        --------
+        200 OK:
+            {
+                "status": "success",
+                "count": int,
+                "records": [
+                    {
+                        "transaction_id": str,
+                        "employee_code": str,
+                        "model": str,
+                        "transaction_type": str,
+                        "transaction_state": str,
+                        "source_file": str,
+                        "start_time": str,
+                        "end_time": str,
+                        "log_length": int,
+                        "response_length": int,
+                        "analysis_time_seconds": float,
+                        "llm_analysis": str,
+                        "created_at": datetime
+                    }
+                ]
+            }
+
+        404 Not Found:
+            Raised when no matching records are found.
+
+        Raises:
+        -------
+        HTTPException:
+            - 404 if no records exist for the given transaction_id.
+
+        Logging:
+        --------
+        Logs transaction_id and employee_code for traceability.
+
+        Security Note:
+        --------------
+        employee_code should ideally be derived from authentication
+        context (e.g., JWT/session) rather than passed as a query parameter.
+    """
+    logger.info(f"Fetching analysis records — txn: {transaction_id}, emp: {employee_code}")
+
+    records = get_analysis_records(
+        transaction_id = transaction_id,
+        employee_code  = employee_code,
+    )
+
+    if not records:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No records found for transaction_id='{transaction_id}'"
+        )
+
+    return {
+        "status": "success",
+        "count":   len(records),
+        "records": records
+    }
+
+# ============================================
+# GET FEEDBACK RECORDS
+# ============================================
+
+@router.get("/get-feedback-records")
+async def fetch_feedback_records(
+    transaction_id: str = Query(..., description="Transaction ID"),
+    user_name:      str = Query(..., description="Logged in username")
+):
+    """
+        Retrieve feedback records for a specific transaction and user.
+
+        Endpoint:
+        ---------
+        GET /get-feedback-records
+
+        Description:
+        ------------
+        Fetches all feedback entries associated with the given
+        transaction_id and user_name from the database.
+
+        This endpoint allows users to view their previously submitted
+        feedback related to a specific transaction analysis.
+
+        Query Parameters:
+        -----------------
+        transaction_id : str (required)
+            Unique identifier of the transaction.
+
+        user_name : str (required)
+            Username of the logged-in user.
+            Used to ensure users only access their own feedback records.
+
+        Returns:
+        --------
+        200 OK:
+            {
+                "status": "success",
+                "count": int,
+                "records": [
+                    {
+                        "transaction_id": str,
+                        "user_name": str,
+                        "rating": int,
+                        "alternative_cause": str,
+                        "comment": str,
+                        "model_version": str,
+                        "submitted_at": datetime
+                    }
+                ]
+            }
+
+        404 Not Found:
+            Raised when no feedback records exist for the given transaction_id.
+
+        Raises:
+        -------
+        HTTPException:
+            - 404 if no feedback is found.
+
+        Logging:
+        --------
+        Logs transaction_id and user_name for monitoring and traceability.
+
+        Security Note:
+        --------------
+        user_name should ideally be derived from authenticated session
+        context (e.g., JWT token or session middleware) instead of being
+        passed as a query parameter.
+    """
+    logger.info(f"Fetching feedback records — txn: {transaction_id}, user: {user_name}")
+
+    records = get_feedback_records(
+        transaction_id = transaction_id,
+        user_name      = user_name
+    )
+
+    if not records:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No feedback found for transaction_id='{transaction_id}'"
+        )
+
+    return {
+        "status":  "success",
+        "count":   len(records),
+        "records": records
+    }

@@ -11,6 +11,7 @@ import os
 from datetime import datetime  
 import numpy as np
 from fastapi.logger import logger
+from modules.analysis import create_analysis_table, create_feedback_table, create_userresponse_database
 from modules.streamlit_logger import logger as frontend_logger
 import time
 from modules.login import register_user
@@ -18,7 +19,7 @@ import re as _re; from datetime import datetime as _dt
 
 
 # Import authentication functions
-from admin_setup import initialize_admin_table
+from admin_setup import create_dn_diagnostics_database, initialize_admin_table
 from modules.login import (
     create_login_history_table,
     initialize_session,
@@ -401,7 +402,7 @@ st.markdown("""
 # ============================================
 # GLOBAL VARIABLES
 # ============================================
-API_BASE_URL = "http://backend:8000/api/v1"
+API_BASE_URL = "http://localhost:8000/api/v1"
 
 # ============================================
 # LOGIN PAGE UI
@@ -3747,7 +3748,7 @@ RAISES:
                         'post',
                         f"{API_BASE_URL}/analyze-transaction-llm",
                         cache_enabled=True,
-                        json={"transaction_id": selected_txn_id},
+                        json={"transaction_id": selected_txn_id,"employee_code": st.session_state.employee_code},
                         timeout=120
                     )
                     
@@ -3819,6 +3820,7 @@ RAISES:
                     "Ashish Trivedi (ashish.trivedi@dieboldnixdorf.com)": {"email": "ashish.trivedi@dieboldnixdorf.com", "passcode": "1234"},
                     "Arthav Deshpande (arthav.deshpande@dieboldnixdorf.com)": {"email": "arthav.deshpande@dieboldnixdorf.com", "passcode": "5678"},
                     "Prasad Avasare (prasad.avasare@dieboldnixdorf.com)": {"email": "prasad.avasare@dieboldnixdorf.com", "passcode": "9012"},
+                    "Saniya Payal(saniya.payal@dieboldnixdorf.com)": {"email": "saniya.payal@dieboldnixdorf.com", "passcode": "3456"}
                 }
                 
                 # Question 1: Rating
@@ -3915,52 +3917,56 @@ RAISES:
                         elif selected_user == "Select User":
                             st.error("Please select your name and email.")
                         else:
-                            # Submit feedback to API
-                            with st.spinner("Submitting feedback..."):
-                                try:
-                                    result = st.session_state.analysis_result
-                                    
-                                    feedback_data = {
-                                        "transaction_id": selected_txn_id,
-                                        "rating": st.session_state.get(f"{feedback_key_prefix}_rating", 3),
-                                        "alternative_cause": st.session_state.get(f"{feedback_key_prefix}_alternative", anomaly_categories[0]),
-                                        "comment": st.session_state.get(f"{feedback_key_prefix}_comment", ""),
-                                        "user_name": user_name,
-                                        "user_email": user_email,
-                                        "model_version": result['metadata']['model'],
-                                        "original_llm_response": result.get('analysis', '')
-                                    }
-                                    
-                                    response = requests.post(
-                                        f"{API_BASE_URL}/submit-llm-feedback",
-                                        json=feedback_data,
-                                        timeout=30
-                                    )
-                                    
-                                    if response.status_code == 200:
-                                        result_data = response.json()
-                                        st.success(result_data['message'])
+                            # Only USER role can submit feedback to DB
+                            if st.session_state.get("role") != "USER":
+                                st.warning("Only users can submit feedback. Admins are not allowed.")
+                            else:
+                                # Submit feedback to API
+                                with st.spinner("Submitting feedback..."):
+                                    try:
+                                        result = st.session_state.analysis_result
                                         
-                                        # Clear form
-                                        keys_to_clear = [
-                                            f"{feedback_key_prefix}_rating",
-                                            f"{feedback_key_prefix}_alternative",
-                                            f"{feedback_key_prefix}_comment",
-                                            f"{feedback_key_prefix}_user_select"
-                                        ]
-                                        for key in keys_to_clear:
-                                            if key in st.session_state:
-                                                del st.session_state[key]
+                                        feedback_data = {
+                                            "transaction_id": selected_txn_id,
+                                            "rating": st.session_state.get(f"{feedback_key_prefix}_rating", 3),
+                                            "alternative_cause": st.session_state.get(f"{feedback_key_prefix}_alternative", anomaly_categories[0]),
+                                            "comment": st.session_state.get(f"{feedback_key_prefix}_comment", ""),
+                                            "user_name": st.session_state.get("username"),
+                                            "user_email": user_email,
+                                            "model_version": result.get("metadata", {}).get("model", "unknown"),
+                                            "original_llm_response": result.get('analysis', '')
+                                        }
                                         
-                                        import time
-                                        time.sleep(1)
-                                        st.rerun()
-                                    else:
-                                        error_detail = response.json().get('detail', 'Failed to submit')
-                                        st.error(f"  {error_detail}")
+                                        response = requests.post(
+                                            f"{API_BASE_URL}/submit-llm-feedback",
+                                            json=feedback_data,
+                                            timeout=30
+                                        )
                                         
-                                except Exception as e:
-                                    st.error(f"  Error submitting feedback: {str(e)}")
+                                        if response.status_code == 200:
+                                            result_data = response.json()
+                                            st.success(result_data['message'])
+                                            
+                                            # Clear form
+                                            keys_to_clear = [
+                                                f"{feedback_key_prefix}_rating",
+                                                f"{feedback_key_prefix}_alternative",
+                                                f"{feedback_key_prefix}_comment",
+                                                f"{feedback_key_prefix}_user_select"
+                                            ]
+                                            for key in keys_to_clear:
+                                                if key in st.session_state:
+                                                    del st.session_state[key]
+                                            
+                                            import time
+                                            time.sleep(1)
+                                            st.rerun()
+                                        else:
+                                            error_detail = response.json().get('detail', 'Failed to submit')
+                                            st.error(f"  {error_detail}")
+                                            
+                                    except Exception as e:
+                                        st.error(f"  Error submitting feedback: {str(e)}")
 
                 with col2:
                     if st.button("Clear Form", 
@@ -3985,6 +3991,89 @@ RAISES:
         import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
+
+    # ============================================
+    # VIEW OLD ANALYSIS FROM DB  (ADMIN ONLY)
+    # ============================================
+    if st.session_state.get("role") == "ADMIN":
+        st.markdown("---")
+        st.markdown("###  View Old Analysis from DB")
+        st.caption("Enter a Transaction ID and employee code to retrieve a previously stored analysis.")
+
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            db_txn_id = st.text_input(
+                "Transaction ID",
+                placeholder="e.g. 234XXXXXXXXXXXX",
+                key="db_txn_id"
+            )
+        with col2:
+            db_employee_code = st.text_input(
+                "Employee Code",
+                value=st.session_state.get("employee_code", ""),
+                key="db_employee_code"
+            )
+
+        if st.button(" Retrieve from DB", key="retrieve_db_btn", use_container_width=True):
+            if not db_txn_id.strip():
+                st.warning("Please enter a Transaction ID.")
+            else:
+                try:
+                    response = requests.get(
+                        f"{API_BASE_URL}/get-analysis-records",
+                        params={
+                            "transaction_id": db_txn_id.strip(),
+                            "employee_code":  db_employee_code.strip(),
+                        },
+                        timeout=10
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        st.success(f"Found {data['count']} record(s)")
+                        st.json(data["records"])
+                    elif response.status_code == 404:
+                        st.info("No records found for this Transaction ID and employee code.")
+                    else:
+                        st.error(response.json().get("detail", "Something went wrong."))
+                except Exception as e:
+                    st.error(f"Failed to connect to API: {str(e)}")
+
+        # ============================================
+        # VIEW FEEDBACK FROM DB  (ADMIN ONLY)
+        # ============================================
+        st.markdown("---")
+        st.markdown("###  View My Feedback from DB")
+        st.caption("Enter a Transaction ID to retrieve all feedback you submitted for it.")
+
+        fb_txn_id = st.text_input(
+            "Transaction ID",
+            placeholder="e.g. 234XXXXXXXXXXXX",
+            key="fb_txn_id"
+        )
+
+        if st.button(" Retrieve Feedback", key="retrieve_feedback_btn", use_container_width=True):
+            if not fb_txn_id.strip():
+                st.warning("Please enter a Transaction ID.")
+            else:
+                try:
+                    response = requests.get(
+                        f"{API_BASE_URL}/get-feedback-records",
+                        params={
+                            "transaction_id": fb_txn_id.strip(),
+                            "user_name":      st.session_state.get("username")
+                        },
+                        timeout=10
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        st.success(f"Found {data['count']} feedback record(s)")
+                        st.json(data["records"])
+                    elif response.status_code == 404:
+                        st.info("No feedback found for this Transaction ID.")
+                    else:
+                        st.error(response.json().get("detail", "Something went wrong."))
+                except Exception as e:
+                    st.error(f"Failed to connect to API: {str(e)}")
 
 def render_counters_analysis():
     """
@@ -5399,8 +5488,12 @@ def main():
     """
     # Initialize session
     initialize_session()
+    create_dn_diagnostics_database()
     initialize_admin_table()
     create_login_history_table()
+    create_userresponse_database()
+    create_analysis_table()
+    create_feedback_table() 
     if not is_logged_in():
         if st.session_state.page == "login":
             show_login_page()

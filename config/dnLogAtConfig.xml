@@ -5,7 +5,15 @@
             <value>Cash Withdrawal</value>
         </transaction>
         <transaction>
+            <key>COUT/GA</key>
+            <value>Cash Withdrawal</value>
+        </transaction>
+        <transaction>
             <key>BAL</key>
+            <value>Balance Inquiry</value>
+        </transaction>
+        <transaction>
+            <key>BAL/BI</key>
             <value>Balance Inquiry</value>
         </transaction>
         <transaction>
@@ -17,6 +25,10 @@
             <value>Cash Deposit</value>
         </transaction>
         <transaction>
+            <key>CIN/CI</key>
+            <value>Cash Deposit</value>
+        </transaction>
+        <transaction>
             <key>COUTFAST</key>
             <value>Fast Cash Withdrawal</value>
         </transaction>
@@ -25,7 +37,15 @@
             <value>Pin Change</value>
         </transaction>
         <transaction>
+            <key>PINCHG/CH</key>
+            <value>Pin Change</value>
+        </transaction>
+        <transaction>
             <key>VCPPREFS</key>
+            <value>Preferences</value>
+        </transaction>        
+        <transaction>
+            <key>VCPPREFS/PR</key>
             <value>Preferences</value>
         </transaction>
         <transaction>

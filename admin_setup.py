@@ -41,6 +41,7 @@ Purpose: Application bootstrap and database initialization layer.
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import hashlib
+import os
 from modules.streamlit_logger import logger as frontend_logger
 
 # ============================================

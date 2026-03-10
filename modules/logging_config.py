@@ -9,7 +9,7 @@ log_folder = Path(__file__).parent
 main_log_file = log_folder / "app.log"
 
 logger = logging.getLogger("app_logger")
-logger.setLevel(logging.ERROR)
+logger.setLevel(logging.DEBUG)
 logger.propagate = False
 
 formatter = logging.Formatter(

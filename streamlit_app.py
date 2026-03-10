@@ -402,7 +402,7 @@ st.markdown("""
 # ============================================
 # GLOBAL VARIABLES
 # ============================================
-API_BASE_URL = "http://localhost:8000/api/v1"
+API_BASE_URL = "http://backend:8000/api/v1"
 
 # ============================================
 # LOGIN PAGE UI
@@ -4042,7 +4042,7 @@ RAISES:
         # VIEW FEEDBACK FROM DB  (ADMIN ONLY)
         # ============================================
         st.markdown("---")
-        st.markdown("###  View My Feedback from DB")
+        st.markdown("###  View Feedback from DB")
         st.caption("Enter a Transaction ID to retrieve all feedback you submitted for it.")
 
         fb_txn_id = st.text_input(

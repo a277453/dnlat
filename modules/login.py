@@ -317,7 +317,9 @@ def authenticate_user(username: str, password: str) -> bool:
 
         Behavior:
         ---------
-        - Verifies credentials.
+        - If dev_mode is enabled in session state, authentication is bypassed
+          and the supplied username is accepted as-is with ADMIN role.
+        - Otherwise verifies credentials against the database.
         - Sets Streamlit session variables:
             logged_in
             username
@@ -329,7 +331,25 @@ def authenticate_user(username: str, password: str) -> bool:
         --------
         True if authentication successful.
         False otherwise.
+
+        ⚠️  Dev-mode bypass is for local development only.
+            Never enable it in a production environment.
     """
+    # ── DEV MODE BYPASS ──────────────────────────────────────────────
+    if st.session_state.get("dev_mode", False):
+        dev_username = username.strip() or "developer"
+        st.session_state.logged_in    = True
+        st.session_state.username     = dev_username
+        st.session_state.employee_code = "DEV00000"
+        st.session_state.role          = "ADMIN"
+        logger.warning(
+            "⚠️  DEV MODE LOGIN — authentication bypassed for user '%s'",
+            dev_username
+        )
+        log_login_event(username=dev_username, action="login_dev_bypass")
+        return True
+    # ─────────────────────────────────────────────────────────────────
+
     user = verify_credentials(username, password)
 
     if user:
@@ -520,6 +540,13 @@ def initialize_session():
         st.session_state.employee_code = None
     if "role" not in st.session_state:
         st.session_state.role = None
+
+    # ── Developer mode bypass ──────────────────────────────────────
+    # When True, any username/password combination grants access.
+    # This flag is toggled from the login page UI and should NEVER
+    # be enabled in a production deployment.
+    if "dev_mode" not in st.session_state:
+        st.session_state.dev_mode = False
 
 
 def is_logged_in() -> bool:

@@ -45,140 +45,296 @@ st.set_page_config(
 )
 
 # ============================================
-# CSS STYLES
+# THEME STATE INITIALIZATION
 # ============================================
-#new change(hide icon )
-st.markdown("""
+if 'theme' not in st.session_state:
+    st.session_state.theme = 'dark'
+
+def is_dark():
+    return st.session_state.get('theme', 'dark') == 'dark'
+
+# ============================================
+# THEME-AWARE CSS INJECTION
+# ============================================
+def inject_theme_css():
+    dark = is_dark()
+
+    # ── colour tokens ──────────────────────────────────────────────
+    if dark:
+        bg_main        = "#0a0a0a"
+        bg_card        = "#1a1a1a"
+        bg_deep        = "#0f0f0f"
+        border_col     = "#2a2a2a"
+        border_input   = "#404040"
+        text_primary   = "#ffffff"
+        text_secondary = "#e0e0e0"
+        text_muted     = "#9ca3af"
+        text_code      = "#e0e0e0"
+        line_num_col   = "#666666"
+        sidebar_grad   = "linear-gradient(180deg, #1a1a1a 0%, #0f0f0f 100%)"
+        sidebar_border = "#2a2a2a"
+        diff_scroll_bg = "#0f0f0f"
+        diff_cont_bg   = "#2a2a2a"
+        diff_pane_bg   = "#0f0f0f"
+        diff_line_border = "#1a1a1a"
+        diff_hover_bg  = "#1a1a1a"
+        uploader_bg    = "#1a1a1a"
+        uploader_hover = "#1f1f1f"
+        select_bg      = "#1a1a1a"
+        input_bg       = "#1a1a1a"
+    else:
+        bg_main        = "#f0f4f8"
+        bg_card        = "#ffffff"
+        bg_deep        = "#e8edf2"
+        border_col     = "#d1d9e0"
+        border_input   = "#b0bec5"
+        text_primary   = "#0d1117"
+        text_secondary = "#1e2a35"
+        text_muted     = "#546e7a"
+        text_code      = "#1e2a35"
+        line_num_col   = "#90a4ae"
+        sidebar_grad   = "linear-gradient(180deg, #e8edf2 0%, #dde3ea 100%)"
+        sidebar_border = "#cdd5de"
+        diff_scroll_bg = "#f5f7fa"
+        diff_cont_bg   = "#d1d9e0"
+        diff_pane_bg   = "#f5f7fa"
+        diff_line_border = "#e4eaf0"
+        diff_hover_bg  = "#edf1f5"
+        uploader_bg    = "#ffffff"
+        uploader_hover = "#f5f7fa"
+        select_bg      = "#ffffff"
+        input_bg       = "#ffffff"
+
+    st.markdown(f"""
     <style>
-    /* Completely hide all Streamlit branding and deploy button */
-    #MainMenu {visibility: hidden !important;}
-    footer {visibility: hidden !important;}
-    header {visibility: hidden !important;}
-    
-    [data-testid="stToolbar"] {
-        display: none !important;
-    }
-    
-    [data-testid="stDecoration"] {
-        display: none !important;
-    }
-    
-    button[kind="header"] {
-        display: none !important;
-    }
-    
-    .css-1dp5vir {
-        display: none !important;
-    }
-    
-    /* Your existing styles below... */        
-    #------------------------------------------------
-    /* Global Styles */
-    .main {
-        background-color: #0a0a0a;
-        color: #e0e0e0;
-    }
-    
-    .block-container {
+    /* ── Hide Streamlit branding ── */
+    #MainMenu {{visibility: hidden !important;}}
+    footer {{visibility: hidden !important;}}
+    header {{visibility: hidden !important;}}
+    [data-testid="stToolbar"]    {{display: none !important;}}
+    [data-testid="stDecoration"] {{display: none !important;}}
+    button[kind="header"]        {{display: none !important;}}
+    .css-1dp5vir                 {{display: none !important;}}
+
+    /* ── Global background & base text ── */
+    .stApp, .main {{
+        background-color: {bg_main} !important;
+        color: {text_secondary} !important;
+    }}
+
+    /* Force ALL text elements to use theme colour */
+    .stApp p, .stApp span, .stApp div,
+    [data-testid="stMarkdownContainer"],
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] span,
+    [data-testid="stText"],
+    .stText {{
+        color: {text_secondary} !important;
+    }}
+
+    /* ── Form & widget labels (Username, Password etc.) ── */
+    label,
+    .stTextInput label,
+    .stSelectbox label,
+    .stFileUploader label,
+    .stTextArea label,
+    .stNumberInput label,
+    .stCheckbox label,
+    .stRadio label,
+    [data-testid="stWidgetLabel"],
+    [data-testid="stWidgetLabel"] p,
+    [data-testid="stWidgetLabel"] span,
+    .stForm label,
+    .stForm [data-testid="stWidgetLabel"] p {{
+        color: {text_primary} !important;
+        font-weight: 600 !important;
+    }}
+
+    /* ── Caption / helper text ── */
+    .stCaption, [data-testid="stCaptionContainer"],
+    [data-testid="stCaptionContainer"] p {{
+        color: {text_muted} !important;
+    }}
+
+    /* ── Input fields ── */
+    .stTextInput > div > div > input,
+    .stTextInput > div > div > input:focus {{
+        background-color: {input_bg} !important;
+        border: 2px solid {border_input} !important;
+        border-radius: 8px !important;
+        color: {text_primary} !important;
+        height: 48px !important;
+        padding: 0 1rem !important;
+        caret-color: {text_primary} !important;
+    }}
+    .stTextInput > div > div > input:focus {{
+        border-color: #2563eb !important;
+        box-shadow: 0 0 0 3px rgba(37,99,235,0.18) !important;
+    }}
+    .stTextInput > div > div > input::placeholder {{
+        color: {text_muted} !important;
+        opacity: 1 !important;
+    }}
+
+    /* ── Password eye icon ── */
+    .stTextInput > div > div > button {{
+        background-color: {input_bg} !important;
+        border: none !important;
+        color: {text_muted} !important;
+    }}
+    .stTextInput > div > div > button svg {{
+        fill: {text_muted} !important;
+        stroke: {text_muted} !important;
+    }}
+
+    /* ── Input wrapper border (the outer div Streamlit draws) ── */
+    .stTextInput > div > div,
+    .stTextInput > div {{
+        background-color: {input_bg} !important;
+        border-color: {border_input} !important;
+    }}
+
+    /* ── Textarea ── */
+    .stTextArea > div > div > textarea {{
+        background-color: {input_bg} !important;
+        border: 2px solid {border_input} !important;
+        border-radius: 8px !important;
+        color: {text_primary} !important;
+        caret-color: {text_primary} !important;
+    }}
+    .stTextArea > div > div > textarea::placeholder {{
+        color: {text_muted} !important;
+        opacity: 1 !important;
+    }}
+
+    /* ── Select Box ── */
+    .stSelectbox > div > div,
+    .stSelectbox > div > div > div {{
+        background-color: {select_bg} !important;
+        border: 2px solid {border_input} !important;
+        border-radius: 8px !important;
+        color: {text_secondary} !important;
+    }}
+    /* dropdown options list */
+    [data-baseweb="select"] [role="listbox"],
+    [data-baseweb="popover"] ul {{
+        background-color: {select_bg} !important;
+        border: 1px solid {border_input} !important;
+    }}
+    [data-baseweb="select"] [role="option"],
+    [data-baseweb="popover"] li {{
+        color: {text_primary} !important;
+        background-color: {select_bg} !important;
+    }}
+    [data-baseweb="select"] [role="option"]:hover,
+    [data-baseweb="popover"] li:hover {{
+        background-color: {bg_deep} !important;
+    }}
+    /* selected value text */
+    [data-baseweb="select"] [data-baseweb="tag"],
+    [data-baseweb="select"] span {{
+        color: {text_primary} !important;
+    }}
+
+    /* ── Number input ── */
+    .stNumberInput > div > div > input {{
+        background-color: {input_bg} !important;
+        border: 2px solid {border_input} !important;
+        color: {text_primary} !important;
+    }}
+
+    /* ── Checkbox & Radio ── */
+    .stCheckbox span, .stRadio span {{
+        color: {text_secondary} !important;
+    }}
+
+    /* ── Form submit button (inside st.form) ── */
+    [data-testid="stForm"] .stButton > button,
+    [data-testid="stFormSubmitButton"] > button {{
+        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
+        font-weight: 700 !important;
+    }}
+
+    /* ── Form container border ── */
+    [data-testid="stForm"] {{
+        border: 1px solid {border_col} !important;
+        border-radius: 12px !important;
+        padding: 1.5rem !important;
+        background-color: {bg_card} !important;
+    }}
+
+    /* ── Block container ── */
+    .block-container {{
         padding-top: 0.75rem;
         padding-bottom: 0.75rem;
         max-width: 1400px;
-    }
-    
-    /* Reduce gap between Streamlit elements */
-    .element-container {
-        margin-bottom: 0 !important;
-    }
-    
+    }}
+    .element-container {{ margin-bottom: 0 !important; }}
     [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"],
-    [data-testid="stVerticalBlock"] > div {
-        gap: 0.25rem !important;
-    }
-    
-    /* Kill Streamlit's default 1rem top padding on every block wrapper */
-    div[data-testid="stVerticalBlock"] > div {
+    [data-testid="stVerticalBlock"] > div {{ gap: 0.25rem !important; }}
+    div[data-testid="stVerticalBlock"] > div {{
         padding-top: 0 !important;
         padding-bottom: 0 !important;
-    }
-    
-    /* Reduce metric padding */
-    [data-testid="stMetric"] {
-        padding: 0.4rem 0 !important;
-    }
-    
-    /* Reduce horizontal block gaps */
-    [data-testid="stHorizontalBlock"] {
-        gap: 0.5rem !important;
-    }
-    
-    /* Tighten dividers (--- markdown) */
-    hr {
-        margin: 0.4rem 0 !important;
-    }
-    
-    /* Reduce stMarkdown paragraph spacing */
-    [data-testid="stMarkdownContainer"] p {
-        margin-bottom: 0.2rem !important;
-    }
-    
-    /* Reduce column gaps */
-    [data-testid="column"] {
-        padding: 0 0.3rem !important;
-    }
-    
-    /* Tighten selectbox and uploader top gap */
+    }}
+    [data-testid="stMetric"]          {{ padding: 0.4rem 0 !important; }}
+    [data-testid="stHorizontalBlock"] {{ gap: 0.5rem !important; }}
+    hr {{ margin: 0.4rem 0 !important; }}
+    [data-testid="column"] {{ padding: 0 0.3rem !important; }}
     [data-testid="stFileUploader"],
-    [data-testid="stSelectbox"] {
-        margin-top: 0 !important;
-        margin-bottom: 0.3rem !important;
-    }
-    
-    /* Sidebar Styles */
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1a1a 0%, #0f0f0f 100%);
-        border-right: 1px solid #2a2a2a;
-    }
-    
-    /* Typography */
-    h1 {
-        color: #ffffff !important;
+    [data-testid="stSelectbox"] {{ margin-top: 0 !important; margin-bottom: 0.3rem !important; }}
+
+    /* ── Sidebar ── */
+    [data-testid="stSidebar"] {{
+        background: {sidebar_grad};
+        border-right: 1px solid {sidebar_border};
+    }}
+
+    /* ── Typography ── */
+    h1 {{
+        color: {text_primary} !important;
         font-size: 2.5rem !important;
         font-weight: 700 !important;
         margin-bottom: 0.5rem !important;
-    }
-    
-    h2 {
-        color: #ffffff !important;
+    }}
+    h2 {{
+        color: {text_primary} !important;
         font-size: 1.75rem !important;
         font-weight: 600 !important;
         margin: 0 0 0.25rem 0 !important;
         padding-top: 0 !important;
         border-bottom: 2px solid #2563eb;
         padding-bottom: 0.25rem;
-    }
-    
-    /* Remove space Streamlit wraps around markdown h2 blocks */
-    [data-testid="stMarkdownContainer"] h2 {
+    }}
+    [data-testid="stMarkdownContainer"] h2 {{
         margin-top: 0 !important;
         padding-top: 0 !important;
-    }
-    
-    /* Target the element-container div wrapping h2 sections */
-    div[data-testid="stVerticalBlock"] > div:has(> [data-testid="stMarkdownContainer"] > h2) {
+    }}
+    div[data-testid="stVerticalBlock"] > div:has(> [data-testid="stMarkdownContainer"] > h2) {{
         padding-top: 0 !important;
         padding-bottom: 0 !important;
         margin-top: 0.4rem !important;
         margin-bottom: 0 !important;
-    }
-    
-    h3 {
-        color: #e0e0e0 !important;
+    }}
+    h3 {{
+        color: {text_secondary} !important;
         font-size: 1.25rem !important;
         font-weight: 600 !important;
-    }
-    
-    /* Button Styles */
-    .stButton > button {
+    }}
+
+    /* ── Alerts / info / warning / error / success boxes ── */
+    [data-testid="stAlert"] {{
+        background-color: {bg_card} !important;
+        border-color: {border_col} !important;
+    }}
+    [data-testid="stAlert"] p,
+    [data-testid="stAlert"] div {{
+        color: {text_primary} !important;
+    }}
+
+    /* ── Buttons ── */
+    .stButton > button {{
         background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
         color: #ffffff;
         border: none;
@@ -190,188 +346,192 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
         width: 100%;
         height: 36px;
-    }
-    
-    .stButton > button:hover {
+    }}
+    .stButton > button:hover {{
         background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
         box-shadow: 0 6px 12px rgba(37, 99, 235, 0.35);
         transform: translateY(-1px);
-    }
-    
-    /* File Uploader */
-    [data-testid="stFileUploader"] {
-        background-color: #1a1a1a;
-        border: 2px dashed #404040;
-        border-radius: 12px;
-        padding: 2rem;
+    }}
+
+    /* ── Theme toggle button — same style as all other buttons ── */
+
+    /* ── File Uploader ── */
+    /* ── File Uploader outer wrapper ── */
+    [data-testid="stFileUploader"] {{
+        background-color: {uploader_bg} !important;
+        border: 2px dashed {border_input} !important;
+        border-radius: 12px !important;
+        padding: 1rem !important;
         transition: all 0.3s ease;
-    }
-    
-    [data-testid="stFileUploader"]:hover {
-        border-color: #2563eb;
-        background-color: #1f1f1f;
-    }
-    
-    /* Select Box */
-    .stSelectbox > div > div {
-        background-color: #1a1a1a;
-        border: 1px solid #404040;
-        border-radius: 8px;
-        color: #e0e0e0;
-        height: 48px;
-    }
-    
-    /* Text Input */
-    .stTextInput > div > div > input {
-        background-color: #1a1a1a;
-        border: 1px solid #404040;
-        border-radius: 8px;
-        color: #e0e0e0;
-        height: 48px;
-        padding: 0 1rem;
-    }
-    
-    /* Metric Cards */
-    [data-testid="stMetricValue"] {
+    }}
+    [data-testid="stFileUploader"]:hover {{
+        border-color: #2563eb !important;
+        background-color: {uploader_hover} !important;
+    }}
+
+    /* ── Dropzone inner box (the dark box Streamlit renders) ── */
+    [data-testid="stFileUploaderDropzone"],
+    [data-testid="stFileUploaderDropzoneInput"],
+    section[data-testid="stFileUploaderDropzone"],
+    div[data-testid="stFileUploaderDropzone"] {{
+        background-color: {uploader_bg} !important;
+        border: 1px solid {border_input} !important;
+        border-radius: 8px !important;
+    }}
+
+    /* ── Dropzone text: "Drag and drop", "Limit 200MB" ── */
+    [data-testid="stFileUploaderDropzone"] span,
+    [data-testid="stFileUploaderDropzone"] p,
+    [data-testid="stFileUploaderDropzone"] small,
+    [data-testid="stFileUploaderDropzone"] div {{
+        color: {text_secondary} !important;
+    }}
+
+    /* ── Upload cloud icon ── */
+    [data-testid="stFileUploaderDropzone"] svg {{
+        fill: {text_muted} !important;
+        stroke: {text_muted} !important;
+        color: {text_muted} !important;
+    }}
+
+    /* ── "Browse files" button inside dropzone ── */
+    [data-testid="stFileUploaderDropzone"] button,
+    [data-testid="stFileUploaderDropzone"] .stButton > button,
+    [data-testid="stBaseButton-secondary"],
+    button[data-testid="stBaseButton-secondary"] {{
+        background-color: {bg_card} !important;
+        color: {text_primary} !important;
+        border: 2px solid {border_input} !important;
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+    }}
+    [data-testid="stFileUploaderDropzone"] button:hover,
+    button[data-testid="stBaseButton-secondary"]:hover {{
+        background-color: {bg_deep} !important;
+        border-color: #2563eb !important;
+        color: #2563eb !important;
+    }}
+
+    /* ── Metric Cards ── */
+    [data-testid="stMetricValue"] {{
         font-size: 1.75rem;
         font-weight: 700;
-        color: #ffffff;
-    }
-    
-    [data-testid="stMetricLabel"] {
+        color: {text_primary};
+    }}
+    [data-testid="stMetricLabel"] {{
         font-size: 0.875rem;
-        color: #9ca3af;
+        color: {text_muted};
         text-transform: uppercase;
         letter-spacing: 0.5px;
         font-weight: 500;
-    }
-    
-    /* Data Tables */
-    .dataframe {
-        border: 1px solid #2a2a2a !important;
+    }}
+
+    /* ── Data Tables ── */
+    .dataframe {{
+        border: 1px solid {border_col} !important;
         border-radius: 8px;
         overflow: hidden;
-    }
-    
-    .dataframe thead tr th {
-        background-color: #1a1a1a !important;
-        color: #ffffff !important;
+    }}
+    .dataframe thead tr th {{
+        background-color: {bg_card} !important;
+        color: {text_primary} !important;
         font-weight: 600 !important;
         text-transform: uppercase;
         font-size: 0.75rem;
         padding: 1rem !important;
-    }
-    
-    .dataframe tbody tr:hover {
-        background-color: #1f1f1f !important;
-    }
-    
-    /* File Comparison Styles */
-    .legend-item {
+    }}
+    .dataframe tbody tr:hover {{
+        background-color: {bg_deep} !important;
+    }}
+
+    /* ── File Comparison Styles ── */
+    .legend-item {{
         display: inline-flex;
         align-items: center;
         gap: 8px;
         padding: 8px 12px;
-        background-color: #1a1a1a;
+        background-color: {bg_card};
         border-radius: 6px;
         font-size: 0.875rem;
-        color: #e0e0e0;
-    }
-    
-    .legend-color {
-        width: 20px;
-        height: 20px;
-        border-radius: 4px;
-    }
-    
-    /* Single scroll wrapper for both panes */
-    .diff-scroll-wrapper {
+        color: {text_secondary};
+    }}
+    .legend-color {{ width: 20px; height: 20px; border-radius: 4px; }}
+
+    .diff-scroll-wrapper {{
         overflow-x: hidden;
         overflow-y: auto;
         max-height: 70vh;
-        border: 1px solid #2a2a2a;
+        border: 1px solid {border_col};
         border-radius: 8px;
-        background-color: #0f0f0f;
-    }
-    
-    .diff-container {
+        background-color: {diff_scroll_bg};
+    }}
+    .diff-container {{
         display: flex;
         gap: 1px;
-        background-color: #2a2a2a;
+        background-color: {diff_cont_bg};
         width: 100%;
-    }
-    
-    .diff-pane-col {
+    }}
+    .diff-pane-col {{
         flex: 1;
         min-width: 0;
         overflow: hidden;
-        background-color: #0f0f0f;
-    }
-    
-    .diff-col-title {
-        color: #ffffff !important;
+        background-color: {diff_pane_bg};
+    }}
+    .diff-col-title {{
+        color: {text_primary} !important;
         font-size: 1.25rem !important;
         font-weight: 600 !important;
         padding: 12px 16px;
         margin: 0 !important;
-        background-color: #1a1a1a;
-        border-bottom: 1px solid #2a2a2a;
+        background-color: {bg_card};
+        border-bottom: 1px solid {border_col};
         position: sticky;
         top: 0;
         z-index: 20;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif !important;
-    }
-    
-    .diff-pane {
-        background-color: #0f0f0f;
+    }}
+    .diff-pane {{
+        background-color: {diff_pane_bg};
         border: none;
         font-family: 'Courier New', monospace;
-    }
-    
-    .diff-pane-header {
-        background-color: #1a1a1a;
-        color: #ffffff;
+    }}
+    .diff-pane-header {{
+        background-color: {bg_card};
+        color: {text_primary};
         padding: 12px 16px;
         font-weight: 600;
         font-size: 0.875rem;
-        border-bottom: 1px solid #2a2a2a;
+        border-bottom: 1px solid {border_col};
         text-transform: uppercase;
         letter-spacing: 0.5px;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif !important;
-    }
-    
-    .diff-line {
+    }}
+    .diff-line {{
         display: flex;
         align-items: flex-start;
         padding: 6px 12px;
         font-size: 13px;
         line-height: 1.6;
-        color: #e0e0e0;
-        border-bottom: 1px solid #1a1a1a;
+        color: {text_code};
+        border-bottom: 1px solid {diff_line_border};
         white-space: pre-wrap;
         word-break: break-all;
         font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
         min-height: 24px;
-    }
-    
-    .diff-line:hover {
-        background-color: #1a1a1a;
-    }
-    
-    /* Hide empty lines when both sides are empty */
-    .diff-line.diff-empty-line {
+    }}
+    .diff-line:hover {{ background-color: {diff_hover_bg}; }}
+    .diff-line.diff-empty-line {{
         display: none !important;
         visibility: hidden !important;
         height: 0 !important;
         padding: 0 !important;
         margin: 0 !important;
         border: none !important;
-    }
-    
-    .diff-line-number {
+    }}
+    .diff-line-number {{
         display: inline-block;
         min-width: 50px;
-        color: #666666;
+        color: {line_num_col};
         text-align: right;
         padding-right: 16px;
         user-select: none;
@@ -379,30 +539,28 @@ st.markdown("""
         font-weight: 500;
         align-self: flex-start;
         padding-top: 1px;
-    }
-    
-    .diff-content-change {
-        background-color: rgba(239, 68, 68, 0.40);
+    }}
+    .diff-content-change {{
+        background-color: rgba(239, 68, 68, 0.{'40' if dark else '15'});
         border-left: 4px solid #ef4444;
-        color: #ffffff;
-    }
-    
-    .diff-whitespace-change {
-        background-color: rgba(168, 85, 247, 0.30);
+        color: {text_primary};
+    }}
+    .diff-whitespace-change {{
+        background-color: rgba(168, 85, 247, 0.{'30' if dark else '12'});
         border-left: 4px solid #a855f7;
-        color: #ffffff;
-    }
-    
-    .diff-identical {
-        background-color: transparent;
-    }
+        color: {text_primary};
+    }}
+    .diff-identical {{ background-color: transparent; }}
     </style>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
+
+# Inject CSS on every render
+inject_theme_css()
 
 # ============================================
 # GLOBAL VARIABLES
 # ============================================
-API_BASE_URL = "http://backend:8000/api/v1"
+API_BASE_URL = "http://localhost:8000/api/v1"
 
 # ============================================
 # LOGIN PAGE UI
@@ -412,6 +570,55 @@ def show_login_page():
     """
     Display login page UI
     """
+    # -- Theme toggle + Dev Mode toggle in top-right corner--
+    _, col_theme, col_dev = st.columns([5, 1, 1])
+    with col_theme:
+        # Theme toggle — label reflects the ACTIVE theme
+        theme_label = "Light Mode " if is_dark() else "Dark Mode"
+        theme_on = st.toggle(
+            theme_label,
+            value=not is_dark(),
+            key="login_theme_toggle",
+            help="Switch between dark and light theme."
+        )
+        if theme_on == is_dark():  # state mismatch → user just flipped it
+            st.session_state.theme = 'light' if theme_on else 'dark'
+            st.rerun()
+
+    with col_dev:
+        # ── Dev Mode Toggle (same row, right of theme toggle) ─────────
+        dev_mode_on = st.toggle(
+            " Dev Mode",
+            value=st.session_state.get("dev_mode", False),
+            key="dev_mode_toggle",
+            help="When ON, any username/password bypasses authentication."
+        )
+        if dev_mode_on != st.session_state.get("dev_mode", False):
+            st.session_state.dev_mode = dev_mode_on
+            st.rerun()
+    # ─────────────────────────────────────────────────────────────────
+
+    # # ── Dev Mode active banner ────────────────────────────────────────
+    # if st.session_state.get("dev_mode", False):
+    #     st.markdown(
+    #         """
+    #         <div style="
+    #             background: linear-gradient(90deg, #7c3aed, #4f46e5);
+    #             color: #fff;
+    #             padding: 10px 18px;
+    #             border-radius: 4px;
+    #             font-size: 0.9rem;
+    #             font-weight: 600;
+    #             margin-bottom: 8px;
+    #             letter-spacing: 0.03em;
+    #         ">
+                
+    #         </div>
+    #         """,
+    #         unsafe_allow_html=True,
+    #     )
+    # # ─────────────────────────────────────────────────────────────────
+
     # Center the login form
     col1, col2, col3 = st.columns([1, 2, 1])
 
@@ -435,11 +642,13 @@ def show_login_page():
                 placeholder="Enter your password",
                 key="login_password"
             )
-            submit = st.form_submit_button("Login", use_container_width=True)
+            # Button label reflects dev mode state
+            btn_label = "Enter (Dev Mode)" if st.session_state.get("dev_mode", False) else "Login"
+            submit = st.form_submit_button(btn_label, use_container_width=True)
 
         # Handle login
         if submit:
-            if not username or not password:
+            if not username and not st.session_state.get("dev_mode", False):
                 st.error("  Please enter username and password")
             else:
                 with st.spinner("Authenticating..."):
@@ -530,6 +739,16 @@ def show_register_page():
     """
     Display registration page UI
     """
+    # -- Theme toggle in top-right corner --
+    _, col_theme = st.columns([6, 1])
+    with col_theme:
+        theme_label = "Light Mode" if is_dark() else "Dark Mode"
+        theme_on = st.toggle(theme_label, value=not is_dark(), key="register_theme_toggle",
+                             help="Switch between dark and light theme.")
+        if theme_on == is_dark():
+            st.session_state.theme = 'light' if theme_on else 'dark'
+            st.rerun()
+
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col2:
@@ -5031,27 +5250,33 @@ def show_main_app():
     # Get current user
     user = get_current_user()
     
-    # Header with welcome message and logout button
-    col1, col2 = st.columns([5, 1])
-    
+    # Header with welcome message, theme toggle and logout button
+    col1, col_btns = st.columns([6, 2])
+
     with col1:
         display_name = user.get('name') or user.get('username', 'User')
         st.markdown(
             f"""
-            <div style="
-                font-size: 24px;
-                font-weight: 700;
-            ">
+            <div style="font-size: 24px; font-weight: 700; padding-top: 4px;">
                 Welcome {display_name}
             </div>
             """,
             unsafe_allow_html=True
         )
 
-    with col2:
-        if st.button(" Logout", use_container_width=True, key="logout_btn"):
-            logout_user()
-            st.rerun()
+    with col_btns:
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            theme_label = "Light Mode" if is_dark() else "Dark Mode"
+            theme_on = st.toggle(theme_label, value=not is_dark(), key="theme_toggle_btn",
+                                 help="Switch between dark and light theme.")
+            if theme_on == is_dark():
+                st.session_state.theme = 'light' if theme_on else 'dark'
+                st.rerun()
+        with btn_col2:
+            if st.button(" Logout", use_container_width=True, key="logout_btn"):
+                logout_user()
+                st.rerun()
     
     st.markdown("---")
     
@@ -5488,12 +5713,24 @@ def main():
     """
     # Initialize session
     initialize_session()
-    create_dn_diagnostics_database()
-    initialize_admin_table()
-    create_login_history_table()
-    create_userresponse_database()
-    create_analysis_table()
-    create_feedback_table() 
+
+    # ── Skip ALL DB setup when developer mode is active ──────────────
+    # dev_mode is seeded from the DN_DEV_MODE env var by initialize_session(),
+    # so even the very first page load skips DB calls when the env var is set.
+    # If dev_mode is off, DB calls are wrapped in try/except so a down DB
+    # never prevents the app from rendering the login page.
+    if not st.session_state.get("dev_mode", False):
+        try:
+            create_dn_diagnostics_database()
+            initialize_admin_table()
+            create_login_history_table()
+            create_userresponse_database()
+            create_analysis_table()
+            create_feedback_table()
+        except Exception as _db_err:
+            frontend_logger.error("DB setup failed on startup: %s", _db_err)
+    # ─────────────────────────────────────────────────────────────────
+
     if not is_logged_in():
         if st.session_state.page == "login":
             show_login_page()

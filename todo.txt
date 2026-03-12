@@ -47,3 +47,7 @@ how? -  1.check login  time.
 template name:  create MCP Server
 what ? - 
 how? - 
+
+template name:  add a toggle button 
+what ? -        in on mode = dev mode(directly access ) don't need db authentication just bypass the authentication 
+how? -          

@@ -37,6 +37,7 @@ import time
 from modules.logging_config import logger
 from fastapi import FastAPI
 from modules.analysis import store_metadata, store_feedback, get_user_role, get_analysis_records, get_feedback_records
+from modules.login import (verify_reset_identity,generate_reset_token,send_reset_email,validate_reset_token,reset_user_password,is_valid_password)
 
 import logging
 
@@ -4237,4 +4238,287 @@ async def fetch_feedback_records(
         "status":  "success",
         "count":   len(records),
         "records": records
+    }
+
+
+# ============================================
+# FORGOT PASSWORD ENDPOINTS
+# ============================================
+class ForgotPasswordRequest(BaseModel):
+    username:      str
+    employee_code: str
+    base_url:      str  # actual app URL detected from browser, passed by Streamlit UI
+
+class ResetPasswordRequest(BaseModel):
+    token:            str
+    new_password:     str
+    confirm_password: str
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /forgot-password
+# ─────────────────────────────────────────────────────────────────────────────
+@router.post("/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest):
+    """
+        Handles the Forgot.
+        Endpoint:
+        ---------
+        POST /api/v1/forgot-password
+
+        Description:
+        ------------
+        1. Verifies that the username + employee_code combination
+           exists in the DB and the account is active.
+        2. If valid, generates a secure single-use reset token and
+           stores it in the password_reset_tokens table.
+        3. Sends a password reset email to the user containing a
+           link built from the base_url passed by the frontend.
+
+        Request Body:
+        -------------
+        {
+            "username":      "user@example.com",
+            "employee_code": "12345678",
+            "base_url":      "http://192.168.1.5:8501"
+        }
+
+        base_url is the actual URL the Streamlit app is being accessed
+        from (detected via st.context.headers on the frontend). This
+        ensures the reset link in the email works on any machine on the
+        network, not just localhost.
+
+        Returns:
+        --------
+        200 OK:
+            { "status": "success", "message": "Reset email sent." }
+
+        400 Bad Request:
+            { "detail": "Invalid username or employee code." }
+
+        500 Internal Server Error:
+            { "detail": "Could not send reset email." }
+
+        Security:
+        ---------
+        - Returns generic 400 for invalid identity (no info leak).
+        - Token is single-use and expires in 30 minutes.
+        - Previous active tokens for the user are invalidated.
+    """
+    logger.info("send forgot-password— user: %s", request.username)
+
+    # ── Step 1: Verify identity ────────────────────────────────────
+    is_valid = verify_reset_identity(
+        username=request.username.strip(),
+        employee_code=request.employee_code.strip()
+    )
+
+    if not is_valid:
+        logger.warning(
+            "forgot_password: identity check failed for user: %s",
+            request.username
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid username or employee code. "
+                   "Please check your details and try again."
+        )
+
+    # ── Step 2: Generate token ─────────────────────────────────────
+    token = generate_reset_token(request.username.strip())
+
+    if not token:
+        logger.error(
+            "forgot_password: token generation failed for user: %s",
+            request.username
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to generate reset token. Please try again."
+        )
+
+    # ── Step 3: Send email with real base_url ──────────────────────
+    email_sent = send_reset_email(
+        to_email=request.username.strip(),
+        token=token,
+        base_url=request.base_url.strip() if request.base_url else None
+    )
+
+    if not email_sent:
+        logger.error(
+            "forgot_password: email failed for user: %s",
+            request.username
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Identity verified but email could not be sent. "
+                   "Please contact your administrator."
+        )
+
+    logger.info(
+        "forgot_password: reset email dispatched for user: %s via %s",
+        request.username, request.base_url
+    )
+    return {
+        "status":  "success",
+        "message": "A password reset link has been sent to your email. "
+                   "Please check your inbox and click the link within 30 minutes."
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /validate-reset-token
+# Step: Check if a token is still valid before showing the reset form
+# ─────────────────────────────────────────────────────────────────────────────
+@router.get("/validate-reset-token")
+async def validate_token_endpoint(token: str = Query(..., description="Reset token from email link")):
+    """
+        Validates a password reset token.
+
+        Endpoint:
+        ---------
+        GET /api/v1/validate-reset-token?token=<token>
+
+        Description:
+        ------------
+        Checks whether the given token:
+        - Exists in the password_reset_tokens table.
+        - Has not been used (is_used = FALSE).
+        - Has not expired (expires_at > NOW()).
+
+        Called by the Streamlit frontend when the user lands on the
+        reset password page, before showing the new password form.
+
+        Query Parameters:
+        -----------------
+        token : str (required)
+            The URL-safe reset token from the email link.
+
+        Returns:
+        --------
+        200 OK (valid):
+            { "status": "valid", "username": "user@example.com" }
+
+        400 Bad Request (invalid/expired):
+            { "detail": "Reset link is invalid or has expired." }
+
+        Security:
+        ---------
+        Does not reveal WHY the token is invalid (expired vs used).
+    """
+    logger.info("validate-reset-token called")
+
+    username = validate_reset_token(token)
+
+    if not username:
+        logger.warning("validate_token_endpoint: invalid/expired token")
+        raise HTTPException(
+            status_code=400,
+            detail="This reset link is invalid or has expired. "
+                   "Please request a new password reset."
+        )
+
+    logger.info("validate_token_endpoint: valid token for user: %s", username)
+    return {
+        "status":   "valid",
+        "username": username
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /reset-password
+# Step : Validate all  rules + update password + consume token
+# ─────────────────────────────────────────────────────────────────────────────
+@router.post("/reset-password")
+async def reset_password_endpoint(request: ResetPasswordRequest):
+    """
+        Resets the user's password after full validation.
+
+        Endpoint:
+        ---------
+        POST /api/v1/reset-password
+
+        Description:
+        ------------
+        Applies all 4 password validation rules before updating:
+
+        Rule 1 — Both fields filled:
+            new_password and confirm_password must not be empty.
+
+        Rule 2 — Passwords match:
+            new_password must equal confirm_password exactly.
+
+        Rule 3 — Strong password (is_valid_password):
+            - Minimum 8 characters
+            - At least 1 uppercase letter
+            - At least 1 lowercase letter
+            - At least 2 digits
+            - At least 1 special character
+
+        Rule 4 — Not same as old password:
+            New password hash must differ from the current stored hash.
+
+        Then:
+        - Updates password_hash in Users table.
+        - Marks the token as is_used = TRUE (single-use).
+        - Logs a password_reset event in login_history.
+
+        Request Body:
+        -------------
+        {
+            "token":            "<reset token>",
+            "new_password":     "NewPass@123",
+            "confirm_password": "NewPass@123"
+        }
+
+        Returns:
+        --------
+        200 OK:
+            { "status": "success", "message": "Password reset successfully." }
+
+        400 Bad Request:
+            { "detail": "<specific validation error message>" }
+
+        Security:
+        ---------
+        - Token is validated and consumed atomically.
+        - Password is SHA-256 hashed before storage.
+        - Expired/used tokens are rejected at this stage too.
+    """
+    logger.info("POST /reset-password called")
+
+    if not request.new_password or not request.confirm_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Both password fields are required."
+        )
+    if request.new_password != request.confirm_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Passwords do not match. Please re-enter both fields."
+        )
+    if not is_valid_password(request.new_password):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Password does not meet strength requirements: "
+                "min 8 characters, 1 uppercase, 1 lowercase, "
+                "2 digits, 1 special character (!@#$%^&* etc.)"
+            )
+        )
+
+    # ── Rule 4: Token validation + old password check + DB update ─
+    success, message = reset_user_password(
+        token=request.token,
+        new_password=request.new_password
+    )
+
+    if not success:
+        logger.warning("reset_password_endpoint: reset failed — %s", message)
+        raise HTTPException(status_code=400, detail=message)
+
+    logger.info("reset_password_endpoint: password reset successful")
+    return {
+        "status":  "success",
+        "message": "Your password has been reset successfully. You can now log in."
     }

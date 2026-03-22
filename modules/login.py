@@ -66,8 +66,8 @@ DB_CONFIG = {
 SMTP_CONFIG = {
     "host":     "smtp.gmail.com",
     "port":     587,
-    "sender":   "saniyapayal97@gmail.com",     # ← replace with your Gmail address
-    "password": "wtpc qavp unqw broc",       # ← replace with Gmail App Password
+    "sender":   "",     # ← replace with your Gmail address
+    "password": "",       # ← replace with Gmail App Password
     "display_name": "DN Diagnostics Platform"
 }
 

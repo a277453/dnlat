@@ -4586,7 +4586,7 @@ RAISES:
                 users = {
                     "Select User": {"email": "", "passcode": ""},
                     "Ashish Trivedi (ashish.trivedi@dieboldnixdorf.com)": {"email": "ashish.trivedi@dieboldnixdorf.com", "passcode": "1234"},
-                    "Arthav Deshpande (arthav.deshpande@dieboldnixdorf.com)": {"email": "arthav.deshpande@dieboldnixdorf.com", "passcode": "5678"},
+                    "Atharv Deshpande (atharv.deshpande@dieboldnixdorf.com)": {"email": "atharv.deshpande@dieboldnixdorf.com", "passcode": "5678"},
                     "Prasad Avasare (prasad.avasare@dieboldnixdorf.com)": {"email": "prasad.avasare@dieboldnixdorf.com", "passcode": "9012"},
                     "Saniya Payal(saniya.payal@dieboldnixdorf.com)": {"email": "saniya.payal@dieboldnixdorf.com", "passcode": "3456"}
                 }

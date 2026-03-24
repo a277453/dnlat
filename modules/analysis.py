@@ -33,21 +33,28 @@ Author: Your Name
 Purpose: Production-ready database utility layer
 """
 
+from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import hashlib
 import os
+from dotenv import load_dotenv
+load_dotenv()  # auto load from root
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+env_path = os.path.join(BASE_DIR, ".env")
+if os.path.exists(env_path):
+    load_dotenv(env_path)
 # ============================================
 # CONNECT TO DEFAULT POSTGRES DB
 # ============================================
 
 ADMIN_DB_CONFIG = {
-    "host": "localhost",
-    "database": "postgres",  # connect -> default postgres DB 
-    "user": "postgres",      # postgres user
-    "password": "mise",          #  postgres password 
-    "port": "5432"
+    "host": os.getenv("DB_HOST", "localhost"),
+    "database": "postgres",
+    "user": os.getenv("Admin_DB_USER"),
+    "password": os.getenv("Admin_DB_PASSWORD"),
+    "port": int(os.getenv("Admin_DB_PORT", 5432))
 }
 
 # ============================================
@@ -55,11 +62,11 @@ ADMIN_DB_CONFIG = {
 # ============================================
 
 USERRESPONSE_DB_CONFIG = {
-    "host": "localhost",
-    "database": "userresponse", 
-    "user": "postgres",
-    "password": "mise",
-    "port": "5432"
+    "host": os.getenv("userresponse_db_host"),
+    "database": os.getenv("userresponse_db_name"),
+    "user": os.getenv("userresponse_db_user"),
+    "password": os.getenv("userresponse_db_password"),
+    "port": int(os.getenv("userresponse_db_port", 5432))
 }
 # CREATE userresponse DATABASE
 # ============================================
@@ -266,11 +273,11 @@ def store_metadata(
 # ============================================
 
 DB_CONFIG = {
-    "host": "localhost",
-    "database": "dn_diagnostics",
-    "user": "postgres",
-    "password": "mise",
-    "port": "5432"
+    "host": os.getenv("DB_HOST"),
+    "database": os.getenv("DB_NAME"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD"),
+    "port": os.getenv("DB_PORT")
 }
 # ============================================
 # STEP 1: CHECK LOGIN

@@ -843,32 +843,20 @@ def show_login_page():
     """
     Display login page UI
     """
-    # -- Theme toggle + Dev Mode toggle in top-right corner--
-    _, col_theme, col_dev = st.columns([5, 1, 1])
+    # -- Theme toggle in top-right corner --
+    _, col_theme = st.columns([6, 1])
     with col_theme:
         # Theme toggle — label reflects the ACTIVE theme
-        theme_label = "Light Mode " if is_dark() else "Light Mode"
-        theme_on = st.toggle(
-            theme_label,
+        def _toggle_theme_login():
+            st.session_state.theme = 'light' if st.session_state.login_theme_toggle else 'dark'
+
+        st.toggle(
+            "Light Mode",
             value=not is_dark(),
             key="login_theme_toggle",
-            help="Switch between dark and light theme."
+            help="Switch between dark and light theme.",
+            on_change=_toggle_theme_login
         )
-        if theme_on == is_dark():  # state mismatch → user just flipped it
-            st.session_state.theme = 'light' if theme_on else 'dark'
-            st.rerun()
-
-    with col_dev:
-        # ── Dev Mode Toggle (same row, right of theme toggle) ─────────
-        dev_mode_on = st.toggle(
-            " Dev Mode",
-            value=st.session_state.get("dev_mode", False),
-            key="dev_mode_toggle",
-            help="When ON, any username/password bypasses authentication."
-        )
-        if dev_mode_on != st.session_state.get("dev_mode", False):
-            st.session_state.dev_mode = dev_mode_on
-            st.rerun()
 
     # Center the login form
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -893,13 +881,11 @@ def show_login_page():
                 placeholder="Enter your password",
                 key="login_password"
             )
-            # Button label reflects dev mode state
-            btn_label = "Enter (Dev Mode)" if st.session_state.get("dev_mode", False) else "Login"
-            submit = st.form_submit_button(btn_label, use_container_width=True)
+            submit = st.form_submit_button("Login", use_container_width=True)
 
         # Handle login
         if submit:
-            if not username and not st.session_state.get("dev_mode", False):
+            if not username:
                 st.error("  Please enter username and password")
             else:
                 with st.spinner("Authenticating..."):
@@ -979,12 +965,16 @@ def show_register_page():
     # -- Theme toggle in top-right corner --
     _, col_theme = st.columns([6, 1])
     with col_theme:
-        theme_label = "Light Mode" if is_dark() else "Dark Mode"
-        theme_on = st.toggle(theme_label, value=not is_dark(), key="register_theme_toggle",
-                             help="Switch between dark and light theme.")
-        if theme_on == is_dark():
-            st.session_state.theme = 'light' if theme_on else 'dark'
-            st.rerun()
+        def _toggle_theme_register():
+            st.session_state.theme = 'light' if st.session_state.register_theme_toggle else 'dark'
+
+        st.toggle(
+            "Light Mode",
+            value=not is_dark(),
+            key="register_theme_toggle",
+            help="Switch between dark and light theme.",
+            on_change=_toggle_theme_register
+        )
 
     col1, col2, col3 = st.columns([1, 2, 1])
 
@@ -5851,12 +5841,16 @@ def show_main_app():
     with col_btns:
         btn_col1, btn_col2 = st.columns(2)
         with btn_col1:
-            theme_label = "Light Mode" if is_dark() else "Light Mode"
-            theme_on = st.toggle(theme_label, value=not is_dark(), key="theme_toggle_btn",
-                                 help="Switch between dark and light theme.")
-            if theme_on == is_dark():
-                st.session_state.theme = 'light' if theme_on else 'dark'
-                st.rerun()
+            def _toggle_theme_register():
+                st.session_state.theme = 'light' if st.session_state.register_theme_toggle else 'dark'
+
+            st.toggle(
+                "Light Mode",
+                value=not is_dark(),
+                key="register_theme_toggle",
+                help="Switch between dark and light theme.",
+                on_change=_toggle_theme_register
+            )
         with btn_col2:
             if st.button(" Logout", use_container_width=True, key="logout_btn"):
                 logout_user()
@@ -6298,22 +6292,21 @@ def main():
     # Initialize session
     initialize_session()
 
-    # ── Skip ALL DB setup when developer mode is active ──────────────
-    # dev_mode is seeded from the DN_DEV_MODE env var by initialize_session(),
-    # so even the very first page load skips DB calls when the env var is set.
-    # If dev_mode is off, DB calls are wrapped in try/except so a down DB
-    # never prevents the app from rendering the login page.
-    if not st.session_state.get("dev_mode", False):
-        try:
-            create_dn_diagnostics_database()
-            initialize_admin_table()
-            create_login_history_table()
-            create_reset_tokens_table()          # Step 2 — password reset tokens table
-            create_userresponse_database()
-            create_analysis_table()
-            create_feedback_table()
-        except Exception as _db_err:
-            frontend_logger.error("DB setup failed on startup: %s", _db_err)
+    # ── DB setup on every startup ────────────────────────────────────
+    # dev_mode is  determined by credentials at login time, not by a
+    # pre-login toggle, so we always initialise the DB on app load.
+    # The calls are wrapped in try/except so a down DB never blocks the
+    # login page from rendering.
+    try:
+        create_dn_diagnostics_database()
+        initialize_admin_table()
+        create_login_history_table()
+        create_reset_tokens_table()          # Step 2 — password reset tokens table
+        create_userresponse_database()
+        create_analysis_table()
+        create_feedback_table()
+    except Exception as _db_err:
+        frontend_logger.error("DB setup failed on startup: %s", _db_err)
     # ─────────────────────────────────────────────────────────────────
 
     # ── Password Reset via URL token (Step 2 → Step 3) ──────────────

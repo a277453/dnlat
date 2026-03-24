@@ -39,45 +39,62 @@ from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import hashlib
 import secrets
 import smtplib
+import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import streamlit as st
 from datetime import datetime, timedelta
 from typing import Optional
 from modules.logging_config import logger
+from dotenv import load_dotenv
+load_dotenv()  # auto load from root
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+env_path = os.path.join(BASE_DIR, ".env")
+if os.path.exists(env_path):
+    load_dotenv(env_path)
 
 # ============================================
 # DATABASE CONFIGURATION
 # ============================================
 
 DB_CONFIG = {
-    "host": "localhost",
-    "database": "dn_diagnostics",
-    "user": "postgres",
-    "password": "mise",
-    "port": "5432"
+    "host": os.getenv("DB_HOST"),
+    "database": os.getenv("DB_NAME"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD"),
+    "port": int(os.getenv("DB_PORT", 5432))
 }
 
 # ============================================
-# SMTP EMAIL CONFIGURATION
-# Uses Gmail SMTP with App Password (TLS).
+# UAT / DEV CREDENTIALS
 # ============================================
+UAT_CREDENTIALS = {
+    "username": os.getenv("DN_UAT_USERNAME"),
+    "password": os.getenv("DN_UAT_PASSWORD")
+}
 
+# ============================================
+# SMTP CONFIGURATION (SAFE)
+# ============================================
 SMTP_CONFIG = {
-    "host":     "smtp.gmail.com",
-    "port":     587,
-    "sender":   "",     # ← replace with your Gmail address
-    "password": "",       # ← replace with Gmail App Password
-    "display_name": "DN Diagnostics Platform"
+    "host": os.getenv("SMTP_HOST", "smtp.gmail.com"),
+    "port": int(os.getenv("SMTP_PORT", 587)),
+    "sender": os.getenv("SMTP_SENDER", "").strip(),
+    "password": os.getenv("SMTP_PASSWORD", "").strip(),
+    "display_name": os.getenv("SMTP_DISPLAY_NAME", "DN Diagnostics Platform")
 }
+
+APP_BASE_URL = os.getenv("APP_BASE_URL")
+RESET_TOKEN_EXPIRY_MINUTES = int(os.getenv("RESET_TOKEN_EXPIRY_MINUTES", 30))
 
 # Base URL of your Streamlit app.
 # The reset link will be: APP_BASE_URL + ?reset_token=<token>
 # Example local: "http://localhost:8501"
-APP_BASE_URL = "http://localhost:8501"
+# APP_BASE_URL = os.getenv("APP_BASE_URL")
 
-# Token validity window (minutes)
-RESET_TOKEN_EXPIRY_MINUTES = 30
+# # Token validity window (minutes)
+# RESET_TOKEN_EXPIRY_MINUTES = int(os.getenv("RESET_TOKEN_EXPIRY_MINUTES", 30))
 
 # ============================================
 # DATABASE CONNECTION
@@ -396,20 +413,24 @@ def authenticate_user(username: str, password: str) -> bool:
           Dev-mode bypass is for local development only.
             Never enable it in a production environment.
     """
-    # ── DEV MODE BYPASS ──────────────────────────────────────────────
-    if st.session_state.get("dev_mode", False):
-        dev_username = username.strip() or "developer"
-        st.session_state.logged_in    = True
-        st.session_state.username     = dev_username
-        st.session_state.employee_code = "DEV00000"
+    # ── UAT / DEV MODE — credential-based detection ──────────────────
+    # If the supplied credentials match the predefined UAT credentials,
+    # activate Dev/UAT mode without touching the database.
+    if (username.strip() == UAT_CREDENTIALS["username"] and
+            password == UAT_CREDENTIALS["password"]):
+        st.session_state.logged_in     = True
+        st.session_state.username      = username.strip()
+        st.session_state.employee_code = "00000001"
         st.session_state.role          = "ADMIN"
+        st.session_state.dev_mode      = True          # UAT environment
         logger.warning(
-            "  DEV MODE LOGIN — authentication bypassed for user '%s'",
-            dev_username
+            "  UAT MODE LOGIN — authentication bypassed for user '%s'",
+            username.strip()
         )
-        log_login_event(username=dev_username, action="login_dev_bypass")
+        log_login_event(username=username.strip(), action="login_uat_bypass")
         return True
     # ─────────────────────────────────────────────────────────────────
+    st.session_state.dev_mode = False
 
     user = verify_credentials(username, password)
 

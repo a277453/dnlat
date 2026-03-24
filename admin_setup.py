@@ -42,28 +42,45 @@ import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import hashlib
 from modules.streamlit_logger import logger as frontend_logger
+import os
+from dotenv import load_dotenv
+load_dotenv()  # auto load from root
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+env_path = os.path.join(BASE_DIR, ".env")
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+
+def validate_env():
+    required_vars = ["DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"]
+
+    missing = [var for var in required_vars if not os.getenv(var)]
+
+    if missing:
+        raise Exception(f" Missing environment variables: {missing}")
+
+validate_env()
 # ============================================
 # ADMIN (DEFAULT) DB CONFIG
 # Used ONLY to create dn_diagnostics if missing
 # ============================================
 ADMIN_DB_CONFIG = {
-    "host": "localhost",
-    "database": "postgres",   # connect to default postgres DB
-    "user": "postgres",
-    "password": "mise",
-    "port": "5432"
+    "host": os.getenv("DB_HOST", "localhost"),
+    "database": "postgres",
+    "user": os.getenv("Admin_DB_USER"),
+    "password": os.getenv("Admin_DB_PASSWORD"),
+    "port": int(os.getenv("Admin_DB_PORT", 5432))
 }
 
 # ============================================
 # APP DB CONFIG
 # ============================================
 DB_CONFIG = {
-    "host": "localhost",
-    "database": "dn_diagnostics",
-    "user": "postgres",
-    "password": "mise",
-    "port": "5432"
+    "host": os.getenv("DB_HOST"),
+    "database": os.getenv("DB_NAME"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD"),
+    "port": int(os.getenv("DB_PORT", 5432))
 }
 
 # ============================================
@@ -209,7 +226,12 @@ def initialize_admin_table():
 
         if count == 0:
             default_users = [
-                ("Admin", "Admin User", "dnadmin", "00000001", "ADMIN", True),
+                (os.getenv("ADMIN_USERNAME"),
+                os.getenv("ADMIN_NAME"),
+                os.getenv("ADMIN_PASSWORD"),
+                os.getenv("ADMIN_EMPLOYEE_CODE"),
+                os.getenv("ADMIN_ROLE"),
+                os.getenv("ADMIN_IS_ACTIVE") == "True")
             ]
 
             for username, name, password, emp_code, role, is_active in default_users:

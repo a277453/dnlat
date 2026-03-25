@@ -3715,17 +3715,24 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
     
     # Calculate height based on number of screens
     height = max(400, max_screens * 75)
-    
+
+    # Theme-aware colors
+    _is_dark = st.session_state.get('theme', 'dark') == 'dark'
+    _plot_bg   = '#0E1117' if _is_dark else '#ffffff'
+    _paper_bg  = '#0E1117' if _is_dark else '#f0f4f8'
+    _font_col  = '#ffffff'  if _is_dark else '#0d1117'
+    _title_col = '#ffffff'  if _is_dark else '#0d1117'
+
     # Update layout
     fig.update_layout(
         height=height,
         showlegend=False,
-        plot_bgcolor='#0E1117',
-        paper_bgcolor='#0E1117',
-        font=dict(color='white'),
+        plot_bgcolor=_plot_bg,
+        paper_bgcolor=_paper_bg,
+        font=dict(color=_font_col),
         title=dict(
             text=f"UI Flow: {txn_id}",
-            font=dict(size=16, color='white'),
+            font=dict(size=16, color=_title_col),
             x=0.5,
             xanchor='center'
         ),

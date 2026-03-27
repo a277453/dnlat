@@ -730,6 +730,7 @@ inject_theme_css()
 API_BASE_URL = "http://localhost:8000/api/v1"
 
 def get_auth_headers() -> dict:
+<<<<<<< HEAD
     """Returns Authorization: Bearer header carrying the JWT issued at login."""
     token = st.session_state.get("session_token") or ""
     return {"Authorization": f"Bearer {token}"}
@@ -752,6 +753,24 @@ def is_access_denied(response) -> bool:
     if response.status_code == 403:
         st.error(
             " Access Denied (HTTP 403) — your account role does not have permission "
+=======
+    """Returns RBAC headers (username + role) for every backend request.
+    Role is stored in session at login — no extra DB call needed."""
+    return {
+        "X-Username":  st.session_state.get("username") or "",
+        "X-User-Role": st.session_state.get("role") or "",
+    }
+
+def is_access_denied(response) -> bool:
+    """
+    Returns True and shows a clear error if the backend returned 403.
+    Call this after every request to a role-restricted endpoint.
+    Prevents accidental st.rerun() calls or further logic running after a denial.
+    """
+    if response.status_code == 403:
+        st.error(
+            "⛔ Access Denied — your account role does not have permission "
+>>>>>>> 380e409 (feature/RBAC, will push in different branch)
             "to use this feature. Please contact your administrator."
         )
         return True
@@ -928,7 +947,10 @@ def show_login_page():
                             st.session_state.employee_code = user.get("employee_code")
                             st.session_state.role          = user.get("role")
                             st.session_state.name          = user.get("name")
+<<<<<<< HEAD
                             st.session_state.session_token = user.get("session_token")
+=======
+>>>>>>> 380e409 (feature/RBAC, will push in different branch)
                             st.session_state.login_success = True
                             st.success(f"  Welcome {user['username']}!")
                             st.rerun()

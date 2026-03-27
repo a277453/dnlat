@@ -37,7 +37,11 @@ import time
 #  Import our central logger
 from modules.logging_config import logger
 from modules.analysis import store_metadata, store_feedback, get_user_role, get_analysis_records, get_feedback_records
+<<<<<<< HEAD
 from modules.login import (verify_reset_identity,generate_reset_token,send_reset_email,validate_reset_token,reset_user_password,is_valid_password,authenticate_user_backend,register_user,is_user_pending_approval,log_login_event,create_access_token)
+=======
+from modules.login import (verify_reset_identity,generate_reset_token,send_reset_email,validate_reset_token,reset_user_password,is_valid_password,authenticate_user_backend,register_user,is_user_pending_approval,log_login_event)
+>>>>>>> 380e409 (feature/RBAC, will push in different branch)
 
 import logging
 from fastapi import Request
@@ -57,6 +61,7 @@ logger.info("FastAPI app started")
 ALLOWED_ROLES = {"ADMIN", "DEV_MODE"}
 
 async def require_elevated_role(
+<<<<<<< HEAD
     authorization: str = Header(default=None),
 ):
     """
@@ -73,6 +78,26 @@ async def require_elevated_role(
         logger.warning(
             "RBAC [401] — missing Authorization header on elevated endpoint"
         )
+=======
+    x_username:  str = Header(default=None),
+    x_user_role: str = Header(default=None),
+):
+    """
+    Flat FastAPI dependency — no factory/closure, guaranteed header injection.
+
+    Streamlit sends X-Username + X-User-Role on every request (set at login).
+    This dependency is applied to all endpoints that USER role cannot access.
+
+    Returns 401 if headers are missing.
+    Returns 403 if role is not in ALLOWED_ROLES (i.e. role == USER).
+
+    Both responses include:
+      - A structured JSON body so the error is human-readable in the browser.
+      - WWW-Authenticate: Bearer header so browsers treat it as an API 401,
+        NOT a redirect or login-dialog trigger (which would cause Streamlit to rerun).
+    """
+    if not x_username or not x_user_role:
+>>>>>>> 380e409 (feature/RBAC, will push in different branch)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
@@ -80,12 +105,19 @@ async def require_elevated_role(
                 "code": 401,
                 "error": "Unauthorized",
                 "message": (
+<<<<<<< HEAD
                     "Authentication token missing. "
                     "Log in through the application to access this endpoint."
+=======
+                    "Authentication headers are missing. "
+                    "This endpoint requires X-Username and X-User-Role headers. "
+                    "Direct browser access is not permitted — use the application."
+>>>>>>> 380e409 (feature/RBAC, will push in different branch)
                 ),
             },
             headers={"WWW-Authenticate": "Bearer"},
         )
+<<<<<<< HEAD
 
     token = authorization.split(" ", 1)[1]
     payload = decode_access_token(token)   # raises 401 automatically if bad
@@ -96,6 +128,9 @@ async def require_elevated_role(
             "RBAC [403] — user='%s' role='%s' denied on elevated endpoint",
             payload.get("sub"), role,
         )
+=======
+    if x_user_role not in ALLOWED_ROLES:
+>>>>>>> 380e409 (feature/RBAC, will push in different branch)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
@@ -103,7 +138,11 @@ async def require_elevated_role(
                 "code": 403,
                 "error": "Forbidden",
                 "message": (
+<<<<<<< HEAD
                     f"Access denied. Role '{role}' does not have permission "
+=======
+                    f"Access denied. Role '{x_user_role}' does not have permission "
+>>>>>>> 380e409 (feature/RBAC, will push in different branch)
                     f"to access this endpoint. Required role: ADMIN or DEV_MODE."
                 ),
             },
@@ -4598,7 +4637,10 @@ class LoginResponse(BaseModel):
     name: str | None = None
     employee_code: str
     role: str
+<<<<<<< HEAD
     session_token: str
+=======
+>>>>>>> 380e409 (feature/RBAC, will push in different branch)
 
 class RegisterRequest(BaseModel):
     email: str
@@ -4615,7 +4657,11 @@ class LogoutRequest(BaseModel):
 async def auth_login(request: LoginRequest):
     """
     Verify username + password against the Users table.
+<<<<<<< HEAD
     Returns user info + signed JWT session_token on success (200).
+=======
+    Returns user info on success (200).
+>>>>>>> 380e409 (feature/RBAC, will push in different branch)
     Returns 401 for wrong credentials.
     Returns 403 if account exists but is pending admin approval.
     """
@@ -4625,6 +4671,7 @@ async def auth_login(request: LoginRequest):
 
     if user:
         log_login_event(username=user["username"], action="login")
+<<<<<<< HEAD
         logger.info("Login successful: user=%s role=%s", user["username"], user.get("role"))
         token = create_access_token(
             username=user["username"],
@@ -4638,6 +4685,10 @@ async def auth_login(request: LoginRequest):
             role=user.get("role", "USER"),
             session_token=token,
         )
+=======
+        logger.info("Login successful: user: %s", user["username"])
+        return LoginResponse(**user)
+>>>>>>> 380e409 (feature/RBAC, will push in different branch)
 
     if is_user_pending_approval(request.username.strip(), request.password):
         raise HTTPException(

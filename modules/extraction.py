@@ -147,10 +147,10 @@ class ZipExtractionService:
                 return self.BRANCH_REGISTRY
 
         # --- UI journals ---
-        # Must be a .jrn inside a path that has a 'ui' folder (e.g. VCP_PRO/JOURNALS/UI)
+        # Must be a .jrn inside a path that has a 'ui'or 'journal' folder (e.g. VCP_PRO/JOURNALS/UI or JOURNAL)
         if ext == '.jrn':
             has_ui_folder = any('ui' in p for p in parents)
-            if has_ui_folder:
+            if has_ui_folder: 
                 return self.BRANCH_UI
 
         # --- CUSTOMER journals ---

@@ -14,15 +14,15 @@ logger.info("--- Successfully imported xml_parser_logic ---")
 # ======================================================================
 
 # Global variable to store the processed files directory
-PROCESSED_FILES_DIR = None
+# PROCESSED_FILES_DIR = None
 
-def set_processed_files_dir(directory: str):
-    global PROCESSED_FILES_DIR
-    PROCESSED_FILES_DIR = directory
-    logger.info(f"✓ Processed files directory set to: {directory}")
+# def set_processed_files_dir(directory: str):
+#     global PROCESSED_FILES_DIR
+#     PROCESSED_FILES_DIR = directory
+#     logger.info(f"Processed files directory set to: {directory}")
 
-def get_processed_files_dir() -> str:
-    return PROCESSED_FILES_DIR
+# def get_processed_files_dir() -> str:
+#     return PROCESSED_FILES_DIR
 
 # ============================================
 # LIFESPAN HANDLER
@@ -55,6 +55,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan  # <- Use lifespan instead of on_event
 )
+
+
 
 # CORS middleware
 app.add_middleware(

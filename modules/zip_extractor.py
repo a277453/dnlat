@@ -244,8 +244,8 @@ def extract_from_zip_bytes(zip_bytes: bytes, logs: List[str], target_prefixes=('
 			pos = fname_end + extra_len + comment_len
 
 		except Exception as e:
-			logs.append(f"Error parsing CD entry at {pos}: {e}")
-			logger.error(f"Error parsing CD entry at {pos}: {e}")
+			# logs.append(f"Error parsing CD entry at {pos}: {e}")
+			# logger.error(f"Error parsing CD entry at {pos}: {e}")
 			pos += 4
 
 	xml_count = sum(1 for k in found if not k.startswith('__xsd__'))

@@ -43,8 +43,10 @@ import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from jose import jwt, JWTError, ExpiredSignatureError
+from fastapi import HTTPException, status
 from modules.logging_config import logger
 from dotenv import load_dotenv
 load_dotenv()  # auto load from root
@@ -73,7 +75,11 @@ UAT_CREDENTIALS = {
     "username": os.getenv("DN_UAT_USERNAME"),
     "password": os.getenv("DN_UAT_PASSWORD")
 }
+# ============================================
+# DEV MODE CONFIG
+# ============================================
 
+ENABLE_DEV_MODE = os.getenv("ENABLE_DEV_MODE", "false").lower() == "true"
 # ============================================
 # SMTP CONFIGURATION (SAFE)
 # ============================================
@@ -87,6 +93,74 @@ SMTP_CONFIG = {
 
 APP_BASE_URL = os.getenv("APP_BASE_URL")
 RESET_TOKEN_EXPIRY_MINUTES = int(os.getenv("RESET_TOKEN_EXPIRY_MINUTES", 30))
+
+# ============================================
+# JWT CONFIGURATION
+# ============================================
+JWT_SECRET_KEY  = os.getenv("JWT_SECRET_KEY", "CHANGE_THIS_SECRET_IN_PRODUCTION")
+JWT_ALGORITHM   = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "8"))
+
+# Paths that never need a token (checked by the middleware in main.py)
+PUBLIC_PATHS = {
+    "/",
+    "/health",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/api/v1/auth/login",
+    "/api/v1/auth/register",
+    "/api/v1/auth/initialize-db",
+    "/api/v1/forgot-password",
+    "/api/v1/verify-reset-identity",
+    "/api/v1/reset-password",
+}
+
+
+def create_access_token(username: str, role: str, employee_code: str) -> str:
+    """Create a signed JWT encoding username + role. Called at login."""
+    payload = {
+        "sub":  username,
+        "role": role,
+        "emp":  employee_code,
+        "exp":  datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS),
+    }
+    token = jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    logger.info("JWT issued: user='%s' role='%s'", username, role)
+    return token
+
+
+def decode_access_token(token: str) -> dict:
+    """
+    Decode and validate a JWT.
+    Raises HTTPException 401 if token is missing, expired, or tampered.
+    """
+    try:
+        return jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    except ExpiredSignatureError:
+        logger.warning("JWT decode failed: token expired")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "status":  "error",
+                "code":    401,
+                "error":   "Unauthorized",
+                "message": "Your session has expired. Please log in again.",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except JWTError as exc:
+        logger.warning("JWT decode failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "status":  "error",
+                "code":    401,
+                "error":   "Unauthorized",
+                "message": "Invalid session token. Please log in again.",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 # Base URL of your Streamlit app.
 # The reset link will be: APP_BASE_URL + ?reset_token=<token>
@@ -383,68 +457,115 @@ def verify_credentials(username: str, password: str) -> Optional[str]:
         conn.close()
         return None
 
+def authenticate_user_backend(username: str, password: str) -> dict | None:
+    """
+    Backend-safe authentication (used by FastAPI)
+    """
 
+    # ============================================
+    #  DEV MODE LOGIN (FROM .env)
+    # ============================================
+    if ENABLE_DEV_MODE:
+        for i in range(1, 4):  # supports 3 users
+            env_user = os.getenv(f"DN_UAT_USERNAME_{i}")
+            env_pass = os.getenv(f"DN_UAT_PASSWORD_{i}")
+
+            if env_user and env_pass:
+                if (username.strip() == env_user and password == env_pass):
+
+                    logger.warning(
+                        " DEV MODE LOGIN — bypassing DB for user '%s'",
+                        username.strip()
+                    )
+
+                    return {
+                        "username": username.strip(),
+                        "name": "Dev User",
+                        "employee_code": f"DEV00{i}",
+                        "role": "DEV_MODE",
+                    }
+
+        # fallback for single user (your old setup)
+        if (username.strip() == os.getenv("DN_UAT_USERNAME") and
+                password == os.getenv("DN_UAT_PASSWORD")):
+
+            logger.warning(
+                " DEV MODE LOGIN — bypassing DB for user '%s'",
+                username.strip()
+            )
+
+            return {
+                "username": username.strip(),
+                "name": "Dev User",
+                "employee_code": "DEV000",
+                "role": "DEV_MODE",
+            }
+
+    # ============================================
+    #  NORMAL DB AUTHENTICATION
+    # ============================================
+    conn = get_db_connection()
+    if not conn:
+        logger.error("authenticate_user_backend: DB connection failed")
+        return None
+
+    try:
+        cursor = conn.cursor()
+        password_hash = hash_password(password)
+
+        cursor.execute(
+            """
+            SELECT username, name, employee_code, role
+            FROM Users
+            WHERE username = %s
+              AND password_hash = %s
+              AND is_active = TRUE
+            """,
+            (username, password_hash),
+        )
+
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        if row:
+            return {
+                "username":      row[0],
+                "name":          row[1],
+                "employee_code": row[2],
+                "role":          row[3],
+            }
+
+        return None
+
+    except Exception:
+        logger.exception("authenticate_user_backend query failed")
+        conn.close()
+        return None
+    
 def authenticate_user(username: str, password: str) -> bool:
     """
-        Authenticates user and initializes session state.
+    Wrapper function (kept for backward compatibility).
 
-        Parameters:
-        -----------
-        username : str
-        password : str
-
-        Behavior:
-        ---------
-        - If dev_mode is enabled in session state, authentication is bypassed
-          and the supplied username is accepted as-is with ADMIN role.
-        - Otherwise verifies credentials against the database.
-        - Sets Streamlit session variables:
-            logged_in
-            username
-            employee_code
-            role
-        - Logs login event.
-
-        Returns:
-        --------
-        True if authentication successful.
-        False otherwise.
-
-          Dev-mode bypass is for local development only.
-            Never enable it in a production environment.
+    Now internally calls authenticate_user_backend()
+    so both old Streamlit flow and new API flow work safely.
     """
-    # ── UAT / DEV MODE — credential-based detection ──────────────────
-    # If the supplied credentials match the predefined UAT credentials,
-    # activate Dev/UAT mode without touching the database.
-    if (username.strip() == UAT_CREDENTIALS["username"] and
-            password == UAT_CREDENTIALS["password"]):
-        st.session_state.logged_in     = True
-        st.session_state.username      = username.strip()
-        st.session_state.employee_code = "00000001"
-        st.session_state.role          = "ADMIN"
-        st.session_state.dev_mode      = True          # UAT environment
-        logger.warning(
-            "  UAT MODE LOGIN — authentication bypassed for user '%s'",
-            username.strip()
-        )
-        log_login_event(username=username.strip(), action="login_uat_bypass")
-        return True
-    # ─────────────────────────────────────────────────────────────────
-    st.session_state.dev_mode = False
 
-    user = verify_credentials(username, password)
+    # Call new backend function
+    user = authenticate_user_backend(username, password)
 
     if user:
-        st.session_state.logged_in = True
-        st.session_state.username = user["username"]
-        st.session_state.employee_code = user["employee_code"]
-        st.session_state.role          = user["role"]
+        # Set session (same as old behavior)
+        st.session_state.logged_in     = True
+        st.session_state.username      = user["username"]
+        st.session_state.employee_code = user.get("employee_code")
+        st.session_state.role          = user.get("role")
+        st.session_state.name          = user.get("name")
 
         log_login_event(username=user["username"], action="login")
         return True
 
     return False
-
 # ============================================
 # REGISTRATION
 # ============================================
@@ -1208,6 +1329,8 @@ def initialize_session():
         st.session_state.employee_code = None
     if "role" not in st.session_state:
         st.session_state.role = None
+    if "session_token" not in st.session_state:
+        st.session_state.session_token = None
 
     # ── Developer mode bypass ──────────────────────────────────────
     # When True, any username/password combination grants access.
@@ -1275,3 +1398,4 @@ def logout_user():
     st.session_state.username      = None
     st.session_state.employee_code = None
     st.session_state.role          = None
+    st.session_state.session_token = None

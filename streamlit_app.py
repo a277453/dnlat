@@ -14,7 +14,7 @@ from fastapi.logger import logger
 from modules.analysis import create_analysis_table, create_feedback_table, create_userresponse_database
 from modules.streamlit_logger import logger as frontend_logger
 import time
-from modules.login import create_reset_tokens_table, register_user, is_valid_password, is_same_as_old_password
+from modules.login import create_reset_tokens_table, is_valid_password, is_same_as_old_password
 import re as _re; from datetime import datetime as _dt
 
 
@@ -24,8 +24,6 @@ from modules.login import (
     create_login_history_table,
     initialize_session,
     is_logged_in,
-    authenticate_user,
-    is_user_pending_approval,
     logout_user,
     get_current_user
 )
@@ -731,6 +729,28 @@ inject_theme_css()
 # ============================================
 API_BASE_URL = "http://localhost:8000/api/v1"
 
+def get_auth_headers() -> dict:
+    """Returns RBAC headers (username + role) for every backend request.
+    Role is stored in session at login — no extra DB call needed."""
+    return {
+        "X-Username":  st.session_state.get("username") or "",
+        "X-User-Role": st.session_state.get("role") or "",
+    }
+
+def is_access_denied(response) -> bool:
+    """
+    Returns True and shows a clear error if the backend returned 403.
+    Call this after every request to a role-restricted endpoint.
+    Prevents accidental st.rerun() calls or further logic running after a denial.
+    """
+    if response.status_code == 403:
+        st.error(
+            "⛔ Access Denied — your account role does not have permission "
+            "to use this feature. Please contact your administrator."
+        )
+        return True
+    return False
+
 # ============================================
 # THEMED TABLE HELPER
 # ============================================
@@ -889,22 +909,33 @@ def show_login_page():
                 st.error("  Please enter username and password")
             else:
                 with st.spinner("Authenticating..."):
-                    if authenticate_user(username, password):
-                        user = get_current_user()
-                        st.success(f"  Welcome {user['username']}!")
-
-                        st.session_state.login_success = True
-                        st.session_state.username = user["username"]
-
-                        st.rerun()  # Reload to show main app
-                    elif is_user_pending_approval(username, password):
-                        st.warning(
-                            f"  {username}  is pending admin approval.\n\n"
-                            "Please contact the administrator to activate your account."
+                    try:
+                        response = requests.post(
+                            f"{API_BASE_URL}/auth/login",
+                            json={"username": username, "password": password},
+                            timeout=10
                         )
-
-                    else:
-                        st.error("  Invalid username or password")
+                        if response.status_code == 200:
+                            user = response.json()
+                            st.session_state.logged_in     = True
+                            st.session_state.username      = user["username"]
+                            st.session_state.employee_code = user.get("employee_code")
+                            st.session_state.role          = user.get("role")
+                            st.session_state.name          = user.get("name")
+                            st.session_state.login_success = True
+                            st.success(f"  Welcome {user['username']}!")
+                            st.rerun()
+                        elif response.status_code == 403:
+                            st.warning(
+                                f"  {username}  is pending admin approval.\n\n"
+                                "Please contact the administrator to activate your account."
+                            )
+                        else:
+                            st.error("  Invalid username or password")
+                    except requests.exceptions.ConnectionError:
+                        st.error("  Cannot connect to the server. Please try again later.")
+                    except requests.exceptions.Timeout:
+                        st.error("  Request timed out. Please try again.")
 
 
 
@@ -1056,24 +1087,29 @@ def show_register_page():
                 # BACKEND REGISTRATION
                 # ---------------------------
                 try:
-                    success, message = register_user(
-                        email, name, password, employee_code, role_type or "USER"
+                    response = requests.post(
+                        f"{API_BASE_URL}/auth/register",
+                        json={
+                            "email": email,
+                            "name": name,
+                            "password": password,
+                            "employee_code": employee_code,
+                            "role": role_type or "USER"
+                        },
+                        timeout=10
                     )
-
-                    if success:
-                        st.success(message)
+                    if response.status_code == 201:
+                        st.success(response.json().get("message", "Registration successful. Await admin activation."))
                         time.sleep(3)
                         st.session_state.page = "login"
                         st.rerun()
                     else:
-                        st.error(message)
+                        st.error(response.json().get("detail", "Registration failed."))
 
-                except RuntimeError:
-                    # DB / infra issue
+                except requests.exceptions.ConnectionError:
                     st.error("Service temporarily unavailable. Please try again later.")
 
-                except Exception:
-                    # Unexpected failure
+                except requests.exceptions.Timeout:
                     st.error("Registration failed due to an internal error.")
                 
                 
@@ -1657,8 +1693,10 @@ def cached_request(method: str, url: str, cache_enabled: bool = True, **kwargs):
             
             return CachedResponse(cached_data)
     
-    # Make fresh request
+    # Make fresh request — always attach RBAC auth header
     request_func = getattr(requests, method.lower())
+    kwargs.setdefault("headers", {})
+    kwargs["headers"].update(get_auth_headers())
     response = request_func(url, **kwargs)
     
     # Cache the response (if enabled and successful)
@@ -1980,6 +2018,10 @@ def render_side_by_side_diff(content1: str, content2: str, filename1: str, filen
 # ============================================
 
 def render_transaction_stats():
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
     """
     Render transaction statistics with source file filter
     """
@@ -1992,9 +2034,12 @@ def render_transaction_stats():
         # STEP 1: Check if transaction data exists
         check_response = requests.get(
             f"{API_BASE_URL}/transaction-statistics",
+                headers=get_auth_headers(),
             timeout=30
         )
-        
+        if check_response.status_code in (401, 403):
+            st.error(" Access Denied — your role does not have permission to use this feature.")
+            return
         # If we get 400, it means data hasn't been analyzed yet
         if check_response.status_code == 400:
             need_analysis = True
@@ -2004,9 +2049,13 @@ def render_transaction_stats():
                     # Automatically analyze the customer journals
                     analyze_response = requests.post(
                         f"{API_BASE_URL}/analyze-customer-journals",
+                        headers=get_auth_headers(),
                         timeout=120
                     )
                     
+                    if analyze_response.status_code in (401, 403):
+                        st.error(" Access Denied — your role does not have permission to use this feature.")
+                        return
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
                         # Give a moment for the session to update
@@ -2032,9 +2081,12 @@ def render_transaction_stats():
         # STEP 2: Now get the statistics (either they existed or we just created them)
         response = requests.get(
             f"{API_BASE_URL}/transaction-statistics",
+                headers=get_auth_headers(),
             timeout=30
         )
-        
+        if response.status_code in (401, 403):
+            st.error(" Access Denied — your role does not have permission to use this feature.")
+            return
         if response.status_code == 200:
             data = response.json()
             
@@ -2302,6 +2354,10 @@ def render_transaction_stats():
 
 
 def render_registry_single():
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
     """
 FUNCTION: render_registry_single
 
@@ -2334,10 +2390,13 @@ RAISES:
     try:
         response = requests.get(
             f"{API_BASE_URL}/get-registry-contents",
+                headers=get_auth_headers(),
             params={"session_id": "current_session"},
             timeout=30
         )
-        
+        if response.status_code in (401, 403):
+            st.error(" Access Denied — your role does not have permission to use this feature.")
+            return None
         if response.status_code != 200:
             st.error("  Failed to load registry files from session")
             logger.error(f"API call failed with status: {response.status_code}")
@@ -2433,6 +2492,10 @@ RAISES:
             st.code(traceback.format_exc())
 
 def render_registry_compare():
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
     """
     Render registry file comparison interface with in-memory content loading
     """
@@ -2442,10 +2505,13 @@ def render_registry_compare():
     try:
         response = requests.get(
             f"{API_BASE_URL}/get-registry-contents",
+                headers=get_auth_headers(),
             params={"session_id": "current_session"},
             timeout=30
         )
-        
+        if response.status_code in (401, 403):
+            st.error(" Access Denied — your role does not have permission to use this feature.")
+            return None
         if response.status_code != 200:
             st.error("  Failed to load registry files from first package")
             return
@@ -2628,6 +2694,10 @@ def render_registry_compare():
             st.code(traceback.format_exc())
 
 def render_transaction_comparison():
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error("Access Denied — your role does not have permission to use this feature.")
+        return
     """
     FUNCTION:
         render_transaction_comparison
@@ -2695,9 +2765,13 @@ def render_transaction_comparison():
                 try:
                     analyze_response = requests.post(
                         f"{API_BASE_URL}/analyze-customer-journals",
+                        headers=get_auth_headers(),
                         timeout=120
                     )
                     
+                    if analyze_response.status_code in (401, 403):
+                        st.error(" Access Denied — your role does not have permission to use this feature.")
+                        return
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
                         st.success(f"  Analysis complete! Found {analyze_data.get('total_transactions', 0)} transactions")
@@ -2988,6 +3062,9 @@ def render_transaction_comparison():
                     timeout=30
                 )
                 
+                if comparison_response.status_code in (401, 403):
+                    st.error(" Access Denied — your role does not have permission to use this feature.")
+                    return
                 if comparison_response.status_code == 200:
                     comparison_data = comparison_response.json()
 
@@ -3245,6 +3322,10 @@ def render_transaction_comparison():
             st.code(traceback.format_exc())
 
 def render_ui_flow_individual():
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
     """
     FUNCTION:
         render_ui_flow_individual
@@ -3311,9 +3392,13 @@ def render_ui_flow_individual():
                 try:
                     analyze_response = requests.post(
                         f"{API_BASE_URL}/analyze-customer-journals",
+                        headers=get_auth_headers(),
                         timeout=120
                     )
                     
+                    if analyze_response.status_code in (401, 403):
+                        st.error(" Access Denied — your role does not have permission to use this feature.")
+                        return
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
                         st.success(f" Analysis complete! Found {analyze_data.get('total_transactions', 0)} transactions")
@@ -3492,6 +3577,9 @@ def render_ui_flow_individual():
                     timeout=60
                 )
                 
+                if viz_response.status_code in (401, 403):
+                    st.error(" Access Denied — your role does not have permission to use this feature.")
+                    return
                 if viz_response.status_code == 200:
                     viz_data = viz_response.json()
                     
@@ -4068,6 +4156,10 @@ def create_consolidated_flow_plotly(flow_data):
     return fig
 
 def render_consolidated_flow():
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
     """
     FUNCTION:
         render_consolidated_flow
@@ -4133,9 +4225,13 @@ def render_consolidated_flow():
                 try:
                     analyze_response = requests.post(
                         f"{API_BASE_URL}/analyze-customer-journals",
+                        headers=get_auth_headers(),
                         timeout=120
                     )
                     
+                    if analyze_response.status_code in (401, 403):
+                        st.error(" Access Denied — your role does not have permission to use this feature.")
+                        return
                     if analyze_response.status_code == 200:
                         st.success("✓ Analysis complete!")
                         import time
@@ -4221,6 +4317,7 @@ def render_consolidated_flow():
                 try:
                     response = requests.post(
                         f"{API_BASE_URL}/generate-consolidated-flow",
+                headers=get_auth_headers(),
                         json={
                             "source_file": selected_source,
                             "transaction_type": selected_type
@@ -4228,6 +4325,9 @@ def render_consolidated_flow():
                         timeout=60
                     )
                     
+                    if response.status_code in (401, 403):
+                        st.error(" Access Denied — your role does not have permission to use this feature.")
+                        return
                     if response.status_code == 200:
                         flow_data = response.json()
                         
@@ -4328,9 +4428,13 @@ RAISES:
                 try:
                     analyze_response = requests.post(
                         f"{API_BASE_URL}/analyze-customer-journals",
+                        headers=get_auth_headers(),
                         timeout=120
                     )
                     
+                    if analyze_response.status_code in (401, 403):
+                        st.error(" Access Denied — your role does not have permission to use this feature.")
+                        return
                     if analyze_response.status_code == 200:
                         st.success("  Analysis complete!")
                         import time
@@ -4851,6 +4955,10 @@ RAISES:
                     st.error(f"Failed to connect to API: {str(e)}")
 
 def render_counters_analysis():
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
     """
 FUNCTION: render_counters_analysis
 
@@ -4911,9 +5019,13 @@ RAISES:
                 try:
                     analyze_response = requests.post(
                         f"{API_BASE_URL}/analyze-customer-journals",
+                        headers=get_auth_headers(),
                         timeout=120
                     )
                     
+                    if analyze_response.status_code in (401, 403):
+                        st.error(" Access Denied — your role does not have permission to use this feature.")
+                        return
                     if analyze_response.status_code == 200:
                         st.success("  Analysis complete!")
                         import time
@@ -4963,9 +5075,13 @@ RAISES:
                 # Get matching sources (check which sources have corresponding TRC trace files)
                 matching_sources_response = requests.get(
                     f"{API_BASE_URL}/get-matching-sources-for-trc",
+                headers=get_auth_headers(),
                     timeout=30
                 )
                 
+                if matching_sources_response.status_code in (401, 403):
+                    st.error(" Access Denied — your role does not have permission to use this feature.")
+                    return
                 if matching_sources_response.status_code == 200:
                     matching_data = matching_sources_response.json()
                     filtered_sources = matching_data.get('matching_sources', [])
@@ -5075,6 +5191,9 @@ RAISES:
                     timeout=60
                 )
                 
+                if response.status_code in (401, 403):
+                    st.error(" Access Denied — your role does not have permission to use this feature.")
+                    return
                 if response.status_code == 200:
                     counter_data = response.json()
                     
@@ -5437,6 +5556,10 @@ RAISES:
             st.code(traceback.format_exc())
 
 def render_acu_single_parse(): # MODIFIED
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
     """
     FUNCTION:
         render_acu_single_parse
@@ -5485,9 +5608,13 @@ def render_acu_single_parse(): # MODIFIED
     if not st.session_state.acu_files_loaded:
         with st.spinner("Loading ACU files from processed package..."):
             try:
-                resp = requests.get(f"{API_BASE_URL}/get-acu-files", timeout=30)
+                resp = requests.get(f"{API_BASE_URL}/get-acu-files",
+                headers=get_auth_headers(), timeout=30)
                 #st.write("DEBUG BACKEND STATUS:", resp.status_code)      #add debug point 
                 #st.write("DEBUG BACKEND RESPONSE:", resp.text)           #
+                if resp.status_code in (401, 403):
+                    st.error(" Access Denied — your role does not have permission to use this feature.")
+                    return
                 if resp.status_code == 200:
                     data = resp.json()
                     xml_files = data.get('acu_files', {})
@@ -5503,6 +5630,8 @@ def render_acu_single_parse(): # MODIFIED
                     st.success(f"  Loaded {len(xml_files)} ACU XML files from processed package")
                     st.rerun()
 
+                elif is_access_denied(resp):
+                    return
                 else:
                         st.warning("No ACU files found in the processed package.")
             except Exception as e:
@@ -5531,10 +5660,14 @@ def render_acu_single_parse(): # MODIFIED
                         
                         response = requests.post(
                             f"{API_BASE_URL}/parse-acu-files",
+                headers=get_auth_headers(),
                             json=parse_request,
                             timeout=120
                         )
                         
+                        if response.status_code in (401, 403):
+                            st.error(" Access Denied — your role does not have permission to use this feature.")
+                            return
                         if response.status_code == 200:
                             result = response.json()
                             records = result.get('data', [])
@@ -5620,6 +5753,10 @@ def render_acu_single_parse(): # MODIFIED
 
 
 def render_acu_compare(): # MODIFIED
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
     """
 FUNCTION: render_acu_compare
 
@@ -5657,9 +5794,13 @@ RAISES:
         with st.spinner("Loading ACU files from main package for Source A..."):
             try:
                 
-                resp = requests.get(f"{API_BASE_URL}/get-acu-files", timeout=30)
+                resp = requests.get(f"{API_BASE_URL}/get-acu-files",
+                headers=get_auth_headers(), timeout=30)
                 
                 
+                if resp.status_code in (401, 403):
+                    st.error(" Access Denied — your role does not have permission to use this feature.")
+                    return
                 if resp.status_code == 200:
                     data = resp.json()
                     all_files = data.get('acu_files', {})
@@ -6007,16 +6148,21 @@ def show_main_app():
 
         # ── Transaction Summary (inline) ──
         cj_available = categories.get('customer_journals', {}).get('count', 0) > 0
-        if cj_available:
+        current_role = st.session_state.get("role", "USER")
+        if cj_available and current_role != "USER":
             st.markdown("## Transaction Summary")
 
             
             _ts_data = None
             try:
                 with st.spinner("Building transaction summary…"):
-                    requests.post(f"{API_BASE_URL}/analyze-customer-journals", timeout=120)
-                _ts_resp = requests.get(f"{API_BASE_URL}/transaction-statistics", timeout=30)
-                if _ts_resp.status_code == 200:
+                    requests.post(f"{API_BASE_URL}/analyze-customer-journals",
+                                  headers=get_auth_headers(), timeout=120)
+                _ts_resp = requests.get(f"{API_BASE_URL}/transaction-statistics",
+                headers=get_auth_headers(), timeout=30)
+                if _ts_resp.status_code in (401, 403):
+                    pass  # USER role — sidebar stat hidden silently
+                elif _ts_resp.status_code == 200:
                     _ts_data = _ts_resp.json()
             except Exception:
                 pass
@@ -6201,6 +6347,14 @@ def show_main_app():
             }
         }
 
+        # ── RBAC: restrict USER role to Individual Transaction Analysis only ──
+        current_role = st.session_state.get("role", "USER")
+        if current_role == "USER":
+            functionalities = {
+                k: v for k, v in functionalities.items()
+                if k == "individual_transaction"
+            }
+
         available_file_types = [cat for cat, data in categories.items() if data.get('count', 0) > 0]
 
         # Build dropdown options in the order defined in functionalities
@@ -6225,6 +6379,18 @@ def show_main_app():
                 }
                 missing_str = ", ".join([req_labels.get(m, m) for m in missing])
                 dropdown_options.append(f"{func_data['name']} (Missing: {missing_str})")
+
+        # Collect the names of all functions allowed for this role (already filtered above)
+        allowed_func_names = {v["name"] for v in functionalities.values()}
+        current_sel = st.session_state.get("function_selector", "Select a function")
+
+        # Reset if: selection not in dropdown at all, OR it's a restricted function
+        # that shouldn't be visible for this role (stale session state from a previous login)
+        if current_sel not in dropdown_options or (
+            current_sel != "Select a function" and
+            current_sel.split(" (Missing:")[0] not in allowed_func_names
+        ):
+            st.session_state["function_selector"] = "Select a function"
 
         selected_option = st.selectbox(
             "Select Analysis Function",

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, status, Depends
 from modules.extraction import ZipExtractionService
 from modules.categorization import CategorizationService
 from modules.processing import ProcessingService
@@ -19,7 +19,8 @@ from modules.xml_parser_logic import parse_xml_to_dataframe
 from pathlib import Path
 from typing import Dict, List, Optional
 import shutil
-from fastapi import Body
+from fastapi import Body, Header
+from pydantic import BaseModel
 import os
 import pandas as pd
 from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal
@@ -35,19 +36,73 @@ import time
 
 #  Import our central logger
 from modules.logging_config import logger
-from fastapi import FastAPI
 from modules.analysis import store_metadata, store_feedback, get_user_role, get_analysis_records, get_feedback_records
-from modules.login import (verify_reset_identity,generate_reset_token,send_reset_email,validate_reset_token,reset_user_password,is_valid_password)
+from modules.login import (verify_reset_identity,generate_reset_token,send_reset_email,validate_reset_token,reset_user_password,is_valid_password,authenticate_user_backend,register_user,is_user_pending_approval,log_login_event)
 
 import logging
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 
 logger.info("Logger initialized at startup")
 
-app = FastAPI()
-
-
 router = APIRouter()
 logger.info("FastAPI app started")
+
+# ============================================
+# RBAC DEPENDENCY
+# ============================================
+# Roles allowed to access all endpoints.
+# USER role is restricted to individual-transaction endpoints only.
+ALLOWED_ROLES = {"ADMIN", "DEV_MODE"}
+
+async def require_elevated_role(
+    x_username:  str = Header(default=None),
+    x_user_role: str = Header(default=None),
+):
+    """
+    Flat FastAPI dependency — no factory/closure, guaranteed header injection.
+
+    Streamlit sends X-Username + X-User-Role on every request (set at login).
+    This dependency is applied to all endpoints that USER role cannot access.
+
+    Returns 401 if headers are missing.
+    Returns 403 if role is not in ALLOWED_ROLES (i.e. role == USER).
+
+    Both responses include:
+      - A structured JSON body so the error is human-readable in the browser.
+      - WWW-Authenticate: Bearer header so browsers treat it as an API 401,
+        NOT a redirect or login-dialog trigger (which would cause Streamlit to rerun).
+    """
+    if not x_username or not x_user_role:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "status": "error",
+                "code": 401,
+                "error": "Unauthorized",
+                "message": (
+                    "Authentication headers are missing. "
+                    "This endpoint requires X-Username and X-User-Role headers. "
+                    "Direct browser access is not permitted — use the application."
+                ),
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if x_user_role not in ALLOWED_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "status": "error",
+                "code": 403,
+                "error": "Forbidden",
+                "message": (
+                    f"Access denied. Role '{x_user_role}' does not have permission "
+                    f"to access this endpoint. Required role: ADMIN or DEV_MODE."
+                ),
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 log_file=Path("app.log")
 
@@ -430,7 +485,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
 
         # -----------------------------------------------------------
-        # ⏱️ END TOTAL TIME MEASUREMENT
+        #  END TOTAL TIME MEASUREMENT
         # -----------------------------------------------------------
         end_time = time.perf_counter()
         total_time = round(end_time - start_time, 2)
@@ -684,7 +739,7 @@ async def extract_registry_from_zip(file: UploadFile = File(...)):
             detail=f"Error extracting registry files: {str(e)}"
         )
 
-@router.get("/get-registry-contents")
+@router.get("/get-registry-contents", dependencies=[Depends(require_elevated_role)])
 async def get_registry_contents(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
 FUNCTION: get_registry_contents
@@ -745,7 +800,7 @@ RAISES:
 # ACU PARSER ENDPOINTS
 # ============================================
 
-@router.get("/get-acu-files")
+@router.get("/get-acu-files", dependencies=[Depends(require_elevated_role)])
 async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
@@ -843,7 +898,7 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
             detail=f"Error retrieving ACU files: {str(e)}"
         )
 
-@router.post("/parse-acu-files")
+@router.post("/parse-acu-files", dependencies=[Depends(require_elevated_role)])
 async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
@@ -1194,7 +1249,7 @@ async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Q
         }
     }
 
-@router.post("/analyze-customer-journals")
+@router.post("/analyze-customer-journals", dependencies=[Depends(require_elevated_role)])
 async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
@@ -1374,7 +1429,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             status_code=500,
             detail=f"Analysis failed: {str(e)}"
         )
-@router.get("/get-transactions-with-sources")
+@router.get("/get-transactions-with-sources", dependencies=[Depends(require_elevated_role)])
 async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
@@ -1461,7 +1516,7 @@ async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_
         )
 
 
-@router.post("/filter-transactions-by-sources")
+@router.post("/filter-transactions-by-sources", dependencies=[Depends(require_elevated_role)])
 async def filter_transactions_by_sources(source_files: List[str] = Body(..., embed=True),session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
@@ -1563,7 +1618,7 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
             detail=f"Error filtering transactions: {str(e)}"
         )
 
-@router.get("/transaction-statistics")
+@router.get("/transaction-statistics", dependencies=[Depends(require_elevated_role)])
 async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
@@ -1670,7 +1725,7 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
             detail=f"Error generating statistics: {str(e)}"
         )
 
-@router.post("/compare-transactions-flow")
+@router.post("/compare-transactions-flow", dependencies=[Depends(require_elevated_role)])
 async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
@@ -2174,7 +2229,7 @@ async def debug_session(session_id: str = Query(default=CURRENT_SESSION_ID)):
         )
 
 
-@router.post("/visualize-individual-transaction-flow")
+@router.post("/visualize-individual-transaction-flow", dependencies=[Depends(require_elevated_role)])
 async def visualize_individual_transaction_flow(request: TransactionVisualizationRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
@@ -2493,7 +2548,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
             detail=f"Visualization failed: {str(e)}"
         )
 
-@router.post("/generate-consolidated-flow")
+@router.post("/generate-consolidated-flow", dependencies=[Depends(require_elevated_role)])
 async def generate_consolidated_flow(source_file: str = Body(...),transaction_type: str = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
 FUNCTION:
@@ -3569,7 +3624,7 @@ def extract_counter_blocks(trc_file_path: str) -> list:
     
     return all_counter_blocks
     
-@router.get("/get-matching-sources-for-trc")
+@router.get("/get-matching-sources-for-trc", dependencies=[Depends(require_elevated_role)])
 async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
         FUNCTION: get_matching_sources_for_trc
@@ -3638,7 +3693,7 @@ async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_S
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
-@router.post("/get-counter-data")
+@router.post("/get-counter-data", dependencies=[Depends(require_elevated_role)])
 async def get_counter_data(
     request: CounterDataRequest,
     session_id: str = Query(default=CURRENT_SESSION_ID)
@@ -4522,3 +4577,124 @@ async def reset_password_endpoint(request: ResetPasswordRequest):
         "status":  "success",
         "message": "Your password has been reset successfully. You can now log in."
     }
+
+
+# ============================================
+# AUTH ENDPOINTS
+# ============================================
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class LoginResponse(BaseModel):
+    username: str
+    name: str | None = None
+    employee_code: str
+    role: str
+
+class RegisterRequest(BaseModel):
+    email: str
+    name: str
+    password: str
+    employee_code: str
+    role: str = "USER"
+
+class LogoutRequest(BaseModel):
+    username: str
+
+
+@router.post("/auth/login", response_model=LoginResponse)
+async def auth_login(request: LoginRequest):
+    """
+    Verify username + password against the Users table.
+    Returns user info on success (200).
+    Returns 401 for wrong credentials.
+    Returns 403 if account exists but is pending admin approval.
+    """
+    logger.info("POST /auth/login: user: %s", request.username)
+
+    user = authenticate_user_backend(request.username.strip(), request.password)
+
+    if user:
+        log_login_event(username=user["username"], action="login")
+        logger.info("Login successful: user: %s", user["username"])
+        return LoginResponse(**user)
+
+    if is_user_pending_approval(request.username.strip(), request.password):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is pending admin approval. "
+                   "Please contact your administrator to activate your account.",
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid username or password.",
+    )
+
+
+@router.post("/auth/register", status_code=status.HTTP_201_CREATED)
+async def auth_register(request: RegisterRequest):
+    """Create a new user account (inactive by default)."""
+    logger.info("POST /auth/register — email: %s", request.email)
+
+    if not is_valid_password(request.password):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Password does not meet strength requirements: "
+                "min 8 characters, 1 uppercase, 1 lowercase, "
+                "2 digits, 1 special character."
+            ),
+        )
+
+    success, message = register_user(
+        request.email,
+        request.name,
+        request.password,
+        request.employee_code,
+        request.role or "USER",
+    )
+
+    if success:
+        logger.info("Registration successful — email: %s", request.email)
+        return {"status": "success", "message": message}
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=message,
+    )
+
+
+@router.post("/auth/logout")
+async def auth_logout(request: LogoutRequest):
+    """Write a logout event to login_history."""
+    logger.info("POST /auth/logout — user: %s", request.username)
+    log_login_event(username=request.username, action="logout")
+    return {"status": "success"}
+
+
+@router.post("/auth/initialize-db")
+async def auth_initialize_db():
+    """Bootstrap all required tables. Called once from the FastAPI lifespan handler."""
+    from admin_setup import create_dn_diagnostics_database, initialize_admin_table
+    from modules.login import create_login_history_table, create_reset_tokens_table
+    from modules.analysis import (
+        create_userresponse_database,
+        create_analysis_table,
+        create_feedback_table,
+    )
+    try:
+        create_dn_diagnostics_database()
+        initialize_admin_table()
+        create_login_history_table()
+        create_reset_tokens_table()
+        create_userresponse_database()
+        create_analysis_table()
+        create_feedback_table()
+        logger.info("DB bootstrap complete")
+        return {"status": "success", "message": "All tables initialised"}
+    except Exception as e:
+        logger.exception("DB bootstrap failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"DB bootstrap failed: {e}")

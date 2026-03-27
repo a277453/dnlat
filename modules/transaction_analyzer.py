@@ -279,6 +279,59 @@ class TransactionAnalyzerService:
         logger.debug("Parsed %d transactions from %s", len(transactions), file_path)
         return pd.DataFrame(transactions)
     
+    def parse_customer_journal_from_string(self, content: str, filename: str) -> pd.DataFrame:
+        """
+        FUNCTION: parse_customer_journal_from_string
+
+        DESCRIPTION:
+            Identical to parse_customer_journal() but accepts file content as a
+            string instead of a file path. Used when file content has been loaded
+            into session memory and Temp has been deleted.
+
+        USAGE:
+            df = analyzer.parse_customer_journal_from_string(content, "20240101.jrn")
+
+        PARAMETERS:
+            content  (str) : Full text content of the customer journal file.
+            filename (str) : Original filename — used to derive the source file stem
+                             (same role as file_path in parse_customer_journal).
+
+        RETURNS:
+            pd.DataFrame : DataFrame containing extracted transaction rows.
+
+        RAISES:
+            None : All errors are caught and logged; empty DataFrame returned on failure.
+        """
+        logger.info("Parsing customer journal from string: %s", filename)
+        dummy = Path(filename).stem
+
+        try:
+            lines = content.splitlines(keepends=True)
+        except Exception as e:
+            logger.error("Failed to split content for %s: %s", filename, e)
+            return pd.DataFrame()
+
+        parsed_rows = []
+        for line in lines:
+            line = line.strip()
+            if not line or set(line) <= {'*'}:
+                continue
+            match = re.match(r"^(\d{2}:\d{2}:\d{2})\s+(\d+)\s*(.*)", line)
+            if match:
+                timestamp_str, tid, message = match.groups()
+                try:
+                    timestamp = datetime.strptime(timestamp_str, "%H:%M:%S").time()
+                except ValueError:
+                    timestamp = None
+                parsed_rows.append([timestamp, tid, message])
+            else:
+                parsed_rows.append([None, None, line])
+
+        df = pd.DataFrame(parsed_rows, columns=["timestamp", "tid", "message"])
+        transactions = self._find_all_transactions(df, dummy)
+        logger.debug("Parsed %d transactions from %s", len(transactions), filename)
+        return pd.DataFrame(transactions)
+
     def _find_all_transactions(self, df: pd.DataFrame, dummy: str) -> List[Dict]:
         """
         FUNCTION: _find_all_transactions

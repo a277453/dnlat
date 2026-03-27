@@ -18,22 +18,24 @@ formatter = logging.Formatter(
 
 class CustomRotatingFileHandler(RotatingFileHandler):
 
-    def rotation_filename(self, default_name):
-        """
-        Override default filenames like:
-        app.log.1 → app1.log
-        app.log.2 → app2.log
-        """
-        # Extract rotation number from default_name
-        num = default_name.split(".")[-1]     # "1", "2", etc.
-        return str(log_folder / f"app{num}.log")
-
     def doRollover(self):
-        super().doRollover()  # Perform the normal rollover
+        # Close the current file
+        if self.stream:
+            self.stream.close()
+            self.stream = None
 
-        # Check if 5 custom rotated logs exist
+        # Find the next available slot (app1.log → app5.log)
+        for i in range(1, 6):
+            target = log_folder / f"app{i}.log"
+            if not target.exists():
+                (log_folder / "app.log").rename(target)
+                break
+
+        # Reopen app.log as the new active file
+        self.stream = self._open()
+
+        # Check if all 5 rotated files now exist → zip them
         rotated_files = [log_folder / f"app{i}.log" for i in range(1, 6)]
-
         if all(f.exists() for f in rotated_files):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             zip_name = log_folder / f"App_Logs_{timestamp}.zip"
@@ -41,7 +43,7 @@ class CustomRotatingFileHandler(RotatingFileHandler):
             with ZipFile(zip_name, 'w') as zipf:
                 for f in rotated_files:
                     zipf.write(f, arcname=f.name)
-                    f.unlink()  # delete original files
+                    f.unlink()
 
             logger.info("Zipped logs into %s and deleted app1.log–app5.log", zip_name)
 

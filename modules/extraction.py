@@ -11,7 +11,8 @@ import shutil
 import logging
 import os
 import time
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
+from datetime import datetime
 import struct
 import html
 import zlib
@@ -33,6 +34,14 @@ class ZipExtractionService:
         Fast ZIP extraction service that extracts only relevant DN diagnostic files.
         Handles nested ZIPs recursively and removes irrelevant files or empty directories.
     """
+
+    # Branch names 
+    BRANCH_ACU      = "ACU"
+    BRANCH_TRC      = "TRC"
+    BRANCH_REGISTRY = "REGISTRY"
+    BRANCH_CUSTOMER = "CUSTOMER"
+    BRANCH_UI       = "UI"
+    BRANCH_EXTRA    = "EXTRA"
 
     def __init__(self):
         """
@@ -74,7 +83,87 @@ class ZipExtractionService:
             '.svn'
         }
 
-        logger.info(f"ZipExtractionService initialized at {self.base_extract_path}")
+        logger.debug(f"ZipExtractionService initialized at {self.base_extract_path}")
+
+    def _classify_to_branch(self, member_path: str) -> str:
+        """
+        FUNCTION: _classify_to_branch
+
+        DESCRIPTION:
+            Determines which branch folder (ACU / TRC / REGISTRY / CUSTOMER / UI / EXTRA)
+            a ZIP member should be placed into, based solely on its path and filename, i.e. no
+            file content is read.  The rules are the same as categorization rules used later by
+            CategorizationService so that the physical folder layout matches the logical
+            category map.
+
+            Rules (evaluated in priority order):
+              ACU      – extension is .xml or .xsd, OR filename starts with 'jdd' or 'x3'
+              TRC      – extension is .trc, or filename contains 'trctrace', 'trcerror',
+                         'trc_trace', 'trc_error', 'trace', 'error' with a .prn/.trc ext
+              REGISTRY – extension is .reg, OR filename contains 'reg' with .txt ext,
+                         OR file sits inside a folder whose name contains 'registry'/'reg'
+              CUSTOMER – .jrn files that live inside a 'customer' or 'customerjournal' folder
+              UI       – .jrn files that live inside a 'ui'/'uijournal' path that also
+                         contains 'journals' (mirrors VCP_PRO -> JOURNALS -> UI hierarchy)
+              EXTRA    – everything else (nested ZIPs, unrecognised files, folders)
+
+        PARAMETERS:
+            member_path (str) : Forward-slash normalised member path from the ZIP central dir.
+
+        RETURNS:
+            str : One of the BRANCH_* constants defined on the class.
+        """
+        norm   = member_path.replace('\\', '/').lower()
+        parts  = [p for p in norm.split('/') if p]
+        base   = parts[-1] if parts else ''
+        parents = parts[:-1]  # folder components only
+
+        ext = os.path.splitext(base)[1]   # e.g. '.jrn'
+        stem = os.path.splitext(base)[0]  # name without extension
+
+        # --- ACU ---
+        if ext in ('.xml', '.xsd') and stem.startswith(('jdd', 'x3')):
+            return self.BRANCH_ACU
+
+        # --- TRC ---
+        if ext in ('.trc',):
+            return self.BRANCH_TRC
+        if ext == '.prn':
+            trc_signals = ('trctrace', 'trc_trace', 'trcerror', 'trc_error', 'trace', 'error')
+            # Check the filename 
+            if any(sig in stem for sig in trc_signals):
+                return self.BRANCH_TRC
+            # Also check parent folder names
+            if any(sig in p for p in parents for sig in trc_signals):
+                return self.BRANCH_TRC
+
+        # --- REGISTRY ---
+        if ext == '.reg':
+            return self.BRANCH_REGISTRY
+        if ext == '.txt' and 'reg' in base:
+            return self.BRANCH_REGISTRY
+        if any('registry' in p or p == 'reg' for p in parents):
+            if ext in ('.reg', '.txt', '.ini', '.cfg', '.conf'):
+                return self.BRANCH_REGISTRY
+
+        # --- UI journals ---
+        # Must be a .jrn inside a path that has a 'ui' folder (e.g. VCP_PRO/JOURNALS/UI)
+        if ext == '.jrn':
+            has_ui_folder = any('ui' in p for p in parents)
+            if has_ui_folder:
+                return self.BRANCH_UI
+
+        # --- CUSTOMER journals ---
+        if ext == '.jrn':
+            has_customer_folder = any(
+                'customer' in p for p in parents
+            )
+            if has_customer_folder:
+                return self.BRANCH_CUSTOMER
+
+        # --- EXTRA (nested ZIPs and everything unclassified) ---
+        # TO-DO as currently not needed but may be required in future
+        return self.BRANCH_EXTRA
 
     def is_relevant_file(self, filename: str) -> bool:
         """
@@ -100,248 +189,280 @@ class ZipExtractionService:
         
         return False
 
-    def _extract_nested_zips(self, extract_path: Path):
+    def _extract_nested_zips_to_branches(
+        self,
+        nested_zip_bytes: Dict[str, bytes],
+        branch_dirs: Dict[str, Path],
+    ) -> None:
         """
-        FUNCTION: _extract_nested_zips
+        FUNCTION: _extract_nested_zips_to_branches
 
         DESCRIPTION:
-            Extracts ONLY first-level nested ZIP files found in the extraction directory.
-            Does NOT recurse deeper than one level.
-            Does NOT remove nested ZIP files after extraction.
-        
-        FIXED: 
-            - Only processes first-level nested ZIPs (no deeper recursion)
-            - Preserves nested ZIP files after extraction
-            - Handles Windows-style backslash paths in ZIP files
-        """
-        # Find nested ZIPs at FIRST LEVEL ONLY (not recursive)
-        # Using glob() instead of rglob() to avoid finding deeply nested ZIPs
-        nested_zips = [
-            p for p in extract_path.glob("**/*.zip")  # First level subdirectories only
-            if p.is_file() and p.parent != extract_path  # Skip ZIPs in root
-        ]
-        
-        # Also check root directory for ZIPs
-        root_zips = [
-            p for p in extract_path.glob("*.zip")
-            if p.is_file()
-        ]
-        
-        # Combine both lists
-        nested_zips.extend(root_zips)
-        
-        nested_zip_count = len(nested_zips)
+            Expands the ACU.ZIP nested archive that was stashed during the
+            main extraction pass, routing each of its members into the correct branch
+            folder using the _classify_to_branch logic.
+            Only ACU.ZIP is passed into this method and all other nested ZIPs are
+            skipped before reaching here.
 
-        if nested_zip_count == 0:
-            logger.info("No first-level nested ZIP files found")
+        PARAMETERS:
+            nested_zip_bytes (Dict[str, bytes])  : Mapping of original ZIP member name
+                                                   to raw ZIP bytes for each nested archive.
+            branch_dirs      (Dict[str, Path])   : Mapping of branch name to its Path on disk.
+
+        RETURNS:
+            None
+        """
+        if not nested_zip_bytes:
+            logger.info("No nested ZIPs to expand.")
             return
 
-        zip_names = [str(p.relative_to(extract_path)) for p in nested_zips]
-        logger.info(
-            f"Found {nested_zip_count} first-level nested ZIP file(s): {', '.join(zip_names)}"
-        )
+        total = len(nested_zip_bytes)
+        logger.info(f"Expanding {total} nested ZIP(s) into branch folders...")
 
-        # Process each nested ZIP ONCE (no recursion)
-        for index, zip_path in enumerate(nested_zips, start=1):
-            logger.info(
-                f"Extracting nested ZIP ({index}/{nested_zip_count}): "
-                f"{zip_path.relative_to(extract_path)}"
-            )
-
-            # Extract to subdirectory with same name as ZIP (preserves hierarchy)
-            nested_extract_dir = zip_path.parent / zip_path.stem
-            nested_extract_dir.mkdir(exist_ok=True)
-            logger.debug(f"zip_path.parent directory: {zip_path.parent}")
-            logger.debug(f"zip_path.stem directory: {zip_path.stem}")
-            logger.debug(f"Nested extract directory: {nested_extract_dir}")
-
+        for idx, (zip_name, zip_bytes) in enumerate(nested_zip_bytes.items(), start=1):
+            logger.debug(f"  Nested ZIP ({idx}/{total}): {os.path.basename(zip_name)}")
             try:
-                logger.debug(f"Opening nested ZIP: {zip_path}")
-                with zipfile.ZipFile(zip_path, 'r') as zf:
-                    extracted_count = 0
-                    failed_count = 0
-                    
-                    all_members = zf.namelist()
-                    logger.debug(f"Nested ZIP contains {len(all_members)} total entries")
-                    
-                    for member in all_members:
-                        # Check if file is relevant
-                        if not self.is_relevant_file(member):
-                            logger.debug(f"Skipping irrelevant file: {member}")
+                with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
+                    members = [m for m in zf.namelist() if not m.endswith('/')]
+                    ok = fail = 0
+                    for member in members:
+                        norm   = member.replace('\\', '/').lower()
+                        base_m = os.path.basename(norm)
+                        if any(skip in norm for skip in self.skip_patterns) or base_m.startswith('.'):
                             continue
-                        
                         try:
-                            logger.debug(f"NKS Extracting: {member}")
-                            
-                            file_data = zf.read(member)
-                            
-                            # Create target path
-                            target_path = nested_extract_dir / member
-                            
-                            # Create parent directories
-                            target_path.parent.mkdir(parents=True, exist_ok=True)
-                            
-                            # Write file
-                            with open(target_path, 'wb') as f:
-                                f.write(file_data)
-                            
-                            extracted_count += 1
-                            logger.debug(f"  Successfully extracted: {member}")
-                            
-                        except KeyError as e:
-                            logger.error(f"  File not found in ZIP: {member}")
-                            failed_count += 1
+                            file_data = self._safe_read_member(zf, member)
+                        except Exception as re:
+                            logger.warning(f"    Could not read nested member '{member}': {re}")
+                            fail += 1
                             continue
-                            
-                        except Exception as e:
-                            logger.error(f"  Failed to extract {member}: {e}", exc_info=True)
-                            failed_count += 1
-                            continue
-                    
-                    logger.info(
-                        f"Nested ZIP extraction complete: "
-                        f"{extracted_count} files extracted, "
-                        f"{failed_count} files failed"
-                    )
-                    
-                    if extracted_count == 0 and failed_count > 0:
-                        logger.error(
-                            f"Failed to extract any files from nested ZIP: {zip_path.name}. "
-                            f"This may indicate a corrupted or incompatible ZIP file."
-                        )
 
-                # IMPORTANT: Do NOT delete nested ZIP file
-                # User wants to keep nested ZIPs after extraction
-                logger.info(f" Keeping nested ZIP file: {zip_path.name}")
-                
+                        # No deeper recursion — nested ZIPs inside nested ZIPs go to EXTRA as-is
+                        if base_m.endswith('.zip'):
+                            branch = self.BRANCH_EXTRA
+                        else:
+                            branch = self._classify_to_branch(member)
+
+                        dest_dir  = branch_dirs[branch]
+                        dest_file = dest_dir / os.path.basename(member.replace('\\', '/'))
+                        if dest_file.exists():
+                            stem, suf = os.path.splitext(dest_file.name)
+                            i = 1
+                            while dest_file.exists():
+                                dest_file = dest_dir / f"{stem}_{i}{suf}"
+                                i += 1
+                        with open(dest_file, 'wb') as fout:
+                            fout.write(file_data)
+                        ok += 1
+                        logger.debug(f"    [{branch}] {os.path.basename(member)}")
+
+                    logger.info(f"    → {ok} extracted, {fail} failed")
             except zipfile.BadZipFile as e:
-                logger.error(f"BadZipFile error for nested ZIP {zip_path.name}: {e}")
-                continue
+                logger.error(f"  BadZipFile for '{zip_name}': {e}")
             except Exception as e:
-                logger.error(
-                    f"Error extracting nested ZIP {zip_path.name}: {e}",
-                    exc_info=True
-                )
-                continue
-        
-        logger.info(
-            f"First-level nested ZIP extraction complete. "
-            f"Processed {nested_zip_count} ZIP file(s). "
-            f"No deeper recursion performed."
-        )
+                logger.error(f"  Error expanding '{zip_name}': {e}", exc_info=True)
 
-    def extract_zip(self, zip_content: bytes) -> Path:
+        logger.info("Nested ZIP expansion complete.")
+
+    def _safe_read_member(self, zf: zipfile.ZipFile, filename: str) -> bytes:
+        """
+        FUNCTION: _safe_read_member
+
+        DESCRIPTION:
+            Read a single ZIP member's raw bytes, falling back to a manual seek-and-read
+            when the standard ZipFile.read() raises a BadZipFile name-mismatch error
+            (common with Windows-style backslash paths stored inside ZIPs).
+
+        PARAMETERS:
+            zf       (ZipFile) : Open ZipFile object.
+            filename (str)     : Member name as returned by namelist().
+
+        RETURNS:Name mismatch for
+            bytes : Raw (decompressed) file content.
+
+        RAISES:
+            Exception : Re-raises any error that cannot be handled here.
+        """
+        try:
+            return zf.read(filename)
+        except zipfile.BadZipFile as e:
+            if "differ" not in str(e):
+                raise
+            logger.warning(f"Attempting manual read for '{filename}'.")
+            zinfo = zf.getinfo(filename)
+            f = zf.fp
+            f.seek(zinfo.header_offset + 26)
+            n_len = struct.unpack('<H', f.read(2))[0]
+            e_len = struct.unpack('<H', f.read(2))[0]
+            f.seek(zinfo.header_offset + 30 + n_len + e_len)
+            compressed = f.read(zinfo.compress_size)
+            if zinfo.compress_type == zipfile.ZIP_STORED:
+                return compressed
+            elif zinfo.compress_type == zipfile.ZIP_DEFLATED:
+                return zlib.decompress(compressed, -zlib.MAX_WBITS)
+            raise ValueError(f"Unsupported compress type {zinfo.compress_type} for '{filename}'")
+
+    def extract_zip(self, zip_content: bytes) -> Tuple[Path, int, Optional[bytes]]:
         """
         FUNCTION: extract_zip
 
         DESCRIPTION:
-            Extracts all relevant files from a ZIP archive into a temporary directory.
-            Handles ONLY first-level nested ZIPs (no deeper recursion).
-            Keeps nested ZIP files after extraction.
-        """
+            Extracts all files from a ZIP archive into a single, timestamped run directory
+            located at:
 
+                <TEMP>/dn_extracts/dn_<DDMMYYYY_HHMMSS>/
+
+            Inside that run directory every file is routed into one of six branch folders
+            that mirror the logical categories used downstream:
+
+                ACU/        – .xml, .xsd, and files starting with 'jdd' or 'x3'
+                TRC/        – .trc files, and trace/error .prn files
+                REGISTRY/   – .reg files and reg.txt variants
+                CUSTOMER/   – .jrn files from customer-journal folders
+                UI/         – .jrn files from UI-journal folders
+                EXTRA/      – all other files (nested ZIPs, unrecognised files, etc.) that are currently not needed. may be required in the future.
+
+            Files are placed flat inside their branch folder (no sub-path preserved inside
+            the branch) so that the CategorizationService can discover them with a simple
+            rglob scan without any path-interpretation changes.
+
+            After top-level extraction, first-level nested ZIPs are extracted into the
+            EXTRA/ branch using the same branch-routing logic.
+
+        PARAMETERS:
+            zip_content (bytes) : Raw bytes of the uploaded ZIP archive.
+
+        RETURNS:
+            Tuple[Path, int, Optional[bytes]] :
+                - Path         : Path to the run directory (e.g. .../dn_extracts/dn_20240101_120000/).
+                - int          : Total number of files found in the top-level ZIP (for logging).
+                - Optional[bytes] : Raw decompressed bytes of acu.zip if it was present,
+                                    otherwise None. Returned so the caller can pass them
+                                    directly to extract_from_zip_bytes(), avoiding a second
+                                    decompress of the same nested archive.
+
+        RAISES:
+            ValueError : If zip_content is empty, not a valid ZIP, or yields no files.
+            Exception  : For any other unexpected extraction error.
+        """
         if not zip_content:
             raise ValueError("Empty ZIP file")
 
-        extract_dir = tempfile.mkdtemp(
-            prefix=f"dn_{int(time.time())}_",
-            dir=self.base_extract_path
-        )
-        extract_path = Path(extract_dir)
+        # --- Create ONE timestamped run folder inside dn_extracts ---
+        timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dn_folder = self.base_extract_path / f"dn_{timestamp}"
+        dn_folder.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"Extracting to: {extract_path}")
+        # Pre-create all branch directories so they always exist
+        branch_dirs: Dict[str, Path] = {}
+        for branch in (
+            self.BRANCH_ACU, self.BRANCH_TRC, self.BRANCH_REGISTRY,
+            self.BRANCH_CUSTOMER, self.BRANCH_UI, self.BRANCH_EXTRA,
+        ):
+            branch_dir = dn_folder / branch
+            branch_dir.mkdir(exist_ok=True)
+            branch_dirs[branch] = branch_dir
+
+        logger.info(f"DN folder created: {dn_folder}")
+
+        # Branch-level counters for summary logging
+        branch_counts: Dict[str, int] = {b: 0 for b in branch_dirs}
 
         try:
             with zipfile.ZipFile(io.BytesIO(zip_content), 'r') as zf:
-                all_files = zf.namelist()
-                logger.info(f"ZIP contains {len(all_files)} entries")
-                
-                # Filter ONLY relevant files
-                relevant_files = [
-                    f for f in all_files 
-                    if not f.endswith('/') and self.is_relevant_file(f)
-                ]
-                
-                logger.info(
-                    f"Extracting {len(relevant_files)} relevant files "
-                    f"(skipping {len(all_files) - len(relevant_files)} irrelevant)"
-                )
-                
-                if not relevant_files:
-                    raise ValueError("No relevant diagnostic files found in ZIP")
-                
-                # Extract only relevant files
+                all_entries = zf.namelist()
+                logger.info(f"ZIP contains {len(all_entries)} entries (dirs + files)")
+
+                files_only = [e for e in all_entries if not e.endswith('/')]
+                total_files_in_zip = len(files_only)
+                logger.info(f"Processing {total_files_in_zip} file entries")
+
+                nested_zip_bytes: Dict[str, bytes] = {}   # name -> raw bytes, for later
                 extracted = 0
-                for filename in relevant_files:
+
+                for filename in files_only:
                     try:
-                        # Manually extract files to handle path separator inconsistencies
-                        # that cause zf.extract() to fail (e.g., Windows vs. Linux slashes).
+                        # Determine branch before reading data (cheap)
+                        norm = filename.replace('\\', '/').lower()
+                        base = os.path.basename(norm)
 
-                        # Read file data from the ZIP archive in memory.
-                        try:
-                            file_data = zf.read(filename)
-                        except zipfile.BadZipFile as e:
-                            if "differ" in str(e):
-                                logger.warning(f"Name mismatch for {filename}, attempting manual read.")
-                                zinfo = zf.getinfo(filename)
-                                f = zf.fp
-                                f.seek(zinfo.header_offset + 26)
-                                n_len = struct.unpack('<H', f.read(2))[0]
-                                e_len = struct.unpack('<H', f.read(2))[0]
-                                f.seek(zinfo.header_offset + 30 + n_len + e_len)
-                                compressed = f.read(zinfo.compress_size)
-                                if zinfo.compress_type == zipfile.ZIP_STORED:
-                                    file_data = compressed
-                                elif zinfo.compress_type == zipfile.ZIP_DEFLATED:
-                                    file_data = zlib.decompress(compressed, -zlib.MAX_WBITS)
-                                else:
-                                    raise
+                        # Skip junk files regardless of branch
+                        if any(skip in norm for skip in self.skip_patterns):
+                            logger.debug(f"Skipping junk: {filename}")
+                            continue
+                        if base.startswith('.'):
+                            logger.debug(f"Skipping hidden: {filename}")
+                            continue
+
+                        # Nested ZIPs: check the name BEFORE reading any bytes.
+                        # This way non-acu.zip files are never decompressed at all.
+                        if base.endswith('.zip'):
+                            if base == 'acu.zip':
+                                try:
+                                    file_data = self._safe_read_member(zf, filename)
+                                    nested_zip_bytes[filename] = file_data
+                                    logger.info(f"  [NESTED ZIP] acu.zip found.")
+                                except Exception as read_err:
+                                    logger.warning(f"  [NESTED ZIP] Could not read acu.zip: {read_err}")
                             else:
-                                raise
+                                logger.info(f"  [NESTED ZIP] '{base}' skipped.")
+                            continue  # never write any zip to disk
 
-                        logger.info(f"xxxxx Extracting: {filename}")
-                        # Normalize the filename path for the target OS.
-                        # This replaces any backslashes with forward slashes, which pathlib handles correctly.
-                        normalized_filename = filename.replace('\\', '/')
-                        logger.info(f"xxxxx1 Extracting: {normalized_filename}")   
-                        logger.info(f"xxxxx2 Extracting: {extract_path}")                        
-                        target_path = extract_path / Path(normalized_filename)
-                        logger.info(f"xxxxx3 Extracting: {target_path}")
+                        branch = self._classify_to_branch(filename)
 
-                        # Create any necessary parent directories for the file.
-                        target_path.parent.mkdir(parents=True, exist_ok=True)
+						#TO-Do: Skipped reading files in EXTRA for now. can be implemented later is needed.
+                        if branch == self.BRANCH_EXTRA:
+                            continue
+                        # Read the member bytes
+                        try:
+                            file_data = self._safe_read_member(zf, filename)
+                        except Exception as read_err:
+                            logger.warning(f"Could not read '{filename}': {read_err}")
+                            continue
 
-                        # Write the file data to the target path.
-                        with open(target_path, 'wb') as f_out:
-                            f_out.write(file_data)
+                      
+                        dest_dir  = branch_dirs[branch]
+                        dest_file = dest_dir / os.path.basename(filename.replace('\\', '/'))
+
+                        # Avoid silent overwrites when two members share a basename
+                        if dest_file.exists():
+                            stem, suf = os.path.splitext(dest_file.name)
+                            i = 1
+                            while dest_file.exists():
+                                dest_file = dest_dir / f"{stem}_{i}{suf}"
+                                i += 1
+
+                        with open(dest_file, 'wb') as fout:
+                            fout.write(file_data)
+
+                        branch_counts[branch] += 1
                         extracted += 1
+
                     except Exception as e:
-                        logger.warning(f"NKS Skip {filename}: {e}")
+                        logger.warning(f"Skipping '{filename}': {e}")
                         continue
                 
-                logger.info(f"Extracted {extracted} files successfully")
+                logger.info(f"Extracted {extracted} files into run folder. Branch summary: {branch_counts}")
                 
                 if extracted == 0:
-                    raise ValueError("Failed to extract any files")
-                
-                # Extract ONLY first-level nested ZIPs (no recursion)
-                logger.info("Scanning for first-level nested ZIP files...")
-                self._extract_nested_zips(extract_path)
-                
-                # Log final file count
-                all_files_after = [p for p in extract_path.rglob('*') if p.is_file()]
-                logger.info(
-                    f"Total files after first-level nested ZIP extraction: "
-                    f"{len(all_files_after)}"
-                )
-                
-                return extract_path
+                    raise ValueError("Failed to extract any files from ZIP")
+
+                # --- Expand first-level nested ZIPs into branch folders ---
+                self._extract_nested_zips_to_branches(nested_zip_bytes, branch_dirs)
+
+                # Final file count
+                all_files_after = [p for p in dn_folder.rglob('*') if p.is_file()]
+                logger.info(f"Total files in run folder after nested ZIP expansion: {len(all_files_after)}")
+
+                # Return the folder path, the top-level file count, and the raw acu.zip bytes (None if acu.zip was not present). Done to avoid re-opening the main ZIP for counting and to avoid re-decompressing acu.zip for the ACU extraction pass.
+                acu_zip_bytes = next(iter(nested_zip_bytes.values()), None) if nested_zip_bytes else None
+                return dn_folder, total_files_in_zip, acu_zip_bytes
 
         except zipfile.BadZipFile:
-            shutil.rmtree(extract_path, ignore_errors=True)
+            shutil.rmtree(dn_folder, ignore_errors=True)
             raise ValueError("Invalid ZIP file")
         except Exception as e:
-            shutil.rmtree(extract_path, ignore_errors=True)
+            shutil.rmtree(dn_folder, ignore_errors=True)
             raise Exception(f"Extraction failed: {str(e)}")
         
     def cleanup_old_extracts(self, max_age_hours: int = 24):
@@ -386,7 +507,6 @@ def _decode_bytes_to_text(b: bytes) -> str:
         None
     """
     try:
-        logger.debug("Decoding bytes as utf-8")
         return b.decode('utf-8')
     except Exception:
         return b.decode('latin1', errors='replace')
@@ -465,7 +585,6 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
     total_entries = 0
     total_xml = 0
     total_xsd = 0
-    total_nested = 0
     total_errors = 0
 
     cd_struct_fmt = '<IHHHHHHIIIHHHHHII'
@@ -476,7 +595,7 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
         if pos == -1:
             break
         try:
-            logger.debug(f"Parsing CD entry at position {pos}")
+            # logger.debug(f"Parsing CD entry at position {pos}")
             total_entries += 1
 
             if pos + cd_struct_size > size:
@@ -516,11 +635,8 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
             is_target_xsd = base_lower.endswith('.xsd') and any(
                 base_lower.startswith(p.lower()) for p in target_prefixes
             )
-            
-            # Check for nested zip files
-            is_nested_zip = base_lower.endswith('.zip')
 
-            if is_target_xml or is_target_xsd or is_nested_zip:
+            if is_target_xml or is_target_xsd:
                 lh_off = local_header_offset
 
                 if lh_off + 30 > size:
@@ -573,26 +689,17 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
                     continue
                 
                 # File type counts
-                if is_nested_zip:
-                    total_nested += 1
-                elif is_target_xsd:
+                if is_target_xsd:
                     total_xsd += 1
                 elif is_target_xml:
                     total_xml += 1
                     
-                if is_nested_zip:
-                    logs.append(f"Found nested zip entry {norm_fname}, attempting in-memory extraction.")
-                    logger.info(f"Found nested zip entry {norm_fname}, attempting in-memory extraction.")
-                    nested_found = extract_from_zip_bytes(file_bytes, logs, target_prefixes=target_prefixes)
-                    for k, v in nested_found.items():
-                        if k not in found:
-                            found[k] = v
-                elif is_target_xsd:
+                if is_target_xsd:
                     xsd_basename = os.path.splitext(base)[0].lower()
                     xsd_key = f'__xsd__{xsd_basename}'
                     found[xsd_key] = _decode_bytes_to_text(file_bytes)
                     logs.append(f"Extracted XSD: {norm_fname} -> {xsd_key}")
-                    logger.info(f"Extracted XSD: {norm_fname} -> {xsd_key}")   
+                    logger.debug(f"Extracted XSD: {norm_fname} -> {xsd_key}")   
                 else:  # Regular XML file
                     text = _decode_bytes_to_text(file_bytes)
                     rendered_text = render_html_documentation(text)
@@ -604,20 +711,20 @@ def extract_from_zip_bytes(zip_content: bytes, logs: List[str], target_prefixes:
                         i += 1
                     found[key] = rendered_text
                     logs.append(f"Extracted XML: {norm_fname} (size={len(rendered_text)} chars)")
-                    logger.info(f"Extracted XML: {norm_fname} (size={len(rendered_text)} chars)")
+                    logger.debug(f"Extracted XML: {norm_fname} (size={len(rendered_text)} chars)")
             
             pos += 4
 
         except Exception as e:
-            logs.append(f"Error parsing CD entry at {pos}: {e}")
-            logger.error(f"Error parsing CD entry at {pos}: {e}")
+            # logs.append(f"Error parsing CD entry at {pos}: {e}")
+            # logger.error(f"Error parsing CD entry at {pos}: {e}")
             pos += 4
     
     logger.info(
-        f"ACU extraction summary: entries={total_entries}, xml={total_xml}, xsd={total_xsd}, nested={total_nested}, errors={total_errors}"
+        f"ACU extraction summary: entries={total_entries}, xml={total_xml}, xsd={total_xsd}, errors={total_errors}"
     )
     logs.append(
-        f"Summary: entries={total_entries}, xml={total_xml}, xsd={total_xsd}, nested={total_nested}, errors={total_errors}"
+        f"Summary: entries={total_entries}, xml={total_xml}, xsd={total_xsd}, errors={total_errors}"
     )
 
     xml_count = sum(1 for k in found if not k.startswith('__xsd__'))
@@ -657,7 +764,7 @@ def extract_from_directory(base_path: Union[str, Path], logs: List[str], target_
 
         if item.suffix.lower() == '.zip':
             logs.append(f"Found ZIP archive: {item.relative_to(base_path)}")
-            logger.info(f"Found ZIP archive: {item.relative_to(base_path)}")
+            logger.debug(f"Found ZIP archive: {item.relative_to(base_path)}")
             try:
                 with open(item, 'rb') as f:
                     zip_content = f.read()
@@ -677,7 +784,7 @@ def extract_from_directory(base_path: Union[str, Path], logs: List[str], target_
 
         if is_standalone_xml:
             logs.append(f"Found standalone XML: {item.relative_to(base_path)}")
-            logger.info(f"Found standalone XML: {item.relative_to(base_path)}")
+            logger.debug(f"Found standalone XML: {item.relative_to(base_path)}")
             try:
                 all_files[str(item.relative_to(base_path))] = item.read_text(encoding='utf-8', errors='ignore')
             except Exception as e:
@@ -685,7 +792,7 @@ def extract_from_directory(base_path: Union[str, Path], logs: List[str], target_
                 logger.error(f"Error reading file {item.name}: {e}")
         elif is_standalone_xsd:
             logs.append(f"Found standalone XSD: {item.relative_to(base_path)}")
-            logger.info(f"Found standalone XSD: {item.relative_to(base_path)}")
+            logger.debug(f"Found standalone XSD: {item.relative_to(base_path)}")
             try:
                 xsd_basename = os.path.splitext(item.name)[0].lower()
                 xsd_key = f'__xsd__{xsd_basename}'

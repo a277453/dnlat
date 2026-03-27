@@ -349,6 +349,98 @@ def parse_ui_journal(file_path: Union[str, Path]) -> pd.DataFrame:
     return df
 
 
+def parse_ui_journal_from_string(content: str, filename: str) -> pd.DataFrame:
+    """
+    FUNCTION: parse_ui_journal_from_string
+
+    DESCRIPTION:
+        Identical to parse_ui_journal() but accepts file content as a string
+        instead of a file path. Used when file content has been loaded into
+        session memory and Temp has been deleted.
+
+    USAGE:
+        df = parse_ui_journal_from_string(content, "20240101.jrn")
+
+    PARAMETERS:
+        content  (str) : Full text content of the UI journal file.
+        filename (str) : Original filename — used to derive the date and for logging.
+
+    RETURNS:
+        DataFrame : Parsed UI journal events with timestamps, screens, and JSON fields.
+
+    RAISES:
+        None : All errors are caught and logged; empty DataFrame returned on failure.
+    """
+    logger.info(f"Parsing UI journal from string: {filename}")
+
+    pattern_no_date = re.compile(
+        r'^(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(\w+)\s+([<>*])\s+\[(\d+)\]\s+-\s+(\w+)\s+(result|action):(.+)$'
+    )
+    pattern_with_date = re.compile(
+        r'^(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(\w+)\s+([<>*])\s+\[(\d+)\]\s+-\s+(\w+)\s+(result|action):(.+)$'
+    )
+
+    # Extract date from filename (same logic as parse_ui_journal)
+    stem = Path(filename).stem
+    date_match = re.search(r'(\d{8})', stem)
+    if date_match:
+        date_str = date_match.group(1)
+        try:
+            file_date = datetime.strptime(date_str, '%Y%m%d').strftime('%d/%m/%Y')
+        except ValueError:
+            file_date = stem
+    else:
+        file_date = stem
+
+    cleaned_lines = []
+    processed_lines = set()
+
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        match = pattern_no_date.match(line)
+        if not match:
+            continue
+        timestamp, log_id, module, direction, view_id, screen, event_type, event_data = match.groups()
+        if event_type not in ["result", "action"]:
+            continue
+        line_key = f"{timestamp}_{log_id}_{event_type}_{event_data[:50]}"
+        if line_key in processed_lines:
+            continue
+        processed_lines.add(line_key)
+        cleaned_lines.append((timestamp, log_id, module, direction, view_id, screen, event_type, event_data, file_date))
+
+    if not cleaned_lines:
+        logger.warning(f"No valid lines found in {filename}")
+        return pd.DataFrame()
+
+    parsed_data = []
+    for timestamp, log_id, module, direction, view_id, screen, event_type, event_data, file_date in cleaned_lines:
+        try:
+            event_json = json.loads(event_data.strip())
+        except Exception:
+            event_json = {"raw": event_data.strip()}
+        parsed_data.append({
+            'date': file_date,
+            'timestamp': timestamp,
+            'log_id': log_id,
+            'module': module,
+            'direction': direction,
+            'view_id': view_id,
+            'screen': screen,
+            'event_type': event_type,
+            'event_data': event_json
+        })
+
+    if not parsed_data:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(parsed_data)
+    logger.info(f"Parsed {len(df)} events from string: {filename}")
+    return df
+
+
 def map_transactions_and_generate_report(
     transaction_df: pd.DataFrame, 
     ui_df: pd.DataFrame, 

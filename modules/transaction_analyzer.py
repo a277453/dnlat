@@ -320,27 +320,51 @@ class TransactionAnalyzerService:
             len(merged), len(ej_records), len(jrn_records)
         )
 
-        # Build a lookup: txn_number -> merged record
-        jrn_lookup: Dict[str, dict] = {}
+        # Build a lookup keyed by txn_number (primary) and ts_start (fallback).
+        # txn_number in the merged record comes from the EJ side, so it is the
+        # new filenameHHMMSS format (e.g. "20250910123826") and matches the
+        # Transaction ID in the DataFrame.
+        # ts_start secondary index guards against merger tier-2 misses.
+        jrn_lookup: Dict[str, dict] = {}      # keyed by txn_number
+        jrn_ts_lookup: Dict[str, dict] = {}   # keyed by ts_start (HH:MM:SS)
         for record in merged:
-            txn_num = record.get("txn_number")
+            txn_num  = record.get("txn_number")
+            ts_start = record.get("ts_start")
             if txn_num:
                 jrn_lookup[txn_num] = record
+            if ts_start:
+                jrn_ts_lookup[ts_start] = record
 
         logger.debug(
-            "JRN lookup built with %d entries: %s",
-            len(jrn_lookup), list(jrn_lookup.keys())[:5]
+            "JRN lookup built — txn_number keys: %s | ts_start keys: %s",
+            list(jrn_lookup.keys())[:5],
+            list(jrn_ts_lookup.keys())[:5]
         )
 
         # Initialise all JRN columns to None
         for col in _JRN_ENRICH_MAP.values():
             df[col] = None
 
-        # Fill in JRN fields row by row from merger lookup
+        # Fill in JRN fields row by row from merger lookup.
+        # Primary:  look up by txn_number (filenameHHMMSS format).
+        # Fallback: extract HH:MM:SS from the last 6 chars of the Transaction ID
+        #           and look up in jrn_ts_lookup — guards against merger misses.
         matched_count = 0
         for idx, row in df.iterrows():
-            txn_id  = row.get("Transaction ID")
+            txn_id  = row.get("Transaction ID")  # e.g. "20250910123826"
             matched = jrn_lookup.get(txn_id)
+
+            if matched is None and txn_id and len(str(txn_id)) >= 6:
+                # Fallback: derive HH:MM:SS from last 6 chars of Transaction ID
+                raw_ts = str(txn_id)[-6:]
+                ts_key = f"{raw_ts[0:2]}:{raw_ts[2:4]}:{raw_ts[4:6]}"
+                matched = jrn_ts_lookup.get(ts_key)
+                if matched:
+                    logger.debug(
+                        "JRN matched via ts_start fallback: txn=%s ts=%s",
+                        txn_id, ts_key
+                    )
+
             if matched is None:
                 logger.debug("No JRN match for transaction %s", txn_id)
                 continue

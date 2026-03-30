@@ -2887,9 +2887,25 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
         _preprocessor = LogPreprocessorService()
         _merger        = TransactionMergerService()
 
-        # Step 1: preprocess EJ log for this transaction
+        # ── STEP 1: Preprocess EJ log ─────────────────────────────────────
         ej_records_all = _preprocessor.preprocess_ej(transaction_log)
         logger.info(f" EJ preprocessor produced {len(ej_records_all)} record(s)")
+
+        if not ej_records_all:
+            # The regex extracted nothing — log is present but in an unrecognised
+            # format (e.g. truncated, encoding issues, non-standard line structure).
+            logger.error(
+                f"EJ preprocessing returned no records for transaction {transaction_id}. "
+                f"Log may be malformed or in an unsupported format."
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Transaction log data is not available for LLM analysis. "
+                    "The log could not be parsed — it may be truncated, "
+                    "malformed, or in an unsupported format."
+                )
+            )
 
         # Filter to only the record matching this transaction_id so neighbouring
         # transactions that share the same raw log block are not sent to the LLM.
@@ -2897,16 +2913,35 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
             r for r in ej_records_all
             if r.get("txn_number") == transaction_id
         ]
-        if not ej_records and ej_records_all:
+        if not ej_records:
             # txn_number may be absent in some log formats — fall back to first record
             logger.warning(
-                f" No EJ record matched txn_number='" + transaction_id + "'; "
-                f" falling back to first parsed record"
+                f" No EJ record matched txn_number='{transaction_id}'; "
+                f"falling back to first parsed record"
             )
             ej_records = [ej_records_all[0]]
+
+        # Guard: record exists but has no meaningful fields after _compact()
+        first_ej = ej_records[0]
+        meaningful_ej_keys = {k for k, v in first_ej.items()
+                              if v is not None and v != [] and v != "" and v is not False}
+        if len(meaningful_ej_keys) < 2:
+            logger.error(
+                f"EJ record for transaction {transaction_id} has insufficient data: "
+                f"only {meaningful_ej_keys} found after parsing."
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Transaction log data is not available for LLM analysis. "
+                    "The log was parsed but contained insufficient diagnostic "
+                    "information to send to the model."
+                )
+            )
+
         logger.info(f" EJ records after filtering to txn_id '{transaction_id}': {len(ej_records)}")
 
-        # Step 2: preprocess matching JRN file if available
+        # ── STEP 2: Preprocess matching JRN file ──────────────────────────
         jrn_records = []
         file_categories = session_data.get('file_categories', {})
         all_ui_journals = file_categories.get('ui_journals', [])
@@ -2916,29 +2951,38 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
             if 'vcp-pro' not in str(f).replace('\\', '/').lower()
         ]
         # 'Source_File' is renamed to 'Source File' before session storage in
-        # analyze_customer_journals — check both names so the lookup never silently
-        # returns an empty string and causes match_journal_file to find nothing.
+        # analyze_customer_journals — check both names so the lookup never
+        # silently returns an empty string causing match_journal_file to find nothing.
         source_stem = str(txn_data.get('Source File') or txn_data.get('Source_File') or '')
         matched_jrn_file = match_journal_file(source_stem, llm_ui_journals)
         if matched_jrn_file:
             try:
                 raw_jrn = Path(matched_jrn_file).read_text(encoding='utf-8', errors='replace')
-                jrn_records = _preprocessor.preprocess_jrn(raw_jrn)
-                logger.info(f" JRN preprocessor produced {len(jrn_records)} record(s) from {Path(matched_jrn_file).name}")
+                if not raw_jrn.strip():
+                    logger.warning(f" JRN file is empty: {Path(matched_jrn_file).name}")
+                else:
+                    jrn_records = _preprocessor.preprocess_jrn(raw_jrn)
+                    if not jrn_records:
+                        logger.warning(
+                            f" JRN file present but preprocessor extracted no records "
+                            f"from {Path(matched_jrn_file).name} — continuing with EJ only"
+                        )
+                    else:
+                        logger.info(
+                            f" JRN preprocessor produced {len(jrn_records)} record(s) "
+                            f"from {Path(matched_jrn_file).name}"
+                        )
             except Exception as jrn_err:
-                logger.warning(f" JRN preprocessing failed: {jrn_err}")
+                logger.warning(f" JRN preprocessing failed: {jrn_err} — continuing with EJ only")
         else:
-            logger.warning(f" No matching JRN file for source '{source_stem}'")
+            logger.warning(f" No matching JRN file for source '{source_stem}' — EJ only")
 
-        # Step 3: merge EJ + JRN records into unified structured dict
+        # ── STEP 3: Merge EJ + JRN ────────────────────────────────────────
         if ej_records and jrn_records:
             merged_records = _merger.merge(ej_records, jrn_records)
-        elif ej_records:
-            merged_records = ej_records
         else:
-            # Fallback: nothing preprocessed, use raw masked log
-            logger.warning(f" Preprocessor returned no records, falling back to raw log")
-            merged_records = [{"raw_log": mask_ej_log(transaction_log)}]
+            # JRN unavailable or empty — EJ-only analysis (still valid)
+            merged_records = ej_records
 
         # Trim to exactly one record (the target transaction).
         # The merger may produce extra records when neighbouring transactions
@@ -2952,14 +2996,33 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
 
         logger.info(f" Merged records count: {len(merged_records)}")
 
-        # Step 4: build token-efficient prompt from structured records
+        # ── STEP 4: Build prompt ───────────────────────────────────────────
         user_content = _preprocessor.build_prompt(
             merged_records,
             atm_id=str(txn_data.get('Terminal ID', ''))
         )
+
+        # Final guard: build_prompt should always produce something meaningful,
+        # but if the payload is suspiciously short it means all fields were empty.
+        # The header alone is ~100 chars — anything under 150 has no LOG data.
+        MIN_PROMPT_CHARS = 150
+        if len(user_content.strip()) < MIN_PROMPT_CHARS:
+            logger.error(
+                f"Built prompt for transaction {transaction_id} is too short "
+                f"({len(user_content)} chars) — no diagnostic data extracted."
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Transaction log data is not available for LLM analysis. "
+                    "No diagnostic information could be extracted from the log. "
+                    "The transaction may have no parseable content."
+                )
+            )
+
         jrn_data_available = bool(jrn_records)
         logger.info(f" JRN data available: {jrn_data_available}")
-        logger.debug(f" Prompt length: {len(user_content)} chars")
+        logger.info(f" Prompt length: {len(user_content)} chars")
 
         messages = [
             {

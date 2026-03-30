@@ -150,7 +150,8 @@ class ZipExtractionService:
         # Must be a .jrn inside a path that has a 'ui'or 'journal' folder (e.g. VCP_PRO/JOURNALS/UI or JOURNAL)
         if ext == '.jrn':
             has_ui_folder = any('ui' in p for p in parents)
-            if has_ui_folder: 
+            has_journal_folder = any(p.upper() == 'JOURNAL' for p in parents)
+            if has_ui_folder or has_journal_folder:
                 return self.BRANCH_UI
 
         # --- CUSTOMER journals ---
@@ -162,7 +163,7 @@ class ZipExtractionService:
                 return self.BRANCH_CUSTOMER
 
         # --- EXTRA (nested ZIPs and everything unclassified) ---
-        # TO-DO as currently not needed but may be required in future
+        # Dhruvi: TO-DO as currently not needed but may be required in future
         return self.BRANCH_EXTRA
 
     def is_relevant_file(self, filename: str) -> bool:
@@ -230,10 +231,16 @@ class ZipExtractionService:
                         base_m = os.path.basename(norm)
                         if any(skip in norm for skip in self.skip_patterns) or base_m.startswith('.'):
                             continue
+
+                        # From acu.zip, only use files that start with 'jdd' or 'x3' AND end with .xml or .xsd
+                        stem_m, ext_m = os.path.splitext(base_m)
+                        if ext_m not in ('.xml', '.xsd') or not stem_m.startswith(('jdd', 'x3')):
+                            continue
+
                         try:
                             file_data = self._safe_read_member(zf, member)
                         except Exception as re:
-                            logger.warning(f"    Could not read nested member '{member}': {re}")
+                            logger.warning(f"Could not read nested member '{member}': {re}")
                             fail += 1
                             continue
 
@@ -401,16 +408,16 @@ class ZipExtractionService:
                                 try:
                                     file_data = self._safe_read_member(zf, filename)
                                     nested_zip_bytes[filename] = file_data
-                                    logger.info(f"  [NESTED ZIP] acu.zip found.")
+                                    logger.info(f"Acu.zip found.")
                                 except Exception as read_err:
-                                    logger.warning(f"  [NESTED ZIP] Could not read acu.zip: {read_err}")
+                                    logger.warning(f"Could not read acu.zip: {read_err}")
                             else:
                                 logger.info(f"  [NESTED ZIP] '{base}' skipped.")
                             continue  # never write any zip to disk
 
                         branch = self._classify_to_branch(filename)
 
-						#TO-Do: Skipped reading files in EXTRA for now. can be implemented later is needed.
+						#Dhruvi - TO-Do: Skipped reading files in EXTRA for now. can be implemented later is needed.
                         if branch == self.BRANCH_EXTRA:
                             continue
                         # Read the member bytes
@@ -485,7 +492,7 @@ class ZipExtractionService:
                     continue
         except:
             logger.error(f"error cleaning up old extractions")
-# --- ACU Parser Specific Extraction Logic (UNCHANGED) ---
+# --- ACU Parser Specific Extraction Logic---
 
 def _decode_bytes_to_text(b: bytes) -> str:
     """
@@ -544,11 +551,11 @@ def render_html_documentation(html_string: str) -> str:
         "<br>": "\n", "<br/>": "\n", "<br />": "\n"
     }
 
-    # Apply all replacements
+    #Apply all replacements
     for old, new in replacements.items():
         processed_text = processed_text.replace(old, new)
 
-    # Clean up leading/trailing whitespace and excessive newlines
+    #To clean up leading/trailing whitespace and excessive newlines
     lines = [line.strip() for line in processed_text.strip().split('\n')]
     return "\n".join(line for line in lines if line)
 

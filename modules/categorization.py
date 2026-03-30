@@ -135,7 +135,8 @@ class CategorizationService:
 
                     # === UI JOURNALS ===
                     has_ui_folder = any('ui' in p and 'journal' in p for p in parents_only)
-                    if has_ui_folder and ext == '.jrn':
+                    has_journal_folder = any(p.upper() == 'JOURNAL' for p in parents_only)
+                    if (has_ui_folder or has_journal_folder) and ext == '.jrn':
                         zip_map[norm] = 'ui_journals'
                         continue
 
@@ -206,8 +207,9 @@ class CategorizationService:
             if not file_path.is_file():
                 continue
 
-            if file_path.name in exclude_files:
-                logger.debug(f"Skipping excluded file (ACU): {file_path.name}")
+            # Never read or categorize anything stored in the EXTRA branch folder
+            if file_path.parent.name.upper() == 'EXTRA':
+                logger.debug(f"Skipping every file in EXTRA branch.")
                 continue
 
             if str(file_path) in processed_files:

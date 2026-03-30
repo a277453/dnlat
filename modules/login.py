@@ -43,8 +43,10 @@ import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from jose import jwt, JWTError, ExpiredSignatureError
+from fastapi import HTTPException, status
 from modules.logging_config import logger
 from dotenv import load_dotenv
 load_dotenv()  # auto load from root
@@ -91,6 +93,74 @@ SMTP_CONFIG = {
 
 APP_BASE_URL = os.getenv("APP_BASE_URL")
 RESET_TOKEN_EXPIRY_MINUTES = int(os.getenv("RESET_TOKEN_EXPIRY_MINUTES", 30))
+
+# ============================================
+# JWT CONFIGURATION
+# ============================================
+JWT_SECRET_KEY  = os.getenv("JWT_SECRET_KEY", "CHANGE_THIS_SECRET_IN_PRODUCTION")
+JWT_ALGORITHM   = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "8"))
+
+# Paths that never need a token (checked by the middleware in main.py)
+PUBLIC_PATHS = {
+    "/",
+    "/health",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/api/v1/auth/login",
+    "/api/v1/auth/register",
+    "/api/v1/auth/initialize-db",
+    "/api/v1/forgot-password",
+    "/api/v1/verify-reset-identity",
+    "/api/v1/reset-password",
+}
+
+
+def create_access_token(username: str, role: str, employee_code: str) -> str:
+    """Create a signed JWT encoding username + role. Called at login."""
+    payload = {
+        "sub":  username,
+        "role": role,
+        "emp":  employee_code,
+        "exp":  datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS),
+    }
+    token = jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    logger.info("JWT issued: user='%s' role='%s'", username, role)
+    return token
+
+
+def decode_access_token(token: str) -> dict:
+    """
+    Decode and validate a JWT.
+    Raises HTTPException 401 if token is missing, expired, or tampered.
+    """
+    try:
+        return jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    except ExpiredSignatureError:
+        logger.warning("JWT decode failed: token expired")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "status":  "error",
+                "code":    401,
+                "error":   "Unauthorized",
+                "message": "Your session has expired. Please log in again.",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except JWTError as exc:
+        logger.warning("JWT decode failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "status":  "error",
+                "code":    401,
+                "error":   "Unauthorized",
+                "message": "Invalid session token. Please log in again.",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 # Base URL of your Streamlit app.
 # The reset link will be: APP_BASE_URL + ?reset_token=<token>
@@ -1259,6 +1329,8 @@ def initialize_session():
         st.session_state.employee_code = None
     if "role" not in st.session_state:
         st.session_state.role = None
+    if "session_token" not in st.session_state:
+        st.session_state.session_token = None
 
     # ── Developer mode bypass ──────────────────────────────────────
     # When True, any username/password combination grants access.
@@ -1326,3 +1398,4 @@ def logout_user():
     st.session_state.username      = None
     st.session_state.employee_code = None
     st.session_state.role          = None
+    st.session_state.session_token = None

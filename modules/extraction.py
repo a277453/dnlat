@@ -221,7 +221,7 @@ class ZipExtractionService:
         logger.info(f"Expanding {total} nested ZIP(s) into branch folders...")
 
         for idx, (zip_name, zip_bytes) in enumerate(nested_zip_bytes.items(), start=1):
-            logger.debug(f"  Nested ZIP ({idx}/{total}): {os.path.basename(zip_name)}")
+            logger.debug(f"Nested ZIP ({idx}/{total}): {os.path.basename(zip_name)}")
             try:
                 with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
                     members = [m for m in zf.namelist() if not m.endswith('/')]
@@ -261,7 +261,7 @@ class ZipExtractionService:
                         with open(dest_file, 'wb') as fout:
                             fout.write(file_data)
                         ok += 1
-                        logger.debug(f"    [{branch}] {os.path.basename(member)}")
+                        logger.debug(f"[{branch}] {os.path.basename(member)}")
 
                     logger.info(f"    → {ok} extracted, {fail} failed")
             except zipfile.BadZipFile as e:

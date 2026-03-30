@@ -45,127 +45,13 @@ class CategorizationService:
             'unidentified': []
         }
 
-    def build_zip_structure_map(self, zip_bytes: bytes) -> Dict[str, str]:
-        """
-        FUNCTION: build_zip_structure_map
-
-        DESCRIPTION:
-            Scans the ZIP central directory entirely in memory — without extracting
-            any files — and returns a mapping of each member's basename to its
-            inferred category based solely on folder hierarchy and filename patterns.
-            This map is passed into categorize_files so that _detect_category can
-            resolve ambiguous files (e.g., .jrn, .prn) from ZIP structure alone,
-            eliminating the need for content-based file reads.
-
-        USAGE:
-            zip_map = service.build_zip_structure_map(zip_bytes)
-
-        PARAMETERS:
-            zip_bytes (bytes) : Raw bytes of the uploaded ZIP archive.
-
-        RETURNS:
-            Dict[str, str] : Mapping of normalized member path (lowercased) to
-                             category string (e.g., 'customer_journals', 'trc_trace').
-                             Only entries with a resolved category are included.
-
-        RAISES:
-            None : All errors are logged; an empty dict is returned on failure.
-        """
-        zip_map: Dict[str, str] = {}
-
-        try:
-            with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
-                for info in zf.infolist():
-                    if info.is_dir():
-                        continue
-
-                    norm = info.filename.replace('\\', '/').lower()
-                    parts = norm.split('/')
-                    base = parts[-1]
-                    ext  = os.path.splitext(base)[1]
-                    stem = os.path.splitext(base)[0]
-
-                    all_parents = parts  # includes basename — mirrors _detect_category logic
-                    parents_only = parts[:-1]
-
-                    # === ACU FILES ===
-                    if ext in ('.xml', '.xsd') and stem.startswith(('jdd', 'x3')):
-                        zip_map[norm] = 'acu_files'
-                        continue    
-
-                    # === TRC FILES ===
-                    if ext == '.trc':
-                        zip_map[norm] = 'trc_error'
-                        continue
-                    trc_signals = ('trctrace', 'trc_trace', 'trcerror', 'trc_error', 'trace', 'error')
-                    if ext == '.prn':
-                        # Check filename 
-                        if any(sig in stem for sig in trc_signals):
-                            zip_map[norm] = 'trc_error' if 'error' in stem else 'trc_trace'
-                            continue
-                        has_trace_folder = any('trace' in p for p in parents_only)
-                        has_error_folder = any('error' in p for p in parents_only)
-                        if has_error_folder:
-                            zip_map[norm] = 'trc_error'
-                            continue
-                        if has_trace_folder:
-                            zip_map[norm] = 'trc_trace'
-                            continue
-
-                    # === REGISTRY FILES ===
-                    has_registry_folder = any('registry' in p or 'reg' in p for p in parents_only)
-                    if has_registry_folder and ext in ('.reg', '.txt', '.ini', '.cfg', '.conf'):
-                        zip_map[norm] = 'registry_files'
-                        continue
-                    if ext == '.reg':
-                        zip_map[norm] = 'registry_files'
-                        continue
-                    if ext == '.txt' and 'reg' in base:
-                        zip_map[norm] = 'registry_files'
-                        continue
-
-                    # === CUSTOMER JOURNALS ===
-                    has_customer_folder = any(
-                        'customer' in p and ('journal' in p or p == 'customer')
-                        for p in parents_only
-                    )
-                    if has_customer_folder and ext == '.jrn':
-                        zip_map[norm] = 'customer_journals'
-                        continue
-
-                    # === UI JOURNALS ===
-                    has_ui_folder = any('ui' in p and 'journal' in p for p in parents_only)
-                    has_journal_folder = any(p.upper() == 'JOURNAL' for p in parents_only)
-                    if (has_ui_folder or has_journal_folder) and ext == '.jrn':
-                        zip_map[norm] = 'ui_journals'
-                        continue
-
-                    # === TRC TRACE FILES (FALLBACK) ===
-                    has_trace_folder = any('trace' in p for p in parents_only)
-                    if has_trace_folder and ext == '.prn':
-                        zip_map[norm] = 'trc_trace'
-                        continue
-
-                    # === TRC ERROR FILES (FALLBACK) ===
-                    has_error_folder = any('error' in p for p in parents_only)
-                    if has_error_folder and ext == '.prn':
-                        zip_map[norm] = 'trc_error'
-                        continue
-
-            logger.info(f"build_zip_structure_map: mapped {len(zip_map)} members from ZIP structure")
-
-        except Exception as e:
-            logger.error(f"build_zip_structure_map failed: {e}")
-
-        return zip_map
-
+    
     def categorize_files(
         self,
         extract_path: Path,
         file_categories: Dict[str, List[str]],
         exclude_files: set = None,
         mode: Optional[str] = None,
-        zip_map: Optional[Dict[str, str]] = None
     ) -> Dict[str, List[str]]:
         """
         FUNCTION: categorize_files
@@ -216,7 +102,7 @@ class CategorizationService:
                 logger.debug(f"Skipping already processed file: {file_path.name}")
                 continue
 
-            category = self._detect_category(file_path, mode=mode, zip_map=zip_map)
+            category = self._detect_category(file_path, mode=mode)
 
             if category and category != 'unidentified':
                 file_categories[category].append(str(file_path))
@@ -245,7 +131,8 @@ class CategorizationService:
 
         return file_categories
 
-    def _detect_category(self, file_path: Path, mode: Optional[str] = None, zip_map: Optional[Dict[str, str]] = None) -> str:
+    def _detect_category(self, file_path: Path, mode: Optional[str] = None) -> str:
+    
         """
         FUNCTION: _detect_category
 
@@ -298,13 +185,6 @@ class CategorizationService:
             logger.debug(f"BRANCH FAST-PATH: {file_path.name} (parent={parent_name}) -> {mapped}")
             return mapped
 
-        # === ZIP STRUCTURE MAP LOOKUP (avoids content reads for ambiguous files) ===
-        if zip_map:
-            # Match by suffix of the normalized disk path against the ZIP member paths in the map
-            for zip_member_path, mapped_category in zip_map.items():
-                if normalized_path.endswith(zip_member_path) or zip_member_path.endswith(file_name_lower):
-                    logger.debug(f"MATCH via zip_map: {file_path.name} -> {mapped_category}")
-                    return mapped_category
 
         # === REGISTRY FILES ===
         has_registry_folder = any('registry' in parent or 'reg' in parent for parent in all_parents)
@@ -372,10 +252,6 @@ class CategorizationService:
         # gave no clear signal — do not fall back to reading file content.
         # If zip_map was not provided, apply the original folder-name heuristics only.
         if file_name_lower.endswith(('.jrn', '.prn')):
-            if zip_map is not None:
-                logger.debug("zip_map provided but no match found — skipping content read, marking unidentified")
-            else:
-                logger.debug("Running content-based detection (no zip_map provided)...")
                 file_type = self._detect_file_type_by_content(str(file_path))
                 logger.debug(f"Content type detected: {file_type}")
 

@@ -417,9 +417,9 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             p = Path(path_str)
             try:
                 registry_contents[p.name] = p.read_bytes()
-                logger.debug(f"  [REGISTRY] loaded: {p.name}")
+                logger.debug(f"[REGISTRY] loaded: {p.name}")
             except Exception as e:
-                logger.error(f"  [REGISTRY] failed to load {p.name}: {e}")
+                logger.error(f"[REGISTRY] failed to load {p.name}: {e}")
 
         # --- CUSTOMER JOURNALS ---
         customer_journal_contents: dict = {}
@@ -427,9 +427,9 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             p = Path(path_str)
             try:
                 customer_journal_contents[p.name] = _read_text(p)
-                logger.debug(f"  [CUSTOMER] loaded: {p.name}")
+                logger.debug(f"[CUSTOMER] loaded: {p.name}")
             except Exception as e:
-                logger.error(f"  [CUSTOMER] failed to load {p.name}: {e}")
+                logger.error(f"[CUSTOMER] failed to load {p.name}: {e}")
 
         # --- UI JOURNALS ---
         ui_journal_contents: dict = {}
@@ -437,9 +437,9 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             p = Path(path_str)
             try:
                 ui_journal_contents[p.name] = _read_text(p)
-                logger.debug(f"  [UI] loaded: {p.name}")
+                logger.debug(f"[UI] loaded: {p.name}")
             except Exception as e:
-                logger.error(f"  [UI] failed to load {p.name}: {e}")
+                logger.error(f"[UI] failed to load {p.name}: {e}")
 
         # --- TRC TRACE ---
         trc_trace_contents: dict = {}
@@ -447,9 +447,9 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             p = Path(path_str)
             try:
                 trc_trace_contents[p.name] = _read_text(p)
-                logger.debug(f"  [TRC_TRACE] loaded: {p.name}")
+                logger.debug(f"[TRC_TRACE] loaded: {p.name}")
             except Exception as e:
-                logger.error(f"  [TRC_TRACE] failed to load {p.name}: {e}")
+                logger.error(f"[TRC_TRACE] failed to load {p.name}: {e}")
 
         # --- TRC ERROR ---
         trc_error_contents: dict = {}
@@ -457,9 +457,9 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             p = Path(path_str)
             try:
                 trc_error_contents[p.name] = _read_text(p)
-                logger.debug(f"  [TRC_ERROR] loaded: {p.name}")
+                logger.debug(f"[TRC_ERROR] loaded: {p.name}")
             except Exception as e:
-                logger.error(f"  [TRC_ERROR] failed to load {p.name}: {e}")
+                logger.error(f"[TRC_ERROR] failed to load {p.name}: {e}")
 
         # --- EXTRA ---
         # No content is read. Each file in the EXTRA branch is registered as an empty dict placeholder keyed by filename. 

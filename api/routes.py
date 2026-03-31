@@ -216,36 +216,6 @@ def set_processed_files_dir(directory: str):
 def get_processed_files_dir() -> str:
     return PROCESSED_FILES_DIR
 
-def organize_files_into_subdirectories(extract_path: Path, file_categories: Dict[str, List[str]]) -> Dict[str, List[str]]:
-    """
-    Physically move categorized files into subdirectories
-    Returns updated file paths
-    """
-    organized_categories = {}
-    
-    for category, files in file_categories.items():
-        # Create category subdirectory
-        category_dir = extract_path / category
-        category_dir.mkdir(exist_ok=True)
-        
-        organized_files = []
-        
-        for file_path_str in files:
-            source = Path(file_path_str)
-            if source.exists() and source.is_file():
-                # Move to category subdirectory
-                dest = category_dir / source.name
-                try:
-                    shutil.copy2(source, dest)
-                    organized_files.append(str(dest))
-                    logger.info(f"   Moved {source.name} to {category}/")
-                except Exception as e:
-                    logger.info(f"  Failed to move {source.name}: {e}")
-                    continue
-        
-        organized_categories[category] = organized_files
-    
-    return organized_categories
 
 @router.post("/process-zip", response_model=FileCategorizationResponse)
 async def process_zip_file(file: UploadFile = File(..., description="ZIP file to process"),mode: Optional[str] = Query(None, description="Processing mode (e.g., 'registry' to optimize for registry files)")):
@@ -399,7 +369,6 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         # EXTRA branch: no content is read — each file is registered as an empty dict
         # TO-DO in case of any future feature require.
 
-        logger.info("Loading branch file contents into session memory")
         t_sess_start = time.perf_counter()
 
         def _read_text(p: Path) -> str:
@@ -417,7 +386,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             p = Path(path_str)
             try:
                 registry_contents[p.name] = p.read_bytes()
-                logger.debug(f"[REGISTRY] loaded: {p.name}")
+                logger.debug(f"[REGISTRY] Mapped content to filename: {p.name}")
             except Exception as e:
                 logger.error(f"[REGISTRY] failed to load {p.name}: {e}")
 
@@ -427,7 +396,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             p = Path(path_str)
             try:
                 customer_journal_contents[p.name] = _read_text(p)
-                logger.debug(f"[CUSTOMER] loaded: {p.name}")
+                logger.debug(f"[CUSTOMER] Mapped content to filename: {p.name}")
             except Exception as e:
                 logger.error(f"[CUSTOMER] failed to load {p.name}: {e}")
 
@@ -437,7 +406,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             p = Path(path_str)
             try:
                 ui_journal_contents[p.name] = _read_text(p)
-                logger.debug(f"[UI] loaded: {p.name}")
+                logger.debug(f"[UI] Mapped content to filename: {p.name}")
             except Exception as e:
                 logger.error(f"[UI] failed to load {p.name}: {e}")
 
@@ -447,7 +416,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             p = Path(path_str)
             try:
                 trc_trace_contents[p.name] = _read_text(p)
-                logger.debug(f"[TRC_TRACE] loaded: {p.name}")
+                logger.debug(f"[TRC_TRACE] Mapped content to filename: {p.name}")
             except Exception as e:
                 logger.error(f"[TRC_TRACE] failed to load {p.name}: {e}")
 
@@ -457,7 +426,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             p = Path(path_str)
             try:
                 trc_error_contents[p.name] = _read_text(p)
-                logger.debug(f"[TRC_ERROR] loaded: {p.name}")
+                logger.debug(f"[TRC_ERROR] Mapped content to filename {p.name}")
             except Exception as e:
                 logger.error(f"[TRC_ERROR] failed to load {p.name}: {e}")
 
@@ -655,7 +624,8 @@ async def extract_registry_from_zip(file: UploadFile = File(...)):
         result = await extract_registry_from_zip(file=some_zip_file)
 
     PARAMETERS:
-        file (UploadFile) : The ZIP file uploaded via multipart/form-data.
+        file (UploadFile) : The ZIP file uploaded via mu
+        ltipart/form-data.
 
     RETURNS:
         dict :

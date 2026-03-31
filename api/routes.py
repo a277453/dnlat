@@ -3,7 +3,8 @@ from pyexpat.errors import messages
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from modules.extraction import ZipExtractionService
 from modules.categorization import CategorizationService
-from modules.processing import ProcessingService, LogPreprocessorService, TransactionMergerService
+from modules.processing import ProcessingService
+from modules.llm_service import analyze_transaction
 from modules.session import session_service
 from modules.transaction_analyzer import TransactionAnalyzerService
 from modules.schemas import (
@@ -2803,17 +2804,16 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
         analyze_transaction_llm
 
     DESCRIPTION:
-        Analyzes a single ATM transaction using the LLM. Sends both the
-        Customer Journal (EJ) log and any available UI Journal (JRN) enrichment
-        fields (response code, STAN, device errors, protocol steps, etc.) to
-        the model for a complete, dual-source diagnosis.
+        Analyzes a single ATM transaction using the LLM. Validates the session
+        and transaction data, then delegates the full EJ/JRN pipeline, prompt
+        construction, Ollama call, and metadata storage to llm_service.analyze_transaction().
 
     USAGE:
         result = await analyze_transaction_llm(request, session_id="current_session")
 
     PARAMETERS:
         request (TransactionAnalysisRequest) :
-            Contains transaction_id to analyze.
+            Contains transaction_id and employee_code.
         session_id (str) :
             Session ID containing processed transaction data.
             Defaults to CURRENT_SESSION_ID.
@@ -2844,6 +2844,7 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
         HTTPException :
             - 404 if session or transaction not found
             - 400 if no transaction log available
+            - 422 if log could not be parsed or has insufficient data
             - 500 if Ollama is not installed or LLM call fails
     """
     try:
@@ -2871,7 +2872,7 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
             logger.error(f"Transaction {transaction_id} not found in session {session_id}")
             raise HTTPException(status_code=404, detail=f"Transaction {transaction_id} not found")
 
-        txn_data        = df[df['Transaction ID'] == transaction_id].iloc[0]
+        txn_data        = df[df['Transaction ID'] == transaction_id].iloc[0].to_dict()
         transaction_log = str(txn_data.get('Transaction Log', ''))
         if not transaction_log:
             logger.error(f"No transaction log available for transaction {transaction_id}")
@@ -2879,279 +2880,36 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
 
         logger.info(f" Found transaction log ({len(transaction_log)} characters)")
 
-        # ── Build structured LLM input via LogPreprocessorService pipeline ─
-        # This produces the clean JSON format the model expects:
-        # {ts_start, ts_end, txn_number, type, status, events, protocol_steps,
-        #  device_errors, retract_counter, response_code, card_ejected, ...}
-        # PAN and amounts are stripped automatically by the preprocessor.
-        _preprocessor = LogPreprocessorService()
-        _merger        = TransactionMergerService()
-
-        # ── STEP 1: Preprocess EJ log ─────────────────────────────────────
-        ej_records_all = _preprocessor.preprocess_ej(transaction_log)
-        logger.info(f" EJ preprocessor produced {len(ej_records_all)} record(s)")
-
-        if not ej_records_all:
-            # The regex extracted nothing — log is present but in an unrecognised
-            # format (e.g. truncated, encoding issues, non-standard line structure).
-            logger.error(
-                f"EJ preprocessing returned no records for transaction {transaction_id}. "
-                f"Log may be malformed or in an unsupported format."
-            )
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Transaction log data is not available for LLM analysis. "
-                    "The log could not be parsed — it may be truncated, "
-                    "malformed, or in an unsupported format."
-                )
-            )
-
-        # ── Filter to the record matching this transaction_id ─────────────
-        # Transaction IDs are in filenameHHMMSS format (e.g. "20250910123826").
-        # preprocess_ej stores ts_start as "HH:MM:SS" (e.g. "12:38:26").
-        # We extract the last 6 chars of the ID and convert to HH:MM:SS
-        # to find the correct record — matching on txn_number would fail
-        # because preprocess_ej uses the original log number (e.g. "0002"),
-        # not the new filenameHHMMSS format.
-        ts_from_id = None
-        if len(transaction_id) >= 6:
-            raw_ts = transaction_id[-6:]  # last 6 chars = HHMMSS
-            try:
-                ts_from_id = f"{raw_ts[0:2]}:{raw_ts[2:4]}:{raw_ts[4:6]}"
-            except Exception:
-                ts_from_id = None
-
-        if ts_from_id:
-            ej_records = [
-                r for r in ej_records_all
-                if r.get("ts_start") == ts_from_id
-            ]
-            logger.info(
-                f" Filtering EJ records by ts_start='{ts_from_id}' "
-                f"(derived from txn_id '{transaction_id}'): "
-                f"{len(ej_records)} match(es) from {len(ej_records_all)} total"
-            )
-        else:
-            ej_records = []
-            logger.warning(
-                f" Could not derive ts_start from transaction_id '{transaction_id}'"
-            )
-
-        if not ej_records:
-            # No record matched the timestamp — fall back to first record in file
-            # and warn so it's visible in logs
-            logger.warning(
-                f" No EJ record matched ts_start='{ts_from_id}' "
-                f"for transaction '{transaction_id}'; "
-                f"falling back to first parsed record. "
-                f"Available ts_start values: "
-                f"{[r.get('ts_start') for r in ej_records_all]}"
-            )
-            ej_records = [ej_records_all[0]]
-
-        # Guard: record exists but has no meaningful fields after _compact()
-        first_ej = ej_records[0]
-        meaningful_ej_keys = {k for k, v in first_ej.items()
-                              if v is not None and v != [] and v != "" and v is not False}
-        if len(meaningful_ej_keys) < 2:
-            logger.error(
-                f"EJ record for transaction {transaction_id} has insufficient data: "
-                f"only {meaningful_ej_keys} found after parsing."
-            )
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Transaction log data is not available for LLM analysis. "
-                    "The log was parsed but contained insufficient diagnostic "
-                    "information to send to the model."
-                )
-            )
-
-        logger.info(f" EJ records after filtering to txn_id '{transaction_id}': {len(ej_records)}")
-
-        # ── STEP 2: Preprocess matching JRN file ──────────────────────────
-        jrn_records = []
+        # ── Filter UI journals (JOURNAL/ top-level only, exclude VCP-PRO) ─
         file_categories = session_data.get('file_categories', {})
         all_ui_journals = file_categories.get('ui_journals', [])
-        # Filter out VCP-PRO files — only JOURNAL/ top-level for LLM enrichment
         llm_ui_journals = [
             f for f in all_ui_journals
             if 'vcp-pro' not in str(f).replace('\\', '/').lower()
         ]
-        # 'Source_File' is renamed to 'Source File' before session storage in
-        # analyze_customer_journals — check both names so the lookup never
-        # silently returns an empty string causing match_journal_file to find nothing.
-        source_stem = str(txn_data.get('Source File') or txn_data.get('Source_File') or '')
-        matched_jrn_file = match_journal_file(source_stem, llm_ui_journals)
-        if matched_jrn_file:
-            try:
-                raw_jrn = Path(matched_jrn_file).read_text(encoding='utf-8', errors='replace')
-                if not raw_jrn.strip():
-                    logger.warning(f" JRN file is empty: {Path(matched_jrn_file).name}")
-                else:
-                    jrn_records = _preprocessor.preprocess_jrn(raw_jrn)
-                    if not jrn_records:
-                        logger.warning(
-                            f" JRN file present but preprocessor extracted no records "
-                            f"from {Path(matched_jrn_file).name} — continuing with EJ only"
-                        )
-                    else:
-                        logger.info(
-                            f" JRN preprocessor produced {len(jrn_records)} record(s) "
-                            f"from {Path(matched_jrn_file).name}"
-                        )
-            except Exception as jrn_err:
-                logger.warning(f" JRN preprocessing failed: {jrn_err} — continuing with EJ only")
-        else:
-            logger.warning(f" No matching JRN file for source '{source_stem}' — EJ only")
 
-        # ── STEP 3: Merge EJ + JRN ────────────────────────────────────────
-        if ej_records and jrn_records:
-            merged_records = _merger.merge(ej_records, jrn_records)
-        else:
-            # JRN unavailable or empty — EJ-only analysis (still valid)
-            merged_records = ej_records
-
-        # Trim to exactly one record (the target transaction).
-        # The merger may produce extra records when neighbouring transactions
-        # overlap in timestamp — we only want the one we were asked to analyse.
-        if len(merged_records) > 1:
-            logger.warning(
-                f" Merged produced {len(merged_records)} records; "
-                f"trimming to 1 for transaction {transaction_id}"
-            )
-            merged_records = merged_records[:1]
-
-        logger.info(f" Merged records count: {len(merged_records)}")
-
-        # ── STEP 4: Build prompt ───────────────────────────────────────────
-        user_content = _preprocessor.build_prompt(
-            merged_records,
-            atm_id=str(txn_data.get('Terminal ID', ''))
+        # ── Delegate full LLM pipeline to llm_service ─────────────────────
+        return analyze_transaction(
+            transaction_id=transaction_id,
+            transaction_log=transaction_log,
+            txn_data=txn_data,
+            ui_journal_files=llm_ui_journals,
+            employee_code=request.employee_code,
         )
-
-        # Final guard: build_prompt should always produce something meaningful,
-        # but if the payload is suspiciously short it means all fields were empty.
-        # The header alone is ~100 chars — anything under 150 has no LOG data.
-        MIN_PROMPT_CHARS = 150
-        if len(user_content.strip()) < MIN_PROMPT_CHARS:
-            logger.error(
-                f"Built prompt for transaction {transaction_id} is too short "
-                f"({len(user_content)} chars) — no diagnostic data extracted."
-            )
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Transaction log data is not available for LLM analysis. "
-                    "No diagnostic information could be extracted from the log. "
-                    "The transaction may have no parseable content."
-                )
-            )
-
-        jrn_data_available = bool(jrn_records)
-        logger.info(f" JRN data available: {jrn_data_available}")
-        logger.info(f" Prompt length: {len(user_content)} chars")
-
-        messages = [
-            {
-                "role": "user",
-                "content": user_content
-            }
-        ]
-
-        # ── LLM call ──────────────────────────────────────────────────────
-        try:
-            import ollama
-
-            logger.info(" Calling Ollama model...")
-            analysis_start_time = time.perf_counter()
-            logger.debug(f"LLM messages payload: {messages}")
-            debug_path = Path("llm_debug_input.json")
-            debug_path.write_text(
-                json.dumps({
-                    "transaction_id": transaction_id,
-                    "messages":       messages,
-                    "jrn_available":  jrn_data_available,
-                }, indent=2, ensure_ascii=False),
-                encoding="utf-8"
-            )
-            logger.info(f"LLM input dumped to {debug_path.resolve()}")
-            response = ollama.chat(model="llama3_log_analyzer", messages=messages)
-
-            analysis_end_time  = time.perf_counter()
-            analysis_duration  = round(analysis_end_time - analysis_start_time, 3)
-            raw_response       = response['message']['content'].strip()
-
-            logger.info(
-                f"Transaction LLM analysis completed | "
-                f"txn_id={transaction_id} | "
-                f"model=llama3_log_analyzer | "
-                f"jrn_used={jrn_data_available} | "
-                f"analysis_time={analysis_duration}s"
-            )
-            logger.info(f" LLM analysis complete ({len(raw_response)} characters)")
-
-            # ── Structure the response ────────────────────────────────────
-            structured_response = {
-                "summary":   "Transaction log analysis completed",
-                "analysis":  raw_response,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "metadata": {
-                    "transaction_id":        transaction_id,
-                    "model":                 "llama3_log_analyzer",
-                    "log_length":            len(user_content),
-                    "response_length":       len(raw_response),
-                    "analysis_type":         "anomaly_detection",
-                    "transaction_type":      str(txn_data.get('Transaction Type', 'Unknown')),
-                    "transaction_state":     str(txn_data.get('End State', 'Unknown')),
-                    "start_time":            str(txn_data.get('Start Time', '')),
-                    "end_time":              str(txn_data.get('End Time', '')),
-                    "source_file":           str(txn_data.get('Source File', 'Unknown')),
-                    "jrn_data_available":    jrn_data_available,
-                    "analysis_time_seconds": analysis_duration,
-                }
-            }
-
-            logger.debug(f"Structured response prepared for transaction {transaction_id}")
-            # -------------------------------------------------------
-            # STORE OLLAMA METADATA INTO userresponse DB
-            # -------------------------------------------------------
-            store_metadata(
-                transaction_id        = transaction_id,
-                employee_code  = request.employee_code, 
-                model                 = "llama3_log_analyzer",
-                transaction_type      = str(txn_data.get('Transaction Type', 'Unknown')),
-                transaction_state     = str(txn_data.get('End State', 'Unknown')),
-                source_file           = str(txn_data.get('Source File', 'Unknown')),
-                start_time            = str(txn_data.get('Start Time', '')),
-                end_time              = str(txn_data.get('End Time', '')),
-                log_length            = len(transaction_log),
-                response_length       = len(raw_response),
-                analysis_time_seconds = analysis_duration,
-                llm_analysis          = raw_response
-            )
-            logger.info(f"Ollama metadata stored for txn: {transaction_id}")
-            # -------------------------------------------------------
-            return structured_response
-
-        except ImportError:
-            logger.error("Ollama is not installed")
-            raise HTTPException(
-                status_code=500,
-                detail="Ollama is not installed. Please install it with: pip install ollama"
-            )
-        except Exception as e:
-            logger.exception(f"LLM analysis error for transaction {transaction_id}: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"LLM analysis failed: {str(e)}"
-            )
 
     except HTTPException:
         raise
+    except ValueError as ve:
+        logger.error(f"Validation error for transaction {request.transaction_id}: {ve}")
+        raise HTTPException(status_code=422, detail=str(ve))
+    except ImportError:
+        logger.error("Ollama is not installed")
+        raise HTTPException(
+            status_code=500,
+            detail="Ollama is not installed. Please install it with: pip install ollama"
+        )
     except Exception as e:
-        logger.exception(f"Analysis failed for transaction {transaction_id}: {str(e)}")
+        logger.exception(f"Analysis failed for transaction {request.transaction_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Analysis failed: {str(e)}"

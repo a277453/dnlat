@@ -572,20 +572,43 @@ class LogPreprocessorService:
 
     @staticmethod
     def _build_jrn_events(t: dict) -> List[str]:
+        # Events are ordered chronologically so the LLM can correctly
+        # sequence what happened. Order matters — specifically:
+        #   1. Card ejected (card is gone BEFORE any cash retract)
+        #   2. Dispense OK (cash was successfully dispensed)
+        #   3. Present failed / timeout (customer did not collect cash)
+        #   4. Device errors (on CASH_DISPENSER — not card-related)
+        #   5. CASH retract (explicit label — not card retract)
+        # Without this ordering the LLM conflates cash retract with card retract.
         events = []
-        if t.get("dispense_ok"):     events.append("Dispense OK")
-        if t.get("retract_counter"): events.append(f"Retract counter {t['retract_counter']}")
-        if t.get("present_timeout"): events.append("Present timeout")
-        if t.get("present_failed"):  events.append("Present failed")
+        # Step 1 — Card gone first
+        if t.get("card_ejected"):
+            events.append("Card ejected and taken by customer")
+        # Step 2 — Dispense outcome
+        if t.get("dispense_ok"):
+            events.append("Dispense OK — cash successfully dispensed to customer slot")
+        # Step 3 — Present failure (customer didn't collect)
+        if t.get("present_failed"):
+            events.append("Present failed — customer did not collect dispensed cash")
+        if t.get("present_timeout"):
+            events.append("Present timeout — cash not collected within time limit")
+        # Step 4 — Device errors (CASH_DISPENSER — not card device)
         for err in t.get("device_errors", []):
             events.append(f"DeviceError {err['device']} nr={err['error_nr']} class={err['err_class']}")
+        # Step 5 — CASH retract (explicit label to prevent card/cash confusion)
+        if t.get("retract_counter"):
+            events.append(
+                f"CASH retracted (not card — card was already taken) — "
+                f"Retract counter {t['retract_counter']}"
+            )
+        # Remaining events
         if t.get("host_cancelled"):
             reason = t.get("host_decline_reason", "")
             events.append("Host cancelled" + (f": {reason}" if reason else ""))
-        if t.get("cancelled"):       events.append("Customer cancelled")
-        if t.get("emv_declined"):    events.append("EMV chip declined transaction")
+        if t.get("cancelled"):         events.append("Customer cancelled")
+        if t.get("emv_declined"):      events.append("EMV chip declined transaction")
         if t.get("emv_aac_requested"): events.append("AAC second cryptogram requested")
-        if t.get("txn_timeout"):     events.append("Transaction timeout")
+        if t.get("txn_timeout"):       events.append("Transaction timeout")
         return events
 
     @staticmethod
@@ -606,7 +629,7 @@ class LogPreprocessorService:
             "amount",
             "currency",
             "notes",
-            "stan",
+            "stan",           # host audit trace number — not diagnostic
             "state",
             "end_state",
         }

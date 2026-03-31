@@ -2907,17 +2907,46 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
                 )
             )
 
-        # Filter to only the record matching this transaction_id so neighbouring
-        # transactions that share the same raw log block are not sent to the LLM.
-        ej_records = [
-            r for r in ej_records_all
-            if r.get("txn_number") == transaction_id
-        ]
-        if not ej_records:
-            # txn_number may be absent in some log formats — fall back to first record
+        # ── Filter to the record matching this transaction_id ─────────────
+        # Transaction IDs are in filenameHHMMSS format (e.g. "20250910123826").
+        # preprocess_ej stores ts_start as "HH:MM:SS" (e.g. "12:38:26").
+        # We extract the last 6 chars of the ID and convert to HH:MM:SS
+        # to find the correct record — matching on txn_number would fail
+        # because preprocess_ej uses the original log number (e.g. "0002"),
+        # not the new filenameHHMMSS format.
+        ts_from_id = None
+        if len(transaction_id) >= 6:
+            raw_ts = transaction_id[-6:]  # last 6 chars = HHMMSS
+            try:
+                ts_from_id = f"{raw_ts[0:2]}:{raw_ts[2:4]}:{raw_ts[4:6]}"
+            except Exception:
+                ts_from_id = None
+
+        if ts_from_id:
+            ej_records = [
+                r for r in ej_records_all
+                if r.get("ts_start") == ts_from_id
+            ]
+            logger.info(
+                f" Filtering EJ records by ts_start='{ts_from_id}' "
+                f"(derived from txn_id '{transaction_id}'): "
+                f"{len(ej_records)} match(es) from {len(ej_records_all)} total"
+            )
+        else:
+            ej_records = []
             logger.warning(
-                f" No EJ record matched txn_number='{transaction_id}'; "
-                f"falling back to first parsed record"
+                f" Could not derive ts_start from transaction_id '{transaction_id}'"
+            )
+
+        if not ej_records:
+            # No record matched the timestamp — fall back to first record in file
+            # and warn so it's visible in logs
+            logger.warning(
+                f" No EJ record matched ts_start='{ts_from_id}' "
+                f"for transaction '{transaction_id}'; "
+                f"falling back to first parsed record. "
+                f"Available ts_start values: "
+                f"{[r.get('ts_start') for r in ej_records_all]}"
             )
             ej_records = [ej_records_all[0]]
 

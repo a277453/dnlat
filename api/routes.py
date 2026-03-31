@@ -1615,7 +1615,7 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
         logger.debug(f"Fetching session data for session {session_id}")
         session_data = session_service.get_session(session_id)
         transaction_data = session_data.get('transaction_data')
-        
+            
         if not transaction_data:
             logger.error("No transaction data found in session.")
             raise HTTPException(
@@ -3011,6 +3011,8 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
     
 # Add this Pydantic model near the top with other models
 class FeedbackSubmission(BaseModel):
+    model_config = {'protected_namespaces': ()}
+    
     transaction_id: str
     rating: int
     alternative_cause: str

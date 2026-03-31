@@ -28,17 +28,15 @@ STRICT RULES (NON-NEGOTIABLE):
    - End-state 'E' → Early termination / customer cancel
    - End-state 'N' → Normal end (may still be incomplete if timeout occurred)
 
-5. If cash is successfully dispensed and presented, a subsequent customer timeout MUST NOT be classified as Failure.
-
-6. If cash or notes are:
+5. If cash or notes are:
    - Dispensed or presented → acknowledge completion of dispense
    - Identified but not matching claimed amount → FLAG AS ANOMALY
 
-7. If a transaction ends before PIN entry or function selection:
+6. If a transaction ends before PIN entry or function selection:
    - State that the transaction terminated early
    - Do NOT speculate about card validity or activation
 
-8. If logs are insufficient to determine cause:
+7. If logs are insufficient to determine cause:
    - Explicitly state: "Insufficient log data to determine root cause"
 
 OUTPUT FORMAT (MANDATORY):
@@ -73,13 +71,11 @@ If no anomaly or issue is detected, explicitly state:
 "No anomaly detected."
 """
 
-# Deterministic behavior for log analysis
-PARAMETER temperature 0.2
-PARAMETER top_p 0.85
-PARAMETER repeat_penalty 1.1
-PARAMETER num_ctx 8192
 
-MESSAGE user "
+MESSAGE user
+ATM_ID=DN_ATM_2043
+LOG:
+********************************************************
  16:22:49  3207  
  16:22:49  3201 Transaction no. 'N200VFL0020250404000401162249' started
  16:22:49  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
@@ -95,9 +91,10 @@ MESSAGE user "
  16:23:41  3209 Card successfully presented to customer
  16:23:50  3220 Transaction cancelled. Customer timeout.
  16:23:50  3202 Transaction no. 'N200VFL0020250404000401162249' finished, state 'T', end-state'N'
-"
+********************************************************
 
-MESSAGE assistant """
+MESSAGE assistant
+---
 Transaction Summary:
 - ATM ID: DN_ATM_0421
 - Transaction Type: Cash Deposit
@@ -118,9 +115,12 @@ Recommended Actions:
 
 Confidence Level:
 - High
-"""
+---
 
-MESSAGE user "
+MESSAGE user
+ATM_ID=DN_ATM_2043
+LOG:
+********************************************************
  16:24:14  3207  
  16:24:14  3201 Transaction no. 'N200VFL0020250404000501162414' started
  16:24:15  3206 Card sequence no. '', class '4', table '4', pan '437551XXXXXX9017=1902226XXXXXX'
@@ -131,9 +131,10 @@ MESSAGE user "
  16:25:10  3209 Card successfully presented to customer
  16:25:16  3220 Transaction cancelled. Customer timeout.
  16:25:16  3202 Transaction no. 'N200VFL0020250404000501162414' finished, state 'T', end-state'E'
-"
+********************************************************
 
-MESSAGE assistant """
+MESSAGE assistant
+---
 Transaction Summary:
 - ATM ID: DN_ATM_0421
 - Transaction Type: Cash Withdrawal
@@ -156,16 +157,20 @@ Recommended Actions:
 
 Confidence Level:
 - Medium
-"""
+---
 
-MESSAGE user "
+MESSAGE user
+ATM_ID=DN_ATM_2043
+LOG:
+********************************************************
  19:25:18  3201 Transaction no. 'N200VFL0020250404003801192518' started
  19:25:22  3209 Card successfully presented to customer
  19:25:27  3220 Transaction cancelled. Customer timeout.
  19:25:28  3202 Transaction no. 'N200VFL0020250404003801192518' finished, state 'T', end-state'E'
-"
+********************************************************
 
-MESSAGE assistant """
+MESSAGE assistant
+---
 Transaction Summary:
 - ATM ID: DN_ATM_0421
 - Transaction Type: Unknown
@@ -191,5 +196,10 @@ Recommended Actions:
 
 Confidence Level:
 - Medium
-"""
+---
 
+# Deterministic behavior for log analysis
+PARAMETER temperature 0.2
+PARAMETER top_p 0.85
+PARAMETER repeat_penalty 1.1
+PARAMETER num_ctx 8192

@@ -2124,7 +2124,8 @@ def render_transaction_stats():
                 # Get source files information
                 sources_response = requests.get(
                     f"{API_BASE_URL}/get-transactions-with-sources",
-                    timeout=30
+                    timeout=30,
+                    headers=get_auth_headers()
                 )
                 
                 if sources_response.status_code == 200:
@@ -2148,7 +2149,8 @@ def render_transaction_stats():
                             filter_response = requests.post(
                                 f"{API_BASE_URL}/filter-transactions-by-sources",
                                 json={"source_files": selected_sources},
-                                timeout=30
+                                timeout=30,
+                                headers=get_auth_headers()
                             )
                             
                             if filter_response.status_code == 200:
@@ -2566,7 +2568,8 @@ def render_registry_compare():
                         response = requests.post(
                             f"{API_BASE_URL}/extract-registry-from-zip",
                             files=files,
-                            timeout=120
+                            timeout=120,
+                            headers=get_auth_headers()
                         )
 
                         if response.status_code == 200:
@@ -2749,7 +2752,8 @@ def render_transaction_comparison():
         try:
             sources_response = requests.get(
                 f"{API_BASE_URL}/get-transactions-with-sources",
-                timeout=30
+                timeout=30,
+                headers=get_auth_headers()
             )
             
             if sources_response.status_code == 200:
@@ -2806,7 +2810,8 @@ def render_transaction_comparison():
         # Get source files
         sources_response = requests.get(
             f"{API_BASE_URL}/get-transactions-with-sources",
-            timeout=30
+            timeout=30,
+            headers=get_auth_headers()
         )
         
         if sources_response.status_code != 200:
@@ -2842,7 +2847,8 @@ def render_transaction_comparison():
         filter_response = requests.post(
             f"{API_BASE_URL}/filter-transactions-by-sources",
             json={"source_files": selected_sources},
-            timeout=30
+            timeout=30,
+            headers=get_auth_headers()
         )
         
         if filter_response.status_code != 200:
@@ -3374,7 +3380,8 @@ def render_ui_flow_individual():
         try:
             sources_response = requests.get(
                 f"{API_BASE_URL}/get-transactions-with-sources",
-                timeout=30
+                timeout=30,
+                headers=get_auth_headers()
             )
             
             if sources_response.status_code == 200:
@@ -3433,7 +3440,8 @@ def render_ui_flow_individual():
         # STEP 3: Get source files again after potential analysis
         sources_response = requests.get(
             f"{API_BASE_URL}/get-transactions-with-sources",
-            timeout=30
+            timeout=30,
+            headers=get_auth_headers()
         )
         
         if sources_response.status_code != 200:
@@ -3472,7 +3480,8 @@ def render_ui_flow_individual():
         filter_response = requests.post(
             f"{API_BASE_URL}/filter-transactions-by-sources",
             json={"source_files": selected_sources},
-            timeout=30
+            timeout=30,
+            headers=get_auth_headers()
         )
         
         if filter_response.status_code != 200:
@@ -4209,7 +4218,8 @@ def render_consolidated_flow():
         try:
             sources_response = requests.get(
                 f"{API_BASE_URL}/get-transactions-with-sources",
-                timeout=30
+                timeout=30,
+                headers=get_auth_headers()
             )
             
             if sources_response.status_code == 200:
@@ -4255,7 +4265,8 @@ def render_consolidated_flow():
         # STEP 3: Get source files
         sources_response = requests.get(
             f"{API_BASE_URL}/get-transactions-with-sources",
-            timeout=30
+            timeout=30,
+            headers=get_auth_headers()
         )
         
         if sources_response.status_code != 200:
@@ -4412,7 +4423,8 @@ RAISES:
         try:
             sources_response = requests.get(
                 f"{API_BASE_URL}/get-transactions-with-sources",
-                timeout=30
+                timeout=30,
+                headers=get_auth_headers()
             )
             
             if sources_response.status_code == 200:
@@ -4458,7 +4470,8 @@ RAISES:
         # STEP 3: Get source files and transactions
         sources_response = requests.get(
             f"{API_BASE_URL}/get-transactions-with-sources",
-            timeout=30
+            timeout=30,
+            headers=get_auth_headers()
         )
         
         if sources_response.status_code != 200:
@@ -4790,11 +4803,16 @@ RAISES:
                 col1, col2, col3 = st.columns([2, 2, 3])
                 
                 with col1:
+                    _role = st.session_state.get("role", "USER")
+                    _admin_blocked = _role == "ADMIN"
                     can_submit = questions_answered > 0 and selected_user != "Select User"
+
+                    if _admin_blocked:
+                        st.info(" ADMIN role cannot submit feedback.")
 
                     if st.button("Submit Feedback", 
                             key=f"{feedback_key_prefix}_submit",
-                            disabled=not can_submit,
+                            disabled=not can_submit or _admin_blocked,
                             type="primary",
                             use_container_width=True):
                         
@@ -4803,56 +4821,53 @@ RAISES:
                         elif selected_user == "Select User":
                             st.error("Please select your name and email.")
                         else:
-                            # Only USER role can submit feedback to DB
-                            if st.session_state.get("role") != "USER":
-                                st.warning("Only users can submit feedback. Admins are not allowed.")
-                            else:
-                                # Submit feedback to API
-                                with st.spinner("Submitting feedback..."):
-                                    try:
-                                        result = st.session_state.analysis_result
+                            # Submit feedback to API
+                            with st.spinner("Submitting feedback..."):
+                                try:
+                                    result = st.session_state.analysis_result
+                                    
+                                    feedback_data = {
+                                        "transaction_id": selected_txn_id,
+                                        "rating": st.session_state.get(f"{feedback_key_prefix}_rating", 3),
+                                        "alternative_cause": st.session_state.get(f"{feedback_key_prefix}_alternative", anomaly_categories[0]),
+                                        "comment": st.session_state.get(f"{feedback_key_prefix}_comment", ""),
+                                        "user_name": st.session_state.get("username"),
+                                        "user_email": user_email,
+                                        "model_version": result.get("metadata", {}).get("model", "unknown"),
+                                        "original_llm_response": result.get('analysis', '')
+                                    }
+                                    
+                                    response = requests.post(
+                                        f"{API_BASE_URL}/submit-llm-feedback",
+                                        json=feedback_data,
+                                        headers=get_auth_headers(),
+                                        timeout=30
+                                    )
+                                    
+                                    if response.status_code == 200:
+                                        result_data = response.json()
+                                        st.success(result_data['message'])
                                         
-                                        feedback_data = {
-                                            "transaction_id": selected_txn_id,
-                                            "rating": st.session_state.get(f"{feedback_key_prefix}_rating", 3),
-                                            "alternative_cause": st.session_state.get(f"{feedback_key_prefix}_alternative", anomaly_categories[0]),
-                                            "comment": st.session_state.get(f"{feedback_key_prefix}_comment", ""),
-                                            "user_name": st.session_state.get("username"),
-                                            "user_email": user_email,
-                                            "model_version": result.get("metadata", {}).get("model", "unknown"),
-                                            "original_llm_response": result.get('analysis', '')
-                                        }
+                                        # Clear form
+                                        keys_to_clear = [
+                                            f"{feedback_key_prefix}_rating",
+                                            f"{feedback_key_prefix}_alternative",
+                                            f"{feedback_key_prefix}_comment",
+                                            f"{feedback_key_prefix}_user_select"
+                                        ]
+                                        for key in keys_to_clear:
+                                            if key in st.session_state:
+                                                del st.session_state[key]
                                         
-                                        response = requests.post(
-                                            f"{API_BASE_URL}/submit-llm-feedback",
-                                            json=feedback_data,
-                                            timeout=30
-                                        )
+                                        import time
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        error_detail = response.json().get('detail', 'Failed to submit')
+                                        st.error(f"  {error_detail}")
                                         
-                                        if response.status_code == 200:
-                                            result_data = response.json()
-                                            st.success(result_data['message'])
-                                            
-                                            # Clear form
-                                            keys_to_clear = [
-                                                f"{feedback_key_prefix}_rating",
-                                                f"{feedback_key_prefix}_alternative",
-                                                f"{feedback_key_prefix}_comment",
-                                                f"{feedback_key_prefix}_user_select"
-                                            ]
-                                            for key in keys_to_clear:
-                                                if key in st.session_state:
-                                                    del st.session_state[key]
-                                            
-                                            import time
-                                            time.sleep(1)
-                                            st.rerun()
-                                        else:
-                                            error_detail = response.json().get('detail', 'Failed to submit')
-                                            st.error(f"  {error_detail}")
-                                            
-                                    except Exception as e:
-                                        st.error(f"  Error submitting feedback: {str(e)}")
+                                except Exception as e:
+                                    st.error(f"  Error submitting feedback: {str(e)}")
 
                 with col2:
                     if st.button("Clear Form", 
@@ -4881,7 +4896,7 @@ RAISES:
     # ============================================
     # VIEW OLD ANALYSIS FROM DB  (ADMIN ONLY)
     # ============================================
-    if st.session_state.get("role") == "ADMIN":
+    if st.session_state.get("role") in ("ADMIN", "DEV_MODE"):
         st.markdown("---")
         st.markdown("###  View Old Analysis from DB")
         st.caption("Enter a Transaction ID and employee code to retrieve a previously stored analysis.")
@@ -4911,7 +4926,8 @@ RAISES:
                             "transaction_id": db_txn_id.strip(),
                             "employee_code":  db_employee_code.strip(),
                         },
-                        timeout=10
+                        timeout=10,
+                        headers=get_auth_headers()
                     )
                     if response.status_code == 200:
                         data = response.json()
@@ -4925,7 +4941,7 @@ RAISES:
                     st.error(f"Failed to connect to API: {str(e)}")
 
         # ============================================
-        # VIEW FEEDBACK FROM DB  (ADMIN ONLY)
+        # VIEW FEEDBACK FROM DB  (ADMIN + DEV_MODE ONLY)
         # ============================================
         st.markdown("---")
         st.markdown("###  View Feedback from DB")
@@ -4948,7 +4964,8 @@ RAISES:
                             "transaction_id": fb_txn_id.strip(),
                             "user_name":      st.session_state.get("username")
                         },
-                        timeout=10
+                        timeout=10,
+                        headers=get_auth_headers()
                     )
                     if response.status_code == 200:
                         data = response.json()
@@ -5003,7 +5020,8 @@ RAISES:
         try:
             sources_response = requests.get(
                 f"{API_BASE_URL}/get-transactions-with-sources",
-                timeout=30
+                timeout=30,
+                headers=get_auth_headers()
             )
             
             if sources_response.status_code == 200:
@@ -5049,7 +5067,8 @@ RAISES:
         # Get source files and transactions
         sources_response = requests.get(
             f"{API_BASE_URL}/get-transactions-with-sources",
-            timeout=30
+            timeout=30,
+            headers=get_auth_headers()
         )
         
         if sources_response.status_code != 200:
@@ -5073,7 +5092,8 @@ RAISES:
             file_categories_response = requests.get(
                 f"{API_BASE_URL}/debug-session",
                 params={"session_id": "current_session"},
-                timeout=30
+                timeout=30,
+                headers=get_auth_headers()
             )
             
             if file_categories_response.status_code == 200:
@@ -5855,7 +5875,8 @@ RAISES:
                     response = requests.post(
                         f"{API_BASE_URL}/extract-files/",
                         files=files_payload,
-                        timeout=120
+                        timeout=120,
+                        headers=get_auth_headers()
                     )
                     
                     
@@ -6033,7 +6054,7 @@ def show_main_app():
     uploaded_file = st.file_uploader(
         "Select ZIP Archive",
         type=['zip'],
-        help="Upload a ZIP file containing diagnostic files (max 500 MB)",
+        help="Upload a ZIP file containing diagnostic files (max 200 MB)",
         key="zip_uploader"
     )
     # Check if file was deleted (uploader is now empty but we had processed a file before)
@@ -6091,7 +6112,8 @@ def show_main_app():
                     response = requests.post(
                         f"{API_BASE_URL}/process-zip", 
                         files=files,
-                        timeout=300  # Increased to 5 minutes for larger files
+                        timeout=300,  # Increased to 5 minutes for larger files
+                        headers=get_auth_headers()
                     )
                     _t_elapsed = round(time.time() - _t_start, 2)
                     

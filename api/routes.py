@@ -1255,7 +1255,7 @@ async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Q
         }
     }
 
-@router.post("/analyze-customer-journals", dependencies=[Depends(require_elevated_role)])
+@router.post("/analyze-customer-journals")
 async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
@@ -1435,7 +1435,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             status_code=500,
             detail=f"Analysis failed: {str(e)}"
         )
-@router.get("/get-transactions-with-sources", dependencies=[Depends(require_elevated_role)])
+@router.get("/get-transactions-with-sources")
 async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
@@ -1522,7 +1522,7 @@ async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_
         )
 
 
-@router.post("/filter-transactions-by-sources", dependencies=[Depends(require_elevated_role)])
+@router.post("/filter-transactions-by-sources")
 async def filter_transactions_by_sources(source_files: List[str] = Body(..., embed=True),session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
@@ -3082,7 +3082,19 @@ class FeedbackSubmission(BaseModel):
     original_llm_response: str
 
 @router.post("/submit-llm-feedback")
-async def submit_llm_feedback(feedback: FeedbackSubmission,session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def submit_llm_feedback(feedback: FeedbackSubmission, session_id: str = Query(default=CURRENT_SESSION_ID), authorization: str = Header(default=None)):
+    from modules.login import decode_access_token
+    if authorization and authorization.startswith("Bearer "):
+        payload = decode_access_token(authorization.split(" ", 1)[1])
+        if payload.get("role") == "ADMIN":
+            logger.warning(
+                "FEEDBACK [403] — user='%s' role='ADMIN' attempted to submit feedback (blocked)",
+                payload.get("sub"),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="ADMIN role is not permitted to submit feedback.",
+            )
     """
 FUNCTION:
     submit_llm_feedback
@@ -4122,7 +4134,7 @@ def get_counter_column_descriptions():
 # GET ANALYSIS RECORDS
 # ============================================
 
-@router.get("/get-analysis-records")
+@router.get("/get-analysis-records", dependencies=[Depends(require_elevated_role)])
 async def fetch_analysis_records(
     transaction_id: str = Query(..., description="Transaction ID to look up"),
     employee_code:  str = Query(..., description="Employee code of logged in user"),
@@ -4216,7 +4228,7 @@ async def fetch_analysis_records(
 # GET FEEDBACK RECORDS
 # ============================================
 
-@router.get("/get-feedback-records")
+@router.get("/get-feedback-records", dependencies=[Depends(require_elevated_role)])
 async def fetch_feedback_records(
     transaction_id: str = Query(..., description="Transaction ID"),
     user_name:      str = Query(..., description="Logged in username")

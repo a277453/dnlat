@@ -1,5 +1,5 @@
 from uuid import uuid4
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, status, Depends
 from modules.extraction import ZipExtractionService
 from modules.categorization import CategorizationService
 from modules.processing import ProcessingService
@@ -204,6 +204,24 @@ async def debug_zip_members(file: UploadFile = File(...)):
 global CURRENT_SESSION_ID
 CURRENT_SESSION_ID =str(uuid4())
 
+# ── Session-ID resolver ───────────────────────────────────────
+# so that session is not passed as a string like it previously was.
+_SESSION_SENTINELS = {"current_session", "CURRENT_SESSION_ID", "", None}
+
+def _resolve_session_id(session_id) -> str:
+    """
+    Resolve a client-supplied session_id to the real UUID.
+
+    Accepts:
+        - None / empty string  → returns CURRENT_SESSION_ID
+        - "current_session"    → returns CURRENT_SESSION_ID  (frontend sentinel)
+        - any other string     → returned as-is
+    """
+    if session_id in _SESSION_SENTINELS:
+        return CURRENT_SESSION_ID
+    return session_id
+# ──────────────────────────────────────────────────────────────────────────────
+
 # Global variable to track processed files directory (for registry endpoints)
 PROCESSED_FILES_DIR = None
 
@@ -271,7 +289,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
         # ------------------ FILE READ TIMER ------------------
         t_file_start = time.perf_counter()
-        logger.debug(" Reading uploaded file ")
+        logger.debug("Reading uploaded file ")
 
         zip_content = await file.read()  # read only once
         t_file_end = time.perf_counter()
@@ -280,7 +298,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         logger.debug(f"FILE READ TIME: {t_file_end - t_file_start:.4f} s")
 
         # ------------------ ZIP EXTRACTION TIMER ------------------
-        logger.info("  Extracting ZIP ...")
+        logger.info("Extracting ZIP ...")
         t_zip_start = time.perf_counter()
 
         try:
@@ -303,7 +321,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
         # ------------------ NESTED ZIP EXTRACTION ------------------
 		# now this works directly from the ZipExtractionService.extract_zip(). function so that all the files are stored in their respective folder in Temp -> dn_extracts
-        logger.info(" STEP 3: Nested ZIP files from ZipExtractionService.")
+        logger.info("STEP 3: Nested ZIP files from ZipExtractionService.")
         t_nested_zip_start = time.perf_counter()
 
         nested_zip_files = [p for p in Path(extract_path).rglob('*.zip')]
@@ -381,12 +399,14 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             return p.read_text(encoding='latin1', errors='replace')
 
         # --- REGISTRY ---
+        # Base64-encode bytes before storing so the session remains JSON-serialisable.
+        import base64 as _b64
         registry_contents: dict = {}
         for path_str in file_categories.get('registry_files', []):
             p = Path(path_str)
             try:
-                registry_contents[p.name] = p.read_bytes()
-                logger.debug(f"[REGISTRY] Mapped content to filename: {p.name}")
+                registry_contents[p.name] = _b64.b64encode(p.read_bytes()).decode('utf-8')
+                logger.debug(f"[REGISTRY] Mapped and base64-encoded content for: {p.name}")
             except Exception as e:
                 logger.error(f"[REGISTRY] failed to load {p.name}: {e}")
 
@@ -500,7 +520,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
 
         # -----------------------------------------------------------
-        # ⏱️ END TOTAL TIME MEASUREMENT
+        #  END TOTAL TIME MEASUREMENT
         # -----------------------------------------------------------
         end_time = time.perf_counter()
         total_time = round(end_time - start_time, 2)
@@ -510,6 +530,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         # Attach processing time to response dict so frontend can display it
         result_dict = result.dict() if hasattr(result, "dict") else dict(result)
         result_dict["processing_time_seconds"] = total_time
+        result_dict["session_id"] = CURRENT_SESSION_ID   
         return result_dict
     except HTTPException:
         raise   
@@ -566,11 +587,36 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
             )
 
         zip_content = await file.read()
-        logger.debug(f"Read {len(zip_content)} bytes from uploaded file: {file.filename}")  
+        logger.debug(f"Read {len(zip_content)} bytes from uploaded file: {file.filename}")
 
         acu_logs = []
-        acu_files = extract_from_zip_bytes(zip_content, acu_logs, target_prefixes=('jdd', 'x3'))
-        logger.debug(f"ACU extraction logs: {acu_logs}")  
+
+        # --- Drill into nested acu.zip (mirrors /process-zip logic) ---
+        # The uploaded package wraps ACU files inside an inner acu.zip.
+        # extract_from_zip_bytes only scans the top level of whatever bytes
+        # you hand it, so passing the outer ZIP would never find jdd*/x3* files.
+        # We locate acu.zip inside the outer archive first, then pass its bytes.
+        acu_zip_bytes = None
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_content)) as outer_zf:
+                acu_candidates = [
+                    name for name in outer_zf.namelist()
+                    if os.path.basename(name).lower() == 'acu.zip'
+                ]
+                if acu_candidates:
+                    acu_zip_bytes = outer_zf.read(acu_candidates[0])
+                    logger.info(f"Found nested acu.zip at: {acu_candidates[0]}")
+                else:
+                    logger.info("No nested acu.zip found — treating uploaded ZIP as the ACU archive directly")
+        except zipfile.BadZipFile as e:
+            logger.error(f"BadZipFile when scanning for nested acu.zip in {file.filename}: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid ZIP file: {e}")
+
+        # Use inner acu.zip bytes when found; fall back to the outer ZIP for
+        # flat packages that already contain jdd*/x3* files at the top level.
+        target_bytes = acu_zip_bytes if acu_zip_bytes else zip_content
+        acu_files = extract_from_zip_bytes(target_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
+        logger.debug(f"ACU extraction logs: {acu_logs}")
 
         if not acu_files:
             logger.info(f"No ACU files found in uploaded ZIP: {file.filename}")  
@@ -589,6 +635,8 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
             "message": f"Successfully extracted {len(acu_files)} file(s)"
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         logger.error(f"Unexpected error during ACU extraction for file {file.filename}: {e}")  
@@ -756,7 +804,7 @@ async def extract_registry_from_zip(file: UploadFile = File(...)):
         )
 
 @router.get("/get-registry-contents")
-async def get_registry_contents(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_registry_contents(session_id: Optional[str] = Query(default=None)):
     """
 FUNCTION: get_registry_contents
 
@@ -782,25 +830,28 @@ RAISES:
         - 404 : If the session with the given ID does not exist
         - 500 : For any other unexpected server error during retrieval
 """
+    # Resolve values ("current_session", None, "") → real UUID
+    session_id = _resolve_session_id(session_id)
 
     try:
         if not session_service.session_exists(session_id):
             raise HTTPException(status_code=404, detail="No session found")
         
         session_data = session_service.get_session(session_id)
-        registry_contents = session_data.get('registry_contents', {})
+
         
         # Convert bytes to base64 for JSON serialization
         import base64
+        raw_contents = session_data.get('registry_contents', {})
         encoded_contents = {}
-        for filename, content_bytes in registry_contents.items():
-            if isinstance(content_bytes, bytes):
-                encoded_contents[filename] = base64.b64encode(content_bytes).decode('utf-8')
+        for filename, content in raw_contents.items():
+            if isinstance(content, bytes):
+                encoded_contents[filename] = base64.b64encode(content).decode('utf-8')
             else:
-                encoded_contents[filename] = content_bytes
-        
-        logger.info(f"Serving {len(encoded_contents)} registry files from session")
-        
+                encoded_contents[filename] = content   # already a base64 string
+
+        logger.info(f"Serving {len(encoded_contents)} registry files from session '{session_id}'")
+
         return {
             "registry_contents": encoded_contents,
             "count": len(encoded_contents)
@@ -817,7 +868,7 @@ RAISES:
 # ============================================
 
 @router.get("/get-acu-files")
-async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_acu_files(session_id: str = Query(default=None)):
     """
     FUNCTION:
         get_acu_files
@@ -848,6 +899,7 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
             - 404 if session does not exist
             - 500 if unexpected errors occur during retrieval
     """
+    session_id = _resolve_session_id(session_id)
     try:
         if not session_service.session_exists(session_id):
             logger.warning(f"No session found for session_id: {session_id}")
@@ -915,7 +967,7 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
         )
 
 @router.post("/parse-acu-files")
-async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str = Query(default=None)):
     """
     FUNCTION:
         parse_acu_files
@@ -953,6 +1005,7 @@ async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str
             - 400 if no ACU files are found in the session
             - 500 if any unexpected error occurs during parsing
     """
+    session_id = _resolve_session_id(session_id)
     try:
         if not session_service.session_exists(session_id):
             logger.warning(f"No session found for session_id: {session_id}")
@@ -1057,7 +1110,7 @@ async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str
 
 
 @router.get("/available-file-types", response_model=AvailableFileTypesResponse)
-async def get_available_file_types(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_available_file_types(session_id: str = Query(default=None)):
     """
     FUNCTION:
         get_available_file_types
@@ -1094,6 +1147,7 @@ async def get_available_file_types(session_id: str = Query(default=CURRENT_SESSI
             - 404 if the session does not exist
             - 404 if no file categories are found in the session
     """
+    session_id = _resolve_session_id(session_id)
     logger.info(f" Received request: /available-file-types for session_id: {session_id}") 
 
     # Check if session exists
@@ -1136,7 +1190,7 @@ async def get_available_file_types(session_id: str = Query(default=CURRENT_SESSI
     )
 
 @router.post("/select-file-type")
-async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Query(default=None)):
     """
     FUNCTION:
         get_available_file_types
@@ -1173,6 +1227,7 @@ async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Q
             - 404 if the session does not exist
             - 404 if no file categories are found in the session
     """
+    session_id = _resolve_session_id(session_id)
     logger.info(f" Received request: /select-file-type for session_id: {session_id}")  
 
     # Check if session exists
@@ -1195,6 +1250,7 @@ async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Q
         )
 
     # Get selected file types - convert enum to string
+    session_id = _resolve_session_id(session_id)
     try:
         selected_types = [ft.value if hasattr(ft, 'value') else str(ft) for ft in request.file_types]
         logger.debug(f"Selected file types for session_id {session_id}: {selected_types}")  
@@ -1266,7 +1322,7 @@ async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Q
     }
 
 @router.post("/analyze-customer-journals")
-async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def analyze_customer_journals(session_id: str = Query(default=None)):
     """
     FUNCTION:
         analyze_customer_journals
@@ -1301,6 +1357,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             - 400 if no transactions could be extracted
             - 500 for unexpected errors during processing
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Starting customer journal analysis for session: {session_id}")
         
@@ -1401,17 +1458,16 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             logger.info(f"   Sample 'Source File' value: '{sample.get('Source File', 'KEY NOT FOUND')}'")
         
         # Store in session (remove duplicates from source_files)
-        unique_source_files = list(set(source_files))
-        unique_source_files.sort()
+        unique_source_files = sorted(set(source_files))
 
-        # DEBUG: Print what we're about to store
         logger.info(f" Unique source files being stored: {unique_source_files}")
         logger.info(f" Total source files count: {len(unique_source_files)}")
 
         session_service.update_session(session_id, 'transaction_data', transaction_records)
         session_service.update_session(session_id, 'source_files', unique_source_files)
         session_service.update_session(session_id, 'source_file_map', source_file_map)
-        
+
+        # ── Statistics ────────────────────────────────────────────────────────
         stats = []
         for txn_type in combined_df['Transaction Type'].unique():
             type_df = combined_df[combined_df['Transaction Type'] == txn_type]
@@ -1421,10 +1477,10 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             
             stats.append({
                 'Transaction Type': txn_type,
-                'Total': total,
-                'Successful': successful,
-                'Unsuccessful': unsuccessful,
-                'Success Rate': f"{(successful/total*100):.1f}%" if total > 0 else "0%"
+                'Total':            total,
+                'Successful':       successful,
+                'Unsuccessful':     unsuccessful,
+                'Success Rate':     f"{(successful / total * 100):.1f}%" if total > 0 else "0%"
             })
         
         logger.info("Customer journal analysis completed successfully")
@@ -1448,7 +1504,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             detail=f"Analysis failed: {str(e)}"
         )
 @router.get("/get-transactions-with-sources")
-async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_transactions_with_sources(session_id: str = Query(default=None)):
     """
     FUNCTION:
         get_transactions_with_sources
@@ -1479,6 +1535,7 @@ async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_
             - 404 if the session does not exist
             - 500 for unexpected errors while retrieving data
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f"Fetching transactions with source mapping for session: {session_id}")
         logger.debug("Entered /get-transactions-with-sources route")
@@ -1535,7 +1592,7 @@ async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_
 
 
 @router.post("/filter-transactions-by-sources")
-async def filter_transactions_by_sources(source_files: List[str] = Body(..., embed=True),session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def filter_transactions_by_sources(source_files: List[str] = Body(..., embed=True),session_id: str = Query(default=None)):
     """
     FUNCTION:
         filter_transactions_by_sources
@@ -1570,6 +1627,7 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
             - 400 if transaction data is missing in the session
             - 500 for unexpected errors during filtering
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Filtering transactions by {len(source_files)} source file(s)")
         logger.info(f" Requested source files: {source_files}")
@@ -1637,7 +1695,7 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
         )
 
 @router.get("/transaction-statistics")
-async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_transaction_statistics(session_id: str = Query(default=None)):
     """
     FUNCTION:
         get_transaction_statistics
@@ -1676,6 +1734,7 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
             - 500 for unexpected errors during statistics generation
     """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f"Request received: Get transaction statistics for session {session_id}")
         if not session_service.session_exists(session_id):
@@ -1744,7 +1803,7 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
         )
 
 @router.post("/compare-transactions-flow")
-async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body(...),session_id: str = Query(default=None)):
     """
     FUNCTION:
         compare_transactions_flow
@@ -1802,6 +1861,7 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
         - Provides timing/duration analysis if start and end times are available.
         - Handles missing or empty UI journals gracefully.
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Comparing transactions: {txn1_id} vs {txn2_id}")
 
@@ -2105,7 +2165,7 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
 
 
 @router.get("/current-selection")
-async def get_current_selection(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_current_selection(session_id: str = Query(default=None)):
     """
     Retrieve the currently selected file type(s) for a given session.
 
@@ -2137,6 +2197,7 @@ async def get_current_selection(session_id: str = Query(default=CURRENT_SESSION_
           will contain an empty list and an informational message.
         - Useful for UI components to display or maintain the user's current selection.
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Getting current selection for session: {session_id}")
 
@@ -2166,7 +2227,7 @@ async def get_current_selection(session_id: str = Query(default=CURRENT_SESSION_
 
 
 @router.get("/debug-session")
-async def debug_session(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def debug_session(session_id: str = Query(default=None)):
     """
     FUNCTION:
         debug_session
@@ -2206,6 +2267,7 @@ async def debug_session(session_id: str = Query(default=CURRENT_SESSION_ID)):
             - 500 : On unexpected internal errors
     """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Debugging session: {session_id}")
 
@@ -2251,7 +2313,7 @@ async def debug_session(session_id: str = Query(default=CURRENT_SESSION_ID)):
 
 
 @router.post("/visualize-individual-transaction-flow")
-async def visualize_individual_transaction_flow(request: TransactionVisualizationRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def visualize_individual_transaction_flow(request: TransactionVisualizationRequest,session_id: str = Query(default=None)):
     """
     FUNCTION:
         visualize_individual_transaction_flow
@@ -2300,6 +2362,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
             - If unexpected errors occur while parsing UI journals or
               generating the flow
     """
+    session_id = _resolve_session_id(session_id)
     try:
         transaction_id = request.transaction_id
         logger.info(f"Visualizing flow for transaction: {transaction_id}")
@@ -2573,7 +2636,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
         )
 
 @router.post("/generate-consolidated-flow")
-async def generate_consolidated_flow(source_file: str = Body(...),transaction_type: str = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def generate_consolidated_flow(source_file: str = Body(...),transaction_type: str = Body(...),session_id: str = Query(default=None)):
     """
 FUNCTION:
     generate_consolidated_flow
@@ -2661,6 +2724,7 @@ RAISES:
         - Unexpected internal errors during UI flow extraction or processing
 """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Starting consolidated flow generation for type '{transaction_type}' from source '{source_file}'")
         logger.debug(f"Session ID received: {session_id}")
@@ -2860,7 +2924,7 @@ class TransactionAnalysisRequest(BaseModel):
 
 
 @router.post("/analyze-transaction-llm")
-async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_id: str = Query(default=None)):
     """
     FUNCTION:
         generate_consolidated_flow
@@ -2942,6 +3006,7 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
         HTTPException 500:
             - Unexpected errors during flow extraction or processing
     """
+    session_id = _resolve_session_id(session_id)
     try:
         transaction_id = request.transaction_id
         logger.info(f" Analyzing transaction with LLM: {transaction_id}")
@@ -2950,44 +3015,31 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
         # Check session
         if not session_service.session_exists(session_id):
             logger.error(f"No session found for session_id: {session_id}")
-            raise HTTPException(
-                status_code=404,
-                detail="No session found"
-            )
-        
+            raise HTTPException(status_code=404, detail="No session found")
+
         session_data = session_service.get_session(session_id)
-        logger.debug(f"Session data retrieved for session_id {session_id}")
-        
-        # Get transaction data
+        logger.info(f"Session data retrieved for session_id {session_id}")
+
+        # ── Transaction data ──────────────────────────────────────────────
         transaction_data = session_data.get('transaction_data')
         if not transaction_data:
             logger.error(f"No transaction data available for session_id: {session_id}")
-            raise HTTPException(
-                status_code=400,
-                detail="No transaction data available"
-            )
-        
-        # Convert to DataFrame
+            raise HTTPException(status_code=400, detail="No transaction data available")
+
         df = pd.DataFrame(transaction_data)
         
         # Find the transaction
         if transaction_id not in df['Transaction ID'].values:
             logger.error(f"Transaction {transaction_id} not found in session {session_id}")
-            raise HTTPException(
-                status_code=404,
-                detail=f"Transaction {transaction_id} not found"
-            )
-        
-        txn_data = df[df['Transaction ID'] == transaction_id].iloc[0]
+            raise HTTPException(status_code=404, detail=f"Transaction {transaction_id} not found")
+
+        txn_data        = df[df['Transaction ID'] == transaction_id].iloc[0].to_dict()
         transaction_log = str(txn_data.get('Transaction Log', ''))
         
         if not transaction_log:
             logger.error(f"No transaction log available for transaction {transaction_id}")
-            raise HTTPException(
-                status_code=400,
-                detail="No transaction log available for this transaction"
-            )
-        
+            raise HTTPException(status_code=400, detail="No transaction log available for this transaction")
+
         logger.info(f" Found transaction log ({len(transaction_log)} characters)")
 
         # Call LLM for analysis
@@ -3103,7 +3155,7 @@ class FeedbackSubmission(BaseModel):
     original_llm_response: str
 
 @router.post("/submit-llm-feedback")
-async def submit_llm_feedback(feedback: FeedbackSubmission,session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def submit_llm_feedback(feedback: FeedbackSubmission,session_id: str = Query(default=None)):
     """
 FUNCTION:
     submit_llm_feedback
@@ -3153,6 +3205,7 @@ RAISES:
           the feedback (e.g., file write errors, session update failures).
 """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Submitting feedback for transaction: {feedback.transaction_id}")
         logger.debug(f"Feedback payload: {feedback.dict()}")
@@ -3237,7 +3290,7 @@ RAISES:
 
 
 @router.get("/get-feedback/{transaction_id}")
-async def get_feedback(transaction_id: str,session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_feedback(transaction_id: str,session_id: str = Query(default=None)):
     """
 FUNCTION:
     get_feedback
@@ -3298,6 +3351,7 @@ RAISES:
           parsing JSON, or retrieving session information.
 """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Retrieving feedback for transaction: {transaction_id}")
         
@@ -3713,7 +3767,7 @@ def extract_counter_blocks_from_string(content: str) -> list:
 
 @router.get("/get-matching-sources-for-trc")
 
-async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_matching_sources_for_trc(session_id: str = Query(default=None)):
     """
         FUNCTION: get_matching_sources_for_trc
 
@@ -3738,6 +3792,7 @@ async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_S
                 - 500 : For any unexpected server error during processing
 """
 
+    session_id = _resolve_session_id(session_id)
     try:
         if not session_service.session_exists(session_id):
             raise HTTPException(status_code=404, detail="No session found")
@@ -3781,7 +3836,7 @@ async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_S
 @router.post("/get-counter-data")
 async def get_counter_data(
     request: CounterDataRequest,
-    session_id: str = Query(default=CURRENT_SESSION_ID)
+    session_id: str = Query(default=None)
 ):
     """
         FUNCTION: get_counter_data

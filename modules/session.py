@@ -11,6 +11,25 @@ import logging
 
 logger.info("Starting session_service")
 
+# ---------------------------------------------------------------------------
+# Module-level shared store
+# ---------------------------------------------------------------------------
+# Defined at MODULE scope (not inside the class) so that every SessionService
+# instance — regardless of how many times the class is instantiated or how
+# many times this module is imported — always reads/writes the SAME dict.
+#
+# Root cause this fixes:
+#   Multiple SessionService() instances inside the same process each had a
+#   private _sessions dict, causing "session not found" on the very next
+#   request after upload.
+#
+# NOTE: For true multi-worker deployments (uvicorn --workers N with N > 1)
+#   this is still insufficient — each OS process has its own memory space.
+#   Fix: run with --workers 1 (fine for a single-user internal tool like DNLAT)
+#   or migrate _SHARED_SESSIONS to Redis / a database.
+# ---------------------------------------------------------------------------
+_SHARED_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
 
 
 class SessionService:
@@ -34,8 +53,8 @@ class SessionService:
         FUNCTION: __init__
 
         DESCRIPTION:
-            Initializes the in-memory session dictionary used to store all
-            session-related data.
+            Binds this instance to the module-level _SHARED_SESSIONS dict so
+            that all SessionService instances share the same in-memory store.
 
         USAGE:
             service = SessionService()
@@ -49,9 +68,10 @@ class SessionService:
         RAISES:
             None
         """
-        # In-memory storage (use Redis/Database in production)
-        self._sessions: Dict[str, Dict[str, Any]] = {}
-        logger.info("SessionService initialized") 
+        # Point to module-level shared dict, NOT a new per-instance dict.
+        # All SessionService() calls anywhere in the codebase share one store.
+        self._sessions = _SHARED_SESSIONS
+        logger.info("SessionService initialized (bound to _SHARED_SESSIONS)")
 
     def create_session(self, session_id: str, file_categories: Dict[str, list] = None, extraction_path: Path = None) -> None:
         """
@@ -312,7 +332,6 @@ RAISES:
         """
         exists = session_id in self._sessions
         logger.debug(f"Session exists check for {session_id}: {exists}") 
-        logger.info(f"hey saniya any session found")
         return exists
     
         
@@ -322,4 +341,3 @@ RAISES:
         session_service : Shared instance of SessionService.
     """
 session_service = SessionService()
-

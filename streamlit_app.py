@@ -18,6 +18,7 @@ from modules.login import register_user
 import re as _re; from datetime import datetime as _dt
 
 
+
 # Import authentication functions
 from admin_setup import create_dn_diagnostics_database, initialize_admin_table
 from modules.login import (
@@ -786,22 +787,22 @@ def show_register_page():
             name = name.strip().title()
             
             if not all([email, name, password, confirm_password, employee_code]):
-                st.error("  All fields are required")
+                st.error("All fields are required")
 
             elif not re.match(email_pattern, email):
                 st.error("Please use your official Diebold Nixdorf email ID")
 
             elif not re.match(name_pattern, name):
-                st.error("  Name must contain only letters and spaces")    
+                st.error("Name must contain only letters and spaces")    
             
             elif not is_valid_password(password):
                 st.error("Password must be at least 8 characters long and include uppercase, lowercase, Min 2 digits, and special character.")
 
             elif password != confirm_password:
-                st.error("  Passwords do not match with confirm password")
+                st.error("Passwords do not match with confirm password")
 
             elif is_invalid_emp_code(employee_code):
-                st.error("  Please enter a valid 8-digit employee code")
+                st.error("Please enter a valid 8-digit employee code")
 
 
             else:
@@ -1762,7 +1763,7 @@ RAISES:
     Exception                           : For any unexpected errors during execution
 """
 
-    st.markdown("####  Registry File Viewer")
+    st.markdown("#### Registry File Viewer")
 
     # Get registry contents from session via API
     try:
@@ -1773,7 +1774,7 @@ RAISES:
         )
         
         if response.status_code != 200:
-            st.error("  Failed to load registry files from session")
+            st.error("Failed to load registry files from session")
             logger.error(f"API call failed with status: {response.status_code}")
             return
             
@@ -1781,7 +1782,7 @@ RAISES:
         registry_contents = registry_data.get('registry_contents', {})
         
         if not registry_contents:
-            st.warning("  No registry files found in the uploaded package.")
+            st.warning("No registry files found in the uploaded package.")
             return
 
         # Create file selection dropdown
@@ -1876,23 +1877,23 @@ def render_registry_compare():
     try:
         response = requests.get(
             f"{API_BASE_URL}/get-registry-contents",
-            params={"session_id": "current_session"},
+            params={"session_id":"current_session"},
             timeout=30
         )
         
         if response.status_code != 200:
-            st.error("  Failed to load registry files from first package")
+            st.error("Failed to load registry files from first package")
             return
             
         registry_data = response.json()
         registry_contents_a = registry_data.get('registry_contents', {})
         
         if not registry_contents_a:
-            st.warning("  No registry files found in the first uploaded package.")
+            st.warning("No registry files found in the first uploaded package.")
             return
         
         st.markdown("#### Step 1: First Package (Already Loaded)")
-        st.success(f"  Loaded {len(registry_contents_a)} registry file(s) from main package")
+        st.success(f"Loaded {len(registry_contents_a)} registry file(s) from main package")
         
         # Show available files from first package
         with st.expander("View files in first package"):
@@ -2022,15 +2023,15 @@ def render_registry_compare():
                             text_a = safe_decode(content_a)
                             text_b = safe_decode(content_b)
                             
-                            # Store in session state so it persists across checkbox reruns
-                            st.session_state.registry_comparison = {
-                                'text_a': text_a,
-                                'text_b': text_b,
-                                'fname_a': f"Package 1: {selected_filename}",
-                                'fname_b': f"Package 2: {selected_filename}",
-                                'selected_file': selected_filename
-                            }
-                            st.rerun()
+                            # Check if files are identical
+                            if text_a == text_b:
+                                st.success("No changes in Registry - Files are identical")
+                                st.info(f"**{selected_filename}** has no differences between Package 1 and Package 2")
+                            else:
+                                # Render side-by-side comparison
+                                fname_a = f"Package 1: {selected_filename}"
+                                fname_b = f"Package 2: {selected_filename}"
+                                render_side_by_side_diff(text_a, text_b, fname_a, fname_b)
 
                         except Exception as e:
                             st.error(f"Error comparing files: {str(e)}")
@@ -3684,7 +3685,7 @@ def render_consolidated_flow():
                         st.error(f"  {error_detail}")
                         
                 except requests.exceptions.Timeout:
-                    st.error("⏱  Request timeout. Please try again.")
+                    st.error("Request timeout. Please try again.")
                 except requests.exceptions.ConnectionError:
                     st.error("  Connection error. Ensure the API server is running.")
                 except Exception as e:
@@ -4017,7 +4018,7 @@ RAISES:
                 users = {
                     "Select User": {"email": "", "passcode": ""},
                     "Ashish Trivedi (ashish.trivedi@dieboldnixdorf.com)": {"email": "ashish.trivedi@dieboldnixdorf.com", "passcode": "1234"},
-                    "Arthav Deshpande (arthav.deshpande@dieboldnixdorf.com)": {"email": "arthav.deshpande@dieboldnixdorf.com", "passcode": "5678"},
+                    "Atharv Deshpande (atharv.deshpande@dieboldnixdorf.com)": {"email": "atharv.deshpande@dieboldnixdorf.com", "passcode": "5678"},
                     "Prasad Avasare (prasad.avasare@dieboldnixdorf.com)": {"email": "prasad.avasare@dieboldnixdorf.com", "passcode": "9012"},
                     "Saniya Payal(saniya.payal@dieboldnixdorf.com)": {"email": "saniya.payal@dieboldnixdorf.com", "passcode": "3456"}
                 }
@@ -4435,12 +4436,12 @@ RAISES:
         source_transactions = txn_df[txn_df['Source File'] == selected_source]
         
         if len(source_transactions) == 0:
-            st.warning(f"  No transactions found in source '{selected_source}'")
+            st.warning(f"No transactions found in source '{selected_source}'")
             return
         
         # Transaction selection
         st.markdown("---")
-        st.markdown("####   Select Transaction")
+        st.markdown("#### Select Transaction")
 
         # Filter to only transactions from this specific source file
         source_only_transactions = txn_df[txn_df['Source File'] == selected_source].copy()
@@ -4586,7 +4587,7 @@ RAISES:
                     
                     st.markdown("---")
                     
-                    st.markdown("####   Counter per Transaction")
+                    st.markdown("#### Counter per Transaction")
 
                     if 'counter_per_transaction' in counter_data and counter_data['counter_per_transaction']:
                         txn_table_data = []

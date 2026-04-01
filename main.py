@@ -5,24 +5,9 @@ from pathlib import Path
 from modules.logging_config import logger
 from fastapi.logger import logger
 from contextlib import asynccontextmanager  # <- Added for lifespan
+from api.routes import PROCESSED_FILES_DIR
 
-# ======================================================================
-# TEMPORARY DIAGNOSTIC CODE
-logger.info("--- Attempting to import xml_parser_logic to diagnose startup issue ---")
-from modules import xml_parser_logic
-logger.info("--- Successfully imported xml_parser_logic ---")
-# ======================================================================
 
-# Global variable to store the processed files directory
-# PROCESSED_FILES_DIR = None
-
-# def set_processed_files_dir(directory: str):
-#     global PROCESSED_FILES_DIR
-#     PROCESSED_FILES_DIR = directory
-#     logger.info(f"Processed files directory set to: {directory}")
-
-# def get_processed_files_dir() -> str:
-#     return PROCESSED_FILES_DIR
 
 # ============================================
 # LIFESPAN HANDLER

@@ -8,7 +8,7 @@ from modules.logging_config import logger
 from fastapi.logger import logger
 from contextlib import asynccontextmanager  # <- Added for lifespan
 from modules.login import decode_access_token, PUBLIC_PATHS
-
+from api.routes import PROCESSED_FILES_DIR
 # ======================================================================
 # TEMPORARY DIAGNOSTIC CODE
 logger.info("--- Attempting to import xml_parser_logic to diagnose startup issue ---")
@@ -17,15 +17,15 @@ logger.info("--- Successfully imported xml_parser_logic ---")
 # ======================================================================
 
 # Global variable to store the processed files directory
-PROCESSED_FILES_DIR = None
+# PROCESSED_FILES_DIR = None
 
 # def set_processed_files_dir(directory: str):
 #     global PROCESSED_FILES_DIR
 #     PROCESSED_FILES_DIR = directory
-#     logger.info(f"✓ Processed files directory set to: {directory}")
+#     logger.info(f"Processed files directory set to: {directory}")
 
-def get_processed_files_dir() -> str:
-    return PROCESSED_FILES_DIR
+# def get_processed_files_dir() -> str:
+#     return PROCESSED_FILES_DIR
 
 # ============================================
 # LIFESPAN HANDLER
@@ -58,6 +58,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan  # <- Use lifespan instead of on_event
 )
+
+
 
 # CORS middleware
 app.add_middleware(

@@ -75,13 +75,25 @@ RETURNS:
 RAISES:
     None
         """
+        #check session ids before and after deletion
+        #print self_sessions
+
+        #if same then change id to timestamp if current not sufficient.
+
+        #To-Do: Handling for multi session so that we do erase active data of other users.
+
+        if session_id in self._sessions:
+            logger.info(f">>D> Original Session ID: '{session_id}' | Keys: {list(self._sessions[session_id].keys())}")
+            self.delete_session(session_id)
+
+
         self._sessions[session_id] = {
             'file_categories': file_categories,
             'extraction_path': str(extraction_path),
             'selected_type': None,
             'processed_data': {}
         }
-        logger.info(f"Session created: {session_id}")  
+        logger.info(f">>New Session created with ID: {session_id}")  
         logger.debug(f"Session data: {self._sessions[session_id]}")  
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
@@ -302,9 +314,12 @@ RAISES:
         logger.debug(f"Session exists check for {session_id}: {exists}") 
         logger.info(f"hey saniya any session found")
         return exists
+    
+        
 
 """
     GLOBAL:
         session_service : Shared instance of SessionService.
     """
 session_service = SessionService()
+

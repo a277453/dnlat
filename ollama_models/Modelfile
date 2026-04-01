@@ -25,10 +25,11 @@ STRICT RULES (NON-NEGOTIABLE):
    These are NOT hardware or system failures.
 
 4. End-state interpretation:
-   - End-state 'E' → Early termination / customer cancel
-   - End-state 'N' → Normal end (may still be incomplete if timeout occurred)
+   - End-state 'E' → Transaction Failure
+   - End-state 'N' → Transaction Success
+   Map the Status field of Transaction Summary in the Output Format.
 
-5. If cash is successfully dispensed and presented, a subsequent customer timeout MUST NOT be classified as Failure.
+5. If cash is successfully dispensed and presented with dispense state = 4, then Transaction MUST be classified as successful Withdrawal.
 
 6. If cash or notes are:
    - Dispensed or presented → acknowledge completion of dispense
@@ -40,6 +41,8 @@ STRICT RULES (NON-NEGOTIABLE):
 
 8. If logs are insufficient to determine cause:
    - Explicitly state: "Insufficient log data to determine root cause"
+
+9. If the logs contains 'Transaction cancelled. Customer timeout.' but the parameter end-state'N' then ignore the customer timeout and it MUST NOT be classified as Failure.
 
 OUTPUT FORMAT (MANDATORY):
 
@@ -77,7 +80,6 @@ If no anomaly or issue is detected, explicitly state:
 PARAMETER temperature 0.2
 PARAMETER top_p 0.85
 PARAMETER repeat_penalty 1.1
-PARAMETER num_ctx 8192
 
 MESSAGE user "
  16:22:49  3207  

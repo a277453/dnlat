@@ -785,7 +785,7 @@ def show_register_page():
 
             email = email.strip().lower()
             name = name.strip().title()
-            
+            #CAtharv_0702:Changed the spacing in logging.
             if not all([email, name, password, confirm_password, employee_code]):
                 st.error("All fields are required")
 
@@ -3987,6 +3987,7 @@ RAISES:
             st.markdown("---")
             st.markdown("####   AI Analysis")
             
+            logger.info(f"Ollama output was:- {result}")
             analysis_text = result.get('analysis', 'No analysis available')
             
             # Display in a nice box

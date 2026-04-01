@@ -38,6 +38,7 @@ import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import hashlib
 import streamlit as st
+import os
 from datetime import datetime
 from typing import Optional
 from modules.logging_config import logger

@@ -1,5 +1,5 @@
 from uuid import uuid4
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, status, Depends
 from modules.extraction import ZipExtractionService
 from modules.categorization import CategorizationService
 from modules.processing import ProcessingService
@@ -25,6 +25,8 @@ from pydantic import BaseModel
 import os
 import pandas as pd
 from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal, parse_ui_journal_from_string
+from modules.journal_parser import match_journal_file, mask_ej_log
+from modules.llm_service import analyze_transaction
 from datetime import datetime
 from collections import defaultdict
 import re
@@ -32,7 +34,7 @@ import zipfile
 import io
 import json
 import time
-from fastapi import status
+
 
 
 #  Import our central logger
@@ -264,7 +266,27 @@ async def debug_zip_members(file: UploadFile = File(...)):
 
 # Simple session ID for now (use UUID in production)
 global CURRENT_SESSION_ID
-CURRENT_SESSION_ID =str(uuid4())
+CURRENT_SESSION_ID = str(uuid4())
+
+# ── Session-ID resolver ────────────────────────────────────────────────────────
+# The frontend uses the sentinel string "current_session" to mean "whatever the
+# active server session is".  Every endpoint that receives a session_id must pass
+# it through this helper so the sentinel is transparently resolved to the real UUID.
+_SESSION_SENTINELS = {"current_session", "CURRENT_SESSION_ID", "", None}
+
+def _resolve_session_id(session_id) -> str:
+    """
+    Resolve a client-supplied session_id to the real UUID.
+
+    Accepts:
+        - None / empty string  → returns CURRENT_SESSION_ID
+        - "current_session"    → returns CURRENT_SESSION_ID  (frontend sentinel)
+        - any other string     → returned as-is
+    """
+    if session_id in _SESSION_SENTINELS:
+        return CURRENT_SESSION_ID
+    return session_id
+# ──────────────────────────────────────────────────────────────────────────────
 
 # Global variable to track processed files directory (for registry endpoints)
 PROCESSED_FILES_DIR = None
@@ -277,6 +299,37 @@ def set_processed_files_dir(directory: str):
 
 def get_processed_files_dir() -> str:
     return PROCESSED_FILES_DIR
+
+def organize_files_into_subdirectories(extract_path: Path, file_categories: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    """
+    Physically move categorized files into subdirectories
+    Returns updated file paths
+    """
+    organized_categories = {}
+    
+    for category, files in file_categories.items():
+        # Create category subdirectory
+        category_dir = extract_path / category
+        category_dir.mkdir(exist_ok=True)
+        
+        organized_files = []
+        
+        for file_path_str in files:
+            source = Path(file_path_str)
+            if source.exists() and source.is_file():
+                # Move to category subdirectory
+                dest = category_dir / source.name
+                try:
+                    shutil.copy2(source, dest)
+                    organized_files.append(str(dest))
+                    logger.info(f"   Moved {source.name} to {category}/")
+                except Exception as e:
+                    logger.info(f"  Failed to move {source.name}: {e}")
+                    continue
+        
+        organized_categories[category] = organized_files
+    
+    return organized_categories
 
 
 @router.post("/process-zip", response_model=FileCategorizationResponse)
@@ -443,12 +496,15 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             return p.read_text(encoding='latin1', errors='replace')
 
         # --- REGISTRY ---
+        # Base64-encode bytes before storing so the session remains JSON-serialisable
+        # regardless of whether session_service uses an in-memory or JSON-backed store.
+        import base64 as _b64
         registry_contents: dict = {}
         for path_str in file_categories.get('registry_files', []):
             p = Path(path_str)
             try:
-                registry_contents[p.name] = p.read_bytes()
-                logger.debug(f"[REGISTRY] Mapped content to filename: {p.name}")
+                registry_contents[p.name] = _b64.b64encode(p.read_bytes()).decode('utf-8')
+                logger.debug(f"[REGISTRY] Mapped and base64-encoded content for: {p.name}")
             except Exception as e:
                 logger.error(f"[REGISTRY] failed to load {p.name}: {e}")
 
@@ -572,6 +628,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         # Attach processing time to response dict so frontend can display it
         result_dict = result.dict() if hasattr(result, "dict") else dict(result)
         result_dict["processing_time_seconds"] = total_time
+        result_dict["session_id"] = CURRENT_SESSION_ID   # expose so clients can pass it explicitly
         return result_dict
     except HTTPException:
         raise   
@@ -618,32 +675,64 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
     """
     Extract ACU files from an uploaded ZIP for comparison purposes.
     """
-    logger.info(f" Received request: /extract-files/ for file: {file.filename}")  
+    logger.info(f" Received request: /extract-files/ for file: {file.filename}")
     try:
         if not file.filename.endswith('.zip'):
-            logger.error(f"Invalid file type uploaded: {file.filename}")  
+            logger.error(f"Invalid file type uploaded: {file.filename}")
             raise HTTPException(
                 status_code=400,
                 detail="Only ZIP files are accepted"
             )
 
         zip_content = await file.read()
-        logger.debug(f"Read {len(zip_content)} bytes from uploaded file: {file.filename}")  
+        logger.debug(f"Read {len(zip_content)} bytes from uploaded file: {file.filename}")
 
         acu_logs = []
-        acu_files = extract_from_zip_bytes(zip_content, acu_logs, target_prefixes=('jdd', 'x3'))
-        logger.debug(f"ACU extraction logs: {acu_logs}")  
+
+        # ── Step 1: Use ZipExtractionService to unpack the outer ZIP and locate the
+        #   nested acu.zip (exactly as /process-zip does).  This is critical because
+        #   ACU files (jdd*/x3*) live inside an inner acu.zip, not at the top level of
+        #   the uploaded archive.  Calling extract_from_zip_bytes on the outer ZIP
+        #   directly skips that inner archive and always returns nothing.
+        try:
+            extraction_service = ZipExtractionService()
+            extract_path, _total, acu_zip_bytes = extraction_service.extract_zip(zip_content)
+            logger.info(f"[extract-files] Outer ZIP unpacked to: {extract_path}")
+        except Exception as ex:
+            logger.warning(f"[extract-files] ZipExtractionService failed ({ex}), falling back to flat extraction")
+            acu_zip_bytes = None
+            extract_path = None
+
+        # ── Step 2: Extract ACU files from the inner acu.zip when present,
+        #   otherwise fall back to scanning the outer ZIP directly (flat structure).
+        if acu_zip_bytes:
+            logger.info("[extract-files] Found nested acu.zip — extracting ACU files from inner archive")
+            acu_files = extract_from_zip_bytes(acu_zip_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
+        else:
+            logger.info("[extract-files] No nested acu.zip found — scanning outer ZIP for ACU files directly")
+            acu_files = extract_from_zip_bytes(zip_content, acu_logs, target_prefixes=('jdd', 'x3'))
+
+        # ── Step 3: Clean up the temp extract folder (we only needed acu_zip_bytes)
+        if extract_path:
+            try:
+                import shutil as _shutil
+                _shutil.rmtree(extract_path, ignore_errors=True)
+                logger.debug(f"[extract-files] Temp folder cleaned up: {extract_path}")
+            except Exception:
+                pass
+
+        logger.debug(f"ACU extraction logs: {acu_logs}")
 
         if not acu_files:
-            logger.info(f"No ACU files found in uploaded ZIP: {file.filename}")  
+            logger.info(f"No ACU files found in uploaded ZIP: {file.filename}")
             return {
                 "files": {},
                 "logs": acu_logs,
                 "message": "No ACU files found in the uploaded ZIP"
             }
 
-        logger.info(f"Successfully extracted {len(acu_files)} ACU file(s) from: {file.filename}")  
-        logger.debug(f"Extracted ACU files: {list(acu_files.keys())}") 
+        logger.info(f"Successfully extracted {len(acu_files)} ACU file(s) from: {file.filename}")
+        logger.debug(f"Extracted ACU files: {list(acu_files.keys())}")
 
         return {
             "files": acu_files,
@@ -651,10 +740,12 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
             "message": f"Successfully extracted {len(acu_files)} file(s)"
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
-        logger.error(f"Unexpected error during ACU extraction for file {file.filename}: {e}")  
-        logger.debug(traceback.format_exc())  
+        logger.error(f"Unexpected error during ACU extraction for file {file.filename}: {e}")
+        logger.debug(traceback.format_exc())
         raise HTTPException(
             status_code=500,
             detail=f"Error extracting files: {str(e)}\n{traceback.format_exc()}"
@@ -818,21 +909,21 @@ async def extract_registry_from_zip(file: UploadFile = File(...)):
         )
 
 @router.get("/get-registry-contents", dependencies=[Depends(require_elevated_role)])
-async def get_registry_contents(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_registry_contents(session_id: Optional[str] = Query(default=None)):
     """
 FUNCTION: get_registry_contents
 
 DESCRIPTION:
-    Retrieves registry file contents from a given session. 
-    Converts binary registry file contents to base64 strings for JSON serialization 
-    and returns them along with a count of available files.
+    Retrieves registry file contents from a given session.
+    Registry files are stored as base64-encoded strings in the session (encoded at
+    upload time), so they can be returned directly without any re-encoding step.
 
 USAGE:
     response = await get_registry_contents(session_id="session_123")
 
 PARAMETERS:
     session_id (str) : Optional. The ID of the session to retrieve registry files from.
-                       Defaults to CURRENT_SESSION_ID if not provided.
+                       Defaults to CURRENT_SESSION_ID (read at request time) if not provided.
 
 RETURNS:
     dict : A dictionary containing:
@@ -840,34 +931,37 @@ RETURNS:
         - "count" (int)               : Number of registry files available in the session
 
 RAISES:
-    HTTPException : 
+    HTTPException :
         - 404 : If the session with the given ID does not exist
         - 500 : For any other unexpected server error during retrieval
 """
+    # Resolve sentinel values ("current_session", None, "") → real UUID
+    session_id = _resolve_session_id(session_id)
 
     try:
         if not session_service.session_exists(session_id):
             raise HTTPException(status_code=404, detail="No session found")
-        
+
         session_data = session_service.get_session(session_id)
-        registry_contents = session_data.get('registry_contents', {})
-        
-        # Convert bytes to base64 for JSON serialization
+
+        # registry_contents is already base64-encoded strings (encoded before session storage).
+        # If for any reason raw bytes slipped through (e.g. legacy session), encode them here.
         import base64
+        raw_contents = session_data.get('registry_contents', {})
         encoded_contents = {}
-        for filename, content_bytes in registry_contents.items():
-            if isinstance(content_bytes, bytes):
-                encoded_contents[filename] = base64.b64encode(content_bytes).decode('utf-8')
+        for filename, content in raw_contents.items():
+            if isinstance(content, bytes):
+                encoded_contents[filename] = base64.b64encode(content).decode('utf-8')
             else:
-                encoded_contents[filename] = content_bytes
-        
-        logger.info(f"Serving {len(encoded_contents)} registry files from session")
-        
+                encoded_contents[filename] = content   # already a base64 string
+
+        logger.info(f"Serving {len(encoded_contents)} registry files from session '{session_id}'")
+
         return {
             "registry_contents": encoded_contents,
             "count": len(encoded_contents)
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -910,6 +1004,7 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
             - 404 if session does not exist
             - 500 if unexpected errors occur during retrieval
     """
+    session_id = _resolve_session_id(session_id)
     try:
         if not session_service.session_exists(session_id):
             logger.warning(f"No session found for session_id: {session_id}")
@@ -1015,6 +1110,7 @@ async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str
             - 400 if no ACU files are found in the session
             - 500 if any unexpected error occurs during parsing
     """
+    session_id = _resolve_session_id(session_id)
     try:
         if not session_service.session_exists(session_id):
             logger.warning(f"No session found for session_id: {session_id}")
@@ -1235,6 +1331,7 @@ async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Q
             - 404 if the session does not exist
             - 404 if no file categories are found in the session
     """
+    session_id = _resolve_session_id(session_id)
     logger.info(f" Received request: /select-file-type for session_id: {session_id}")  
 
     # Check if session exists
@@ -1257,6 +1354,7 @@ async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Q
         )
 
     # Get selected file types - convert enum to string
+    session_id = _resolve_session_id(session_id)
     try:
         selected_types = [ft.value if hasattr(ft, 'value') else str(ft) for ft in request.file_types]
         logger.debug(f"Selected file types for session_id {session_id}: {selected_types}")  
@@ -1337,6 +1435,8 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
         Analyzes customer journal files from a processed ZIP session and extracts transaction data.
         Combines transactions from all customer journal files, calculates statistics per transaction type,
         and updates the session with extracted transaction data and source file details.
+        If UI journal files are present in the session, each transaction is enriched with
+        JRN fields (protocol steps, device errors, response code, STAN, retract counter, etc.).
 
     USAGE:
         result = await analyze_customer_journals(session_id="current_session")
@@ -1353,7 +1453,8 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
                 'total_transactions': int,        # Total transactions extracted
                 'statistics': list[dict],         # Transaction stats per type
                 'source_files': list[str],        # List of journal source filenames
-                'source_file_count': int          # Number of source files processed
+                'source_file_count': int,         # Number of source files processed
+                'jrn_enriched': int               # Transactions enriched with UI journal data (0 if no JRN files)
             }
 
     RAISES:
@@ -1363,6 +1464,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             - 400 if no transactions could be extracted
             - 500 for unexpected errors during processing
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Starting customer journal analysis for session: {session_id}")
         
@@ -1375,9 +1477,23 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             )
         
         # Get file categories from session
-        file_categories = session_service.get_file_categories(session_id)
-        journal_files = file_categories.get('customer_journals', [])
+        file_categories  = session_service.get_file_categories(session_id)
+        journal_files    = file_categories.get('customer_journals', [])
         journal_contents = session_service.get_session_data(session_id, 'customer_journal_contents') or {}
+
+        # All ui_journals includes both JOURNAL/ and VCP-PRO/BASE/JOURNALS/UI/ files.
+        # For LLM enrichment we only want JOURNAL/ (top-level) — VCP-PRO/UI files
+        # are available for other app features but must not be sent to the LLM.
+        all_ui_journal_files = file_categories.get('ui_journals', [])
+        ui_journal_files = [
+            f for f in all_ui_journal_files
+            if 'vcp-pro' not in str(f).replace('\\', '/').lower()
+        ]
+        ui_journal_contents = session_service.get_session_data(session_id, 'ui_journal_contents') or {}
+        logger.info(
+            f" UI journals for LLM enrichment: {len(ui_journal_files)} "
+            f"(excluded {len(all_ui_journal_files) - len(ui_journal_files)} VCP-PRO/UI files)"
+        )
 
         if not journal_files:
             logger.error("No customer journal files found")
@@ -1387,13 +1503,14 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             )
         
         logger.info(f" Found {len(journal_files)} customer journal file(s)")
+        logger.info(f" Found {len(ui_journal_files)} UI journal file(s)")
         
         # Initialize analyzer
         analyzer = TransactionAnalyzerService()
         
         all_transactions_df = []
-        source_files = []
-        source_file_map = {}
+        source_files        = []
+        source_file_map     = {}
         
         for journal_filename in journal_files:
             logger.info(f"   Processing: {journal_filename}")
@@ -1406,20 +1523,58 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
                 continue
             
             try:
-                df = analyzer.parse_customer_journal_from_string(content, journal_filename)
-                
-                if df is None or df.empty:
+                # ── Match UI journal by stem name (e.g. 20250916.jrn → 20250916) ──
+                # Falls back to all UI journals if no exact name match is found.
+                matched_jrn = match_journal_file(journal_filename, ui_journal_files)
+                ui_files_for_this_ej = [matched_jrn] if matched_jrn else ui_journal_files
+                logger.info(
+                    f"   UI journals matched for {source_filename}: "
+                    f"{ui_files_for_this_ej or 'none'}"
+                )
+
+                # ── Call the analyzer method (handles both EJ + JRN) ──
+                # Use in-memory content from session when available
+                result = analyzer.analyze_customer_journals_from_strings(
+                    customer_journal_contents={journal_filename: content},
+                    ui_journal_contents={
+                        fn: ui_journal_contents.get(fn, '')
+                        for fn in ui_files_for_this_ej
+                        if ui_journal_contents.get(fn)
+                    } if ui_files_for_this_ej else None,
+                )
+
+                if not result["transactions"]:
                     logger.debug(f"No transactions found in {source_filename}")
                     continue
-                
-                logger.info(f"Found {len(df)} transactions")
-                
+
+                df = pd.DataFrame(result["transactions"])
+                logger.info(f"Found {len(df)} transactions in {source_filename}")
+
                 all_transactions_df.append(df)
-                
+
                 if 'Transaction ID' in df.columns:
-                    file_transactions_ids = df['Transaction ID'].tolist()
-                    source_file_map[source_filename] = file_transactions_ids
+                    source_file_map[source_filename] = df['Transaction ID'].tolist()
                 
+            except AttributeError:
+                # Fallback: analyzer may not have analyze_customer_journals_from_strings yet
+                # Use the simpler parse_customer_journal_from_string method
+                logger.info(f"   Falling back to parse_customer_journal_from_string for {journal_filename}")
+                try:
+                    df = analyzer.parse_customer_journal_from_string(content, journal_filename)
+                    
+                    if df is None or df.empty:
+                        logger.debug(f"No transactions found in {source_filename}")
+                        continue
+                    
+                    logger.info(f"Found {len(df)} transactions (no JRN enrichment)")
+                    
+                    all_transactions_df.append(df)
+                    
+                    if 'Transaction ID' in df.columns:
+                        source_file_map[source_filename] = df['Transaction ID'].tolist()
+                except Exception as e2:
+                    logger.error(f"Fallback also failed for {journal_filename}: {str(e2)}")
+                    continue
             except Exception as e:
                 logger.error(f"Error processing {journal_filename}: {str(e)}")
                 import traceback
@@ -1454,7 +1609,6 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
         
         transaction_records = combined_df.to_dict('records')
 
-        # ADD THESE DEBUG LINES
         logger.info(f"\n CONVERTING TO RECORDS:")
         logger.info(f"   Total records: {len(transaction_records)}")
         if transaction_records:
@@ -1463,42 +1617,47 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             logger.info(f"   Sample 'Source File' value: '{sample.get('Source File', 'KEY NOT FOUND')}'")
         
         # Store in session (remove duplicates from source_files)
-        unique_source_files = list(set(source_files))
-        unique_source_files.sort()
+        unique_source_files = sorted(set(source_files))
 
-        # DEBUG: Print what we're about to store
         logger.info(f" Unique source files being stored: {unique_source_files}")
         logger.info(f" Total source files count: {len(unique_source_files)}")
 
         session_service.update_session(session_id, 'transaction_data', transaction_records)
         session_service.update_session(session_id, 'source_files', unique_source_files)
         session_service.update_session(session_id, 'source_file_map', source_file_map)
-        
+
+        # ── Statistics ────────────────────────────────────────────────────────
         stats = []
         for txn_type in combined_df['Transaction Type'].unique():
-            type_df = combined_df[combined_df['Transaction Type'] == txn_type]
-            successful = len(type_df[type_df['End State'] == 'Successful'])
+            type_df      = combined_df[combined_df['Transaction Type'] == txn_type]
+            successful   = len(type_df[type_df['End State'] == 'Successful'])
             unsuccessful = len(type_df[type_df['End State'] == 'Unsuccessful'])
-            total = len(type_df)
-            
+            total        = len(type_df)
+
             stats.append({
                 'Transaction Type': txn_type,
-                'Total': total,
-                'Successful': successful,
-                'Unsuccessful': unsuccessful,
-                'Success Rate': f"{(successful/total*100):.1f}%" if total > 0 else "0%"
+                'Total':            total,
+                'Successful':       successful,
+                'Unsuccessful':     unsuccessful,
+                'Success Rate':     f"{(successful / total * 100):.1f}%" if total > 0 else "0%"
             })
-        
-        logger.info("Customer journal analysis completed successfully")
-        
+
+        # Count how many transactions were enriched with JRN data
+        _jrn_cols    = [c for c in combined_df.columns if c.startswith("JRN ")]
+        jrn_enriched = int(combined_df[_jrn_cols].notna().any(axis=1).sum()) \
+            if _jrn_cols else 0
+
+        logger.info(f"Customer journal analysis completed. JRN enriched: {jrn_enriched}")
+
         return {
-            'message': 'Customer journals analyzed successfully',
-            'total_transactions': len(combined_df),
-            'statistics': stats,
-            'source_files': source_files,
-            'source_file_count': len(source_files)
+            'message':              'Customer journals analyzed successfully',
+            'total_transactions':   len(combined_df),
+            'statistics':           stats,
+            'source_files':         source_files,
+            'source_file_count':    len(source_files),
+            'jrn_enriched':         jrn_enriched,
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1509,6 +1668,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             status_code=500,
             detail=f"Analysis failed: {str(e)}"
         )
+
 @router.get("/get-transactions-with-sources")
 async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
@@ -1541,6 +1701,7 @@ async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_
             - 404 if the session does not exist
             - 500 for unexpected errors while retrieving data
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f"Fetching transactions with source mapping for session: {session_id}")
         logger.debug("Entered /get-transactions-with-sources route")
@@ -1632,6 +1793,7 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
             - 400 if transaction data is missing in the session
             - 500 for unexpected errors during filtering
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Filtering transactions by {len(source_files)} source file(s)")
         logger.info(f" Requested source files: {source_files}")
@@ -1738,6 +1900,7 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
             - 500 for unexpected errors during statistics generation
     """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f"Request received: Get transaction statistics for session {session_id}")
         if not session_service.session_exists(session_id):
@@ -1864,6 +2027,7 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
         - Provides timing/duration analysis if start and end times are available.
         - Handles missing or empty UI journals gracefully.
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Comparing transactions: {txn1_id} vs {txn2_id}")
 
@@ -2199,6 +2363,7 @@ async def get_current_selection(session_id: str = Query(default=CURRENT_SESSION_
           will contain an empty list and an informational message.
         - Useful for UI components to display or maintain the user's current selection.
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Getting current selection for session: {session_id}")
 
@@ -2268,6 +2433,7 @@ async def debug_session(session_id: str = Query(default=CURRENT_SESSION_ID)):
             - 500 : On unexpected internal errors
     """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Debugging session: {session_id}")
 
@@ -2362,6 +2528,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
             - If unexpected errors occur while parsing UI journals or
               generating the flow
     """
+    session_id = _resolve_session_id(session_id)
     try:
         transaction_id = request.transaction_id
         logger.info(f"Visualizing flow for transaction: {transaction_id}")
@@ -2723,6 +2890,7 @@ RAISES:
         - Unexpected internal errors during UI flow extraction or processing
 """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Starting consolidated flow generation for type '{transaction_type}' from source '{source_file}'")
         logger.debug(f"Session ID received: {session_id}")
@@ -2922,232 +3090,137 @@ class TransactionAnalysisRequest(BaseModel):
 
 
 @router.post("/analyze-transaction-llm")
-async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
-        generate_consolidated_flow
+        analyze_transaction_llm
 
     DESCRIPTION:
-        Generates a consolidated UI flow visualization for **all transactions**
-        of a specific transaction type originating from a given source file.
-        The function processes transaction data, matches the correct UI journal,
-        extracts screen flows for each transaction, and returns aggregated
-        results including screens, transitions, and per-transaction flows.
+        Analyzes a single ATM transaction using the LLM. Validates the session
+        and transaction data, then delegates the full EJ/JRN pipeline, prompt
+        construction, Ollama call, and metadata storage to llm_service.analyze_transaction().
 
     USAGE:
-        result = generate_consolidated_flow(
-            source_file="ATM1",
-            transaction_type="Cash Withdrawal",
-            session_id="12345"
-        )
+        result = await analyze_transaction_llm(request, session_id="current_session")
 
     PARAMETERS:
-        source_file (str):
-            Name of the source UI journal file (without extension).
-            Used to match UI logs against transaction data.
-
-        transaction_type (str):
-            Transaction type to filter on (e.g., "Cash Withdrawal",
-            "Balance Inquiry", etc.).
-
-        session_id (str):
-            Session identifier used to retrieve processed ZIP data from
-            session storage. Defaults to the current session.
+        request (TransactionAnalysisRequest) :
+            Contains transaction_id and employee_code.
+        session_id (str) :
+            Session ID containing processed transaction data.
+            Defaults to CURRENT_SESSION_ID.
 
     RETURNS:
-        dict:
-            A dictionary containing the consolidated UI flow analysis:
-                {
-                    "source_file": str,
+        dict :
+            {
+                "summary": str,
+                "analysis": str,
+                "timestamp": str,
+                "metadata": {
+                    "transaction_id": str,
+                    "model": str,
+                    "log_length": int,
+                    "response_length": int,
+                    "analysis_type": str,
                     "transaction_type": str,
-                    "total_transactions": int,
-                    "transactions_with_flow": int,
-                    "successful_count": int,
-                    "unsuccessful_count": int,
-                    "screens": list[str],                     # unique screens
-                    "transitions": [
-                        {
-                            "from": str,
-                            "to": str,
-                            "count": int
-                        }
-                    ],
-                    "screen_transactions": {
-                        "ScreenName": [
-                            {
-                                "txn_id": str,
-                                "start_time": str,
-                                "state": str
-                            }
-                        ]
-                    },
-                    "transaction_flows": {
-                        "txn_id": {
-                            "screens": list[str],
-                            "start_time": str,
-                            "end_time": str,
-                            "state": str
-                        }
-                    }
+                    "transaction_state": str,
+                    "start_time": str,
+                    "end_time": str,
+                    "source_file": str,
+                    "jrn_data_available": bool,
+                    "analysis_time_seconds": float
                 }
+            }
 
     RAISES:
-        HTTPException 404:
-            - Session not found
-            - No matching transactions found
-            - No matching UI journal found
-
-        HTTPException 400:
-            - Missing or empty UI journal
-            - Missing transaction data in session
-
-        HTTPException 500:
-            - Unexpected errors during flow extraction or processing
+        HTTPException :
+            - 404 if session or transaction not found
+            - 400 if no transaction log available
+            - 422 if log could not be parsed or has insufficient data
+            - 500 if Ollama is not installed or LLM call fails
     """
+    session_id = _resolve_session_id(session_id)
     try:
         transaction_id = request.transaction_id
         logger.info(f" Analyzing transaction with LLM: {transaction_id}")
         logger.debug(f"Request data: {request.dict()}")
-        
-        # Check session
+
+        # ── Session check ─────────────────────────────────────────────────
         if not session_service.session_exists(session_id):
             logger.error(f"No session found for session_id: {session_id}")
-            raise HTTPException(
-                status_code=404,
-                detail="No session found"
-            )
-        
+            raise HTTPException(status_code=404, detail="No session found")
+
         session_data = session_service.get_session(session_id)
-        logger.debug(f"Session data retrieved for session_id {session_id}")
-        
-        # Get transaction data
+        logger.info(f"Session data retrieved for session_id {session_id}")
+
+        # ── Transaction data ──────────────────────────────────────────────
         transaction_data = session_data.get('transaction_data')
         if not transaction_data:
             logger.error(f"No transaction data available for session_id: {session_id}")
-            raise HTTPException(
-                status_code=400,
-                detail="No transaction data available"
-            )
-        
-        # Convert to DataFrame
+            raise HTTPException(status_code=400, detail="No transaction data available")
+
         df = pd.DataFrame(transaction_data)
-        
-        # Find the transaction
+
         if transaction_id not in df['Transaction ID'].values:
             logger.error(f"Transaction {transaction_id} not found in session {session_id}")
-            raise HTTPException(
-                status_code=404,
-                detail=f"Transaction {transaction_id} not found"
-            )
-        
-        txn_data = df[df['Transaction ID'] == transaction_id].iloc[0]
+            raise HTTPException(status_code=404, detail=f"Transaction {transaction_id} not found")
+
+        txn_data        = df[df['Transaction ID'] == transaction_id].iloc[0].to_dict()
         transaction_log = str(txn_data.get('Transaction Log', ''))
-        
         if not transaction_log:
             logger.error(f"No transaction log available for transaction {transaction_id}")
-            raise HTTPException(
-                status_code=400,
-                detail="No transaction log available for this transaction"
-            )
-        
+            raise HTTPException(status_code=400, detail="No transaction log available for this transaction")
+
         logger.info(f" Found transaction log ({len(transaction_log)} characters)")
 
-        # Call LLM for analysis
-        try:
-            import ollama
-            
-            messages = [
-                {
-                    "role": "system", 
-                    "content": "You are a log analysis expert specializing in ATM transaction diagnostics. Analyze the provided transaction log for anomalies, errors, and potential issues. Provide a clear, concise analysis in plain text format - do not use JSON in your response. Focus on: 1) What happened, 2) Why it might have happened, 3) Potential root causes."
-                },
-                {
-                    "role": "user", 
-                    "content": f"Analyze this ATM transaction log for anomalies and issues:\n\n{transaction_log}"
-                }
-            ]
-            
-            logger.info(" Calling Ollama model...")
-            analysis_start_time = time.perf_counter()
-            logger.debug(f"LLM messages payload: {messages}")
-            
-            response = ollama.chat(model="llama3_log_analyzer", messages=messages)\
-            
-            analysis_end_time = time.perf_counter()
-            analysis_duration = round(analysis_end_time - analysis_start_time, 3)
+        # ── Filter UI journals (JOURNAL/ top-level only, exclude VCP-PRO) ─
+        file_categories = session_data.get('file_categories', {})
+        all_ui_journals = file_categories.get('ui_journals', [])
+        llm_ui_journals = [
+            f for f in all_ui_journals
+            if 'vcp-pro' not in str(f).replace('\\', '/').lower()
+        ]
 
-            raw_response = response['message']['content'].strip()
-            #logger.info(f"Type of raw_response: {type(raw_response)}")
-            #logger.debug(raw_response)
-            logger.info(
-                f"Transaction LLM analysis completed | "
-                f"txn_id={transaction_id} | "
-                f"model=llama3_log_analyzer | "
-                f"analysis_time={analysis_duration}s"
-            )
+        # ── Pass in-memory UI journal contents for JRN fallback ───────────
+        ui_journal_contents = session_data.get('ui_journal_contents', {})
 
-            logger.info(f" LLM analysis complete ({len(raw_response)} characters)")
-            
-            # Structure the response
-            structured_response = {
-                "summary": "Transaction log analysis completed",
-                "analysis": raw_response,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "metadata": {
-                    "transaction_id": transaction_id,
-                    "model": "llama3_log_analyzer",
-                    "log_length": len(transaction_log),
-                    "response_length": len(raw_response),
-                    "analysis_type": "anomaly_detection",
-                    "transaction_type": str(txn_data.get('Transaction Type', 'Unknown')),
-                    "transaction_state": str(txn_data.get('End State', 'Unknown')),
-                    "start_time": str(txn_data.get('Start Time', '')),
-                    "end_time": str(txn_data.get('End Time', '')),
-                    "source_file": str(txn_data.get('Source File', 'Unknown')),
-                    "analysis_time_seconds": analysis_duration,
-                    "llm_raw_response": raw_response  #  store raw response here
-                }
-            }
-            
-            logger.debug(f"Structured response prepared for transaction {transaction_id}")
-            # -------------------------------------------------------
-            # STORE OLLAMA METADATA INTO userresponse DB
-            # -------------------------------------------------------
-            store_metadata(
-                transaction_id        = transaction_id,
-                employee_code  = request.employee_code, 
-                model                 = "llama3_log_analyzer",
-                transaction_type      = str(txn_data.get('Transaction Type', 'Unknown')),
-                transaction_state     = str(txn_data.get('End State', 'Unknown')),
-                source_file           = str(txn_data.get('Source File', 'Unknown')),
-                start_time            = str(txn_data.get('Start Time', '')),
-                end_time              = str(txn_data.get('End Time', '')),
-                log_length            = len(transaction_log),
-                response_length       = len(raw_response),
-                analysis_time_seconds = analysis_duration,
-                llm_analysis          = raw_response
-            )
-            logger.info(f"Ollama metadata stored for txn: {transaction_id}")
-            # -------------------------------------------------------
-            return structured_response
-            
-        except ImportError:
-            logger.error("Ollama is not installed")
-            raise HTTPException(
-                status_code=500,
-                detail="Ollama is not installed. Please install it with: pip install ollama"
-            )
-        except Exception as e:
-            logger.exception(f"LLM analysis error for transaction {transaction_id}: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"LLM analysis failed: {str(e)}"
-            )
-        
+        # ── DEBUG: Log what's being sent to llm_service ───────────────────
+        logger.info(
+            f"[LLM-DEBUG] all_ui_journals={all_ui_journals} | "
+            f"llm_ui_journals={llm_ui_journals} | "
+            f"ui_journal_contents keys={list(ui_journal_contents.keys())} | "
+            f"ui_journal_contents sizes="
+            f"{({k: len(v) for k, v in ui_journal_contents.items()})}"
+        )
+        logger.info(
+            f"[LLM-DEBUG] txn Source File={txn_data.get('Source File')} | "
+            f"txn has JRN Protocol Steps={bool(txn_data.get('JRN Protocol Steps'))} | "
+            f"txn has JRN Device Errors={bool(txn_data.get('JRN Device Errors'))}"
+        )
+
+        # ── Delegate full LLM pipeline to llm_service ─────────────────────
+        return analyze_transaction(
+            transaction_id=transaction_id,
+            transaction_log=transaction_log,
+            txn_data=txn_data,
+            ui_journal_files=llm_ui_journals,
+            employee_code=request.employee_code,
+            ui_journal_contents=ui_journal_contents,
+        )
+
     except HTTPException:
         raise
+    except ValueError as ve:
+        logger.error(f"Validation error for transaction {request.transaction_id}: {ve}")
+        raise HTTPException(status_code=422, detail=str(ve))
+    except ImportError:
+        logger.error("Ollama is not installed")
+        raise HTTPException(
+            status_code=500,
+            detail="Ollama is not installed. Please install it with: pip install ollama"
+        )
     except Exception as e:
-        logger.exception(f"Analysis failed for transaction {transaction_id}: {str(e)}")
+        logger.exception(f"Analysis failed for transaction {request.transaction_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Analysis failed: {str(e)}"
@@ -3155,6 +3228,8 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
     
 # Add this Pydantic model near the top with other models
 class FeedbackSubmission(BaseModel):
+    model_config = {'protected_namespaces': ()}
+
     transaction_id: str
     rating: int
     alternative_cause: str
@@ -3227,6 +3302,7 @@ RAISES:
           the feedback (e.g., file write errors, session update failures).
 """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Submitting feedback for transaction: {feedback.transaction_id}")
         logger.debug(f"Feedback payload: {feedback.dict()}")
@@ -3372,6 +3448,7 @@ RAISES:
           parsing JSON, or retrieving session information.
 """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Retrieving feedback for transaction: {transaction_id}")
         
@@ -3811,6 +3888,7 @@ async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_S
                 - 500 : For any unexpected server error during processing
 """
 
+    session_id = _resolve_session_id(session_id)
     try:
         if not session_service.session_exists(session_id):
             raise HTTPException(status_code=404, detail="No session found")

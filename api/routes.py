@@ -3093,6 +3093,8 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
     
 # Add this Pydantic model near the top with other models
 class FeedbackSubmission(BaseModel):
+    model_config = {'protected_namespaces': ()}
+    
     transaction_id: str
     rating: int
     alternative_cause: str

@@ -3,6 +3,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Query, status, D
 from modules.extraction import ZipExtractionService
 from modules.categorization import CategorizationService
 from modules.processing import ProcessingService
+from modules.llm_service import analyze_transaction
 from modules.session import session_service
 from modules.transaction_analyzer import TransactionAnalyzerService
 from modules.schemas import (
@@ -23,6 +24,8 @@ import shutil
 from fastapi import Body
 import os
 import pandas as pd
+from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal
+from modules.journal_parser import match_journal_file, mask_ej_log
 from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal, parse_ui_journal_from_string
 from datetime import datetime
 from collections import defaultdict
@@ -38,6 +41,7 @@ import time
 from modules.logging_config import logger
 from fastapi import FastAPI
 from modules.analysis import store_metadata, store_feedback, get_user_role, get_analysis_records, get_feedback_records
+from modules.login import (verify_reset_identity,generate_reset_token,send_reset_email,validate_reset_token,reset_user_password,is_valid_password)
 
 import logging
 
@@ -1340,6 +1344,8 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
         Analyzes customer journal files from a processed ZIP session and extracts transaction data.
         Combines transactions from all customer journal files, calculates statistics per transaction type,
         and updates the session with extracted transaction data and source file details.
+        If UI journal files are present in the session, each transaction is enriched with
+        JRN fields (protocol steps, device errors, response code, STAN, retract counter, etc.).
 
     USAGE:
         result = await analyze_customer_journals(session_id="current_session")
@@ -1356,7 +1362,8 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
                 'total_transactions': int,        # Total transactions extracted
                 'statistics': list[dict],         # Transaction stats per type
                 'source_files': list[str],        # List of journal source filenames
-                'source_file_count': int          # Number of source files processed
+                'source_file_count': int,         # Number of source files processed
+                'jrn_enriched': int               # Transactions enriched with UI journal data (0 if no JRN files)
             }
 
     RAISES:
@@ -1391,10 +1398,11 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
             )
         
         logger.info(f" Found {len(journal_files)} customer journal file(s)")
-        
+        logger.info(f" Found {len(ui_journal_files)} UI journal file(s)")
+
         # Initialize analyzer
         analyzer = TransactionAnalyzerService()
-        
+
         all_transactions_df = []
         source_files = []
         source_file_map = {}
@@ -1415,28 +1423,28 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
                 if df is None or df.empty:
                     logger.debug(f"No transactions found in {source_filename}")
                     continue
-                
-                logger.info(f"Found {len(df)} transactions")
-                
+
+                df = pd.DataFrame(result["transactions"])
+                logger.info(f"Found {len(df)} transactions in {source_filename}")
+
                 all_transactions_df.append(df)
-                
+
                 if 'Transaction ID' in df.columns:
-                    file_transactions_ids = df['Transaction ID'].tolist()
-                    source_file_map[source_filename] = file_transactions_ids
-                
+                    source_file_map[source_filename] = df['Transaction ID'].tolist()
+
             except Exception as e:
                 logger.error(f"Error processing {journal_filename}: {str(e)}")
                 import traceback
                 traceback.print_exc()
                 continue
-        
+
         if not all_transactions_df:
             logger.error("No transactions extracted from customer journal files")
             raise HTTPException(
                 status_code=400,
                 detail="No transactions could be extracted from the customer journal files."
             )
-        
+
         combined_df = pd.concat(all_transactions_df, ignore_index=True)
 
         logger.info(f"\n BEFORE RENAME:")
@@ -1444,21 +1452,20 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
         logger.info(f"   Columns: {combined_df.columns.tolist()}")
         if 'Source_File' in combined_df.columns:
             logger.info(f"   Unique Source_File values: {combined_df['Source_File'].unique()}")
-        
+
         if 'Source_File' in combined_df.columns:
             combined_df = combined_df.rename(columns={'Source_File': 'Source File'})
-        
+
         logger.info(f"Total transactions extracted: {len(combined_df)}")
         logger.info(f"Total source files: {len(source_files)}")
-        
+
         if 'Source File' in combined_df.columns:
             unique_sources_in_data = combined_df['Source File'].unique().tolist()
             logger.debug(f"Source files in data: {unique_sources_in_data}")
             logger.debug(f"Source files list: {source_files}")
-        
+
         transaction_records = combined_df.to_dict('records')
 
-        # ADD THESE DEBUG LINES
         logger.info(f"\n CONVERTING TO RECORDS:")
         logger.info(f"   Total records: {len(transaction_records)}")
         if transaction_records:
@@ -1479,11 +1486,11 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
         # ── Statistics ────────────────────────────────────────────────────────
         stats = []
         for txn_type in combined_df['Transaction Type'].unique():
-            type_df = combined_df[combined_df['Transaction Type'] == txn_type]
-            successful = len(type_df[type_df['End State'] == 'Successful'])
+            type_df      = combined_df[combined_df['Transaction Type'] == txn_type]
+            successful   = len(type_df[type_df['End State'] == 'Successful'])
             unsuccessful = len(type_df[type_df['End State'] == 'Unsuccessful'])
-            total = len(type_df)
-            
+            total        = len(type_df)
+
             stats.append({
                 'Transaction Type': txn_type,
                 'Total':            total,
@@ -1491,17 +1498,23 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
                 'Unsuccessful':     unsuccessful,
                 'Success Rate':     f"{(successful / total * 100):.1f}%" if total > 0 else "0%"
             })
-        
-        logger.info("Customer journal analysis completed successfully")
-        
+
+        # Count how many transactions were enriched with JRN data
+        _jrn_cols    = [c for c in combined_df.columns if c.startswith("JRN ")]
+        jrn_enriched = int(combined_df[_jrn_cols].notna().any(axis=1).sum()) \
+        if _jrn_cols else 0
+
+        logger.info(f"Customer journal analysis completed. JRN enriched: {jrn_enriched}")
+
         return {
-            'message': 'Customer journals analyzed successfully',
-            'total_transactions': len(combined_df),
-            'statistics': stats,
-            'source_files': source_files,
-            'source_file_count': len(source_files)
+            'message':              'Customer journals analyzed successfully',
+            'total_transactions':   len(combined_df),
+            'statistics':           stats,
+            'source_files':         source_files,
+            'source_file_count':    len(source_files),
+            'jrn_enriched':         jrn_enriched,
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1933,16 +1946,8 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
                 def extract_flow_with_durations(txn_data, txn_source_file, txn_label):
                     flow_screens = ["No screens in time range"]
 
-                    # Try to find matching UI journal first
-                    matching_ui_journal = None
-                    for ui_journal in ui_journals:
-                        ui_journal_name = Path(ui_journal).stem
-                        if ui_journal_name == txn_source_file:
-                            matching_ui_journal = ui_journal
-                            logger.info(f" Found matching UI journal for {txn_label}: {ui_journal_name}")
-                            break
-
-                    # If no exact match, try all UI journals
+                    # Use journal_parser.match_journal_file for exact stem matching
+                    matching_ui_journal = match_journal_file(txn_source_file, ui_journals)
                     ui_journals_to_check = [matching_ui_journal] if matching_ui_journal else ui_journals
 
                     for ui_journal_filename in ui_journals_to_check:
@@ -2426,14 +2431,8 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                 txn_source_file = str(txn_data.get('Source File', ''))
                 logger.info(f" Transaction source file: {txn_source_file}")
 
-                matching_ui_journal = None
-                for ui_journal in ui_journals:
-                    ui_journal_name = Path(ui_journal).stem
-                    if ui_journal_name == txn_source_file:
-                        matching_ui_journal = ui_journal
-                        logger.info(f" Found matching UI journal: {ui_journal_name}")
-                        break
-
+                # Use journal_parser.match_journal_file for exact stem matching
+                matching_ui_journal = match_journal_file(txn_source_file, ui_journals)
                 ui_journals_to_check = [matching_ui_journal] if matching_ui_journal else ui_journals
 
                 for ui_journal_filename in ui_journals_to_check:
@@ -2936,92 +2935,59 @@ class TransactionAnalysisRequest(BaseModel):
 async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_id: str = Query(default=None)):
     """
     FUNCTION:
-        generate_consolidated_flow
+        analyze_transaction_llm
 
     DESCRIPTION:
-        Generates a consolidated UI flow visualization for **all transactions**
-        of a specific transaction type originating from a given source file.
-        The function processes transaction data, matches the correct UI journal,
-        extracts screen flows for each transaction, and returns aggregated
-        results including screens, transitions, and per-transaction flows.
+        Analyzes a single ATM transaction using the LLM. Validates the session
+        and transaction data, then delegates the full EJ/JRN pipeline, prompt
+        construction, Ollama call, and metadata storage to llm_service.analyze_transaction().
 
     USAGE:
-        result = generate_consolidated_flow(
-            source_file="ATM1",
-            transaction_type="Cash Withdrawal",
-            session_id="12345"
-        )
+        result = await analyze_transaction_llm(request, session_id="current_session")
 
     PARAMETERS:
-        source_file (str):
-            Name of the source UI journal file (without extension).
-            Used to match UI logs against transaction data.
-
-        transaction_type (str):
-            Transaction type to filter on (e.g., "Cash Withdrawal",
-            "Balance Inquiry", etc.).
-
-        session_id (str):
-            Session identifier used to retrieve processed ZIP data from
-            session storage. Defaults to the current session.
+        request (TransactionAnalysisRequest) :
+            Contains transaction_id and employee_code.
+        session_id (str) :
+            Session ID containing processed transaction data.
+            Defaults to CURRENT_SESSION_ID.
 
     RETURNS:
-        dict:
-            A dictionary containing the consolidated UI flow analysis:
-                {
-                    "source_file": str,
+        dict :
+            {
+                "summary": str,
+                "analysis": str,
+                "timestamp": str,
+                "metadata": {
+                    "transaction_id": str,
+                    "model": str,
+                    "log_length": int,
+                    "response_length": int,
+                    "analysis_type": str,
                     "transaction_type": str,
-                    "total_transactions": int,
-                    "transactions_with_flow": int,
-                    "successful_count": int,
-                    "unsuccessful_count": int,
-                    "screens": list[str],                     # unique screens
-                    "transitions": [
-                        {
-                            "from": str,
-                            "to": str,
-                            "count": int
-                        }
-                    ],
-                    "screen_transactions": {
-                        "ScreenName": [
-                            {
-                                "txn_id": str,
-                                "start_time": str,
-                                "state": str
-                            }
-                        ]
-                    },
-                    "transaction_flows": {
-                        "txn_id": {
-                            "screens": list[str],
-                            "start_time": str,
-                            "end_time": str,
-                            "state": str
-                        }
-                    }
+                    "transaction_state": str,
+                    "start_time": str,
+                    "end_time": str,
+                    "source_file": str,
+                    "jrn_data_available": bool,
+                    "analysis_time_seconds": float
                 }
+            }
 
     RAISES:
-        HTTPException 404:
-            - Session not found
-            - No matching transactions found
-            - No matching UI journal found
-
-        HTTPException 400:
-            - Missing or empty UI journal
-            - Missing transaction data in session
-
-        HTTPException 500:
-            - Unexpected errors during flow extraction or processing
+        HTTPException :
+            - 404 if session or transaction not found
+            - 400 if no transaction log available
+            - 422 if log could not be parsed or has insufficient data
+            - 500 if Ollama is not installed or LLM call fails
     """
     session_id = _resolve_session_id(session_id)
     try:
         transaction_id = request.transaction_id
         logger.info(f" Analyzing transaction with LLM: {transaction_id}")
         logger.debug(f"Request data: {request.dict()}")
-        
-        # Check session
+
+        # ── Session check ─────────────────────────────────────────────────
         if not session_service.session_exists(session_id):
             logger.error(f"No session found for session_id: {session_id}")
             raise HTTPException(status_code=404, detail="No session found")
@@ -3036,126 +3002,59 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
             raise HTTPException(status_code=400, detail="No transaction data available")
 
         df = pd.DataFrame(transaction_data)
-        
-        # Find the transaction
+
         if transaction_id not in df['Transaction ID'].values:
             logger.error(f"Transaction {transaction_id} not found in session {session_id}")
             raise HTTPException(status_code=404, detail=f"Transaction {transaction_id} not found")
 
         txn_data        = df[df['Transaction ID'] == transaction_id].iloc[0].to_dict()
         transaction_log = str(txn_data.get('Transaction Log', ''))
-        
         if not transaction_log:
             logger.error(f"No transaction log available for transaction {transaction_id}")
             raise HTTPException(status_code=400, detail="No transaction log available for this transaction")
 
         logger.info(f" Found transaction log ({len(transaction_log)} characters)")
 
-        # Call LLM for analysis
-        try:
-            import ollama
-            
-            messages = [
-                {
-                    "role": "system", 
-                    "content": "You are a log analysis expert specializing in ATM transaction diagnostics. Analyze the provided transaction log for anomalies, errors, and potential issues. Provide a clear, concise analysis in plain text format - do not use JSON in your response. Focus on: 1) What happened, 2) Why it might have happened, 3) Potential root causes."
-                },
-                {
-                    "role": "user", 
-                    "content": f"Analyze this ATM transaction log for anomalies and issues:\n\n{transaction_log}"
-                }
-            ]
-            
-            logger.info(" Calling Ollama model...")
-            analysis_start_time = time.perf_counter()
-            logger.debug(f"LLM messages payload: {messages}")
-            
-            response = ollama.chat(model="llama3_log_analyzer", messages=messages)\
-            
-            analysis_end_time = time.perf_counter()
-            analysis_duration = round(analysis_end_time - analysis_start_time, 3)
+        # ── Filter UI journals (JOURNAL/ top-level only, exclude VCP-PRO) ─
+        file_categories = session_data.get('file_categories', {})
+        all_ui_journals = file_categories.get('ui_journals', [])
+        llm_ui_journals = [
+            f for f in all_ui_journals
+            if 'vcp-pro' not in str(f).replace('\\', '/').lower()
+        ]
 
-            raw_response = response['message']['content'].strip()
-            #logger.info(f"Type of raw_response: {type(raw_response)}")
-            #logger.debug(raw_response)
-            logger.info(
-                f"Transaction LLM analysis completed | "
-                f"txn_id={transaction_id} | "
-                f"model=llama3_log_analyzer | "
-                f"analysis_time={analysis_duration}s"
-            )
+        # ── Delegate full LLM pipeline to llm_service ─────────────────────
+        return analyze_transaction(
+            transaction_id=transaction_id,
+            transaction_log=transaction_log,
+            txn_data=txn_data,
+            ui_journal_files=llm_ui_journals,
+            employee_code=request.employee_code,
+        )
 
-            logger.info(f" LLM analysis complete ({len(raw_response)} characters)")
-            
-            # Structure the response
-            structured_response = {
-                "summary": "Transaction log analysis completed",
-                "analysis": raw_response,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "metadata": {
-                    "transaction_id": transaction_id,
-                    "model": "llama3_log_analyzer",
-                    "log_length": len(transaction_log),
-                    "response_length": len(raw_response),
-                    "analysis_type": "anomaly_detection",
-                    "transaction_type": str(txn_data.get('Transaction Type', 'Unknown')),
-                    "transaction_state": str(txn_data.get('End State', 'Unknown')),
-                    "start_time": str(txn_data.get('Start Time', '')),
-                    "end_time": str(txn_data.get('End Time', '')),
-                    "source_file": str(txn_data.get('Source File', 'Unknown')),
-                    "analysis_time_seconds": analysis_duration,
-                    "llm_raw_response": raw_response  #  store raw response here
-                }
-            }
-            
-            logger.debug(f"Structured response prepared for transaction {transaction_id}")
-            # -------------------------------------------------------
-            # STORE OLLAMA METADATA INTO userresponse DB
-            # -------------------------------------------------------
-            store_metadata(
-                transaction_id        = transaction_id,
-                employee_code  = request.employee_code, 
-                model                 = "llama3_log_analyzer",
-                transaction_type      = str(txn_data.get('Transaction Type', 'Unknown')),
-                transaction_state     = str(txn_data.get('End State', 'Unknown')),
-                source_file           = str(txn_data.get('Source File', 'Unknown')),
-                start_time            = str(txn_data.get('Start Time', '')),
-                end_time              = str(txn_data.get('End Time', '')),
-                log_length            = len(transaction_log),
-                response_length       = len(raw_response),
-                analysis_time_seconds = analysis_duration,
-                llm_analysis          = raw_response
-            )
-            logger.info(f"Ollama metadata stored for txn: {transaction_id}")
-            # -------------------------------------------------------
-            return structured_response
-            
-        except ImportError:
-            logger.error("Ollama is not installed")
-            raise HTTPException(
-                status_code=500,
-                detail="Ollama is not installed. Please install it with: pip install ollama"
-            )
-        except Exception as e:
-            logger.exception(f"LLM analysis error for transaction {transaction_id}: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"LLM analysis failed: {str(e)}"
-            )
-        
     except HTTPException:
         raise
+    except ValueError as ve:
+        logger.error(f"Validation error for transaction {request.transaction_id}: {ve}")
+        raise HTTPException(status_code=422, detail=str(ve))
+    except ImportError:
+        logger.error("Ollama is not installed")
+        raise HTTPException(
+            status_code=500,
+            detail="Ollama is not installed. Please install it with: pip install ollama"
+        )
     except Exception as e:
-        logger.exception(f"Analysis failed for transaction {transaction_id}: {str(e)}")
+        logger.exception(f"Analysis failed for transaction {request.transaction_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Analysis failed: {str(e)}"
         )
-    
+
+
 # Add this Pydantic model near the top with other models
 class FeedbackSubmission(BaseModel):
     model_config = {'protected_namespaces': ()}
-    
+
     transaction_id: str
     rating: int
     alternative_cause: str
@@ -4436,4 +4335,287 @@ async def fetch_feedback_records(
         "status":  "success",
         "count":   len(records),
         "records": records
+    }
+
+
+# ============================================
+# FORGOT PASSWORD ENDPOINTS
+# ============================================
+class ForgotPasswordRequest(BaseModel):
+    username:      str
+    employee_code: str
+    base_url:      str  # actual app URL detected from browser, passed by Streamlit UI
+
+class ResetPasswordRequest(BaseModel):
+    token:            str
+    new_password:     str
+    confirm_password: str
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /forgot-password
+# ─────────────────────────────────────────────────────────────────────────────
+@router.post("/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest):
+    """
+        Handles the Forgot.
+        Endpoint:
+        ---------
+        POST /api/v1/forgot-password
+
+        Description:
+        ------------
+        1. Verifies that the username + employee_code combination
+           exists in the DB and the account is active.
+        2. If valid, generates a secure single-use reset token and
+           stores it in the password_reset_tokens table.
+        3. Sends a password reset email to the user containing a
+           link built from the base_url passed by the frontend.
+
+        Request Body:
+        -------------
+        {
+            "username":      "user@example.com",
+            "employee_code": "12345678",
+            "base_url":      "http://192.168.1.5:8501"
+        }
+
+        base_url is the actual URL the Streamlit app is being accessed
+        from (detected via st.context.headers on the frontend). This
+        ensures the reset link in the email works on any machine on the
+        network, not just localhost.
+
+        Returns:
+        --------
+        200 OK:
+            { "status": "success", "message": "Reset email sent." }
+
+        400 Bad Request:
+            { "detail": "Invalid username or employee code." }
+
+        500 Internal Server Error:
+            { "detail": "Could not send reset email." }
+
+        Security:
+        ---------
+        - Returns generic 400 for invalid identity (no info leak).
+        - Token is single-use and expires in 30 minutes.
+        - Previous active tokens for the user are invalidated.
+    """
+    logger.info("send forgot-password— user: %s", request.username)
+
+    # ── Step 1: Verify identity ────────────────────────────────────
+    is_valid = verify_reset_identity(
+        username=request.username.strip(),
+        employee_code=request.employee_code.strip()
+    )
+
+    if not is_valid:
+        logger.warning(
+            "forgot_password: identity check failed for user: %s",
+            request.username
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid username or employee code. "
+                   "Please check your details and try again."
+        )
+
+    # ── Step 2: Generate token ─────────────────────────────────────
+    token = generate_reset_token(request.username.strip())
+
+    if not token:
+        logger.error(
+            "forgot_password: token generation failed for user: %s",
+            request.username
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to generate reset token. Please try again."
+        )
+
+    # ── Step 3: Send email with real base_url ──────────────────────
+    email_sent = send_reset_email(
+        to_email=request.username.strip(),
+        token=token,
+        base_url=request.base_url.strip() if request.base_url else None
+    )
+
+    if not email_sent:
+        logger.error(
+            "forgot_password: email failed for user: %s",
+            request.username
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Identity verified but email could not be sent. "
+                   "Please contact your administrator."
+        )
+
+    logger.info(
+        "forgot_password: reset email dispatched for user: %s via %s",
+        request.username, request.base_url
+    )
+    return {
+        "status":  "success",
+        "message": "A password reset link has been sent to your email. "
+                   "Please check your inbox and click the link within 30 minutes."
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /validate-reset-token
+# Step: Check if a token is still valid before showing the reset form
+# ─────────────────────────────────────────────────────────────────────────────
+@router.get("/validate-reset-token")
+async def validate_token_endpoint(token: str = Query(..., description="Reset token from email link")):
+    """
+        Validates a password reset token.
+
+        Endpoint:
+        ---------
+        GET /api/v1/validate-reset-token?token=<token>
+
+        Description:
+        ------------
+        Checks whether the given token:
+        - Exists in the password_reset_tokens table.
+        - Has not been used (is_used = FALSE).
+        - Has not expired (expires_at > NOW()).
+
+        Called by the Streamlit frontend when the user lands on the
+        reset password page, before showing the new password form.
+
+        Query Parameters:
+        -----------------
+        token : str (required)
+            The URL-safe reset token from the email link.
+
+        Returns:
+        --------
+        200 OK (valid):
+            { "status": "valid", "username": "user@example.com" }
+
+        400 Bad Request (invalid/expired):
+            { "detail": "Reset link is invalid or has expired." }
+
+        Security:
+        ---------
+        Does not reveal WHY the token is invalid (expired vs used).
+    """
+    logger.info("validate-reset-token called")
+
+    username = validate_reset_token(token)
+
+    if not username:
+        logger.warning("validate_token_endpoint: invalid/expired token")
+        raise HTTPException(
+            status_code=400,
+            detail="This reset link is invalid or has expired. "
+                   "Please request a new password reset."
+        )
+
+    logger.info("validate_token_endpoint: valid token for user: %s", username)
+    return {
+        "status":   "valid",
+        "username": username
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /reset-password
+# Step : Validate all  rules + update password + consume token
+# ─────────────────────────────────────────────────────────────────────────────
+@router.post("/reset-password")
+async def reset_password_endpoint(request: ResetPasswordRequest):
+    """
+        Resets the user's password after full validation.
+
+        Endpoint:
+        ---------
+        POST /api/v1/reset-password
+
+        Description:
+        ------------
+        Applies all 4 password validation rules before updating:
+
+        Rule 1 — Both fields filled:
+            new_password and confirm_password must not be empty.
+
+        Rule 2 — Passwords match:
+            new_password must equal confirm_password exactly.
+
+        Rule 3 — Strong password (is_valid_password):
+            - Minimum 8 characters
+            - At least 1 uppercase letter
+            - At least 1 lowercase letter
+            - At least 2 digits
+            - At least 1 special character
+
+        Rule 4 — Not same as old password:
+            New password hash must differ from the current stored hash.
+
+        Then:
+        - Updates password_hash in Users table.
+        - Marks the token as is_used = TRUE (single-use).
+        - Logs a password_reset event in login_history.
+
+        Request Body:
+        -------------
+        {
+            "token":            "<reset token>",
+            "new_password":     "NewPass@123",
+            "confirm_password": "NewPass@123"
+        }
+
+        Returns:
+        --------
+        200 OK:
+            { "status": "success", "message": "Password reset successfully." }
+
+        400 Bad Request:
+            { "detail": "<specific validation error message>" }
+
+        Security:
+        ---------
+        - Token is validated and consumed atomically.
+        - Password is SHA-256 hashed before storage.
+        - Expired/used tokens are rejected at this stage too.
+    """
+    logger.info("POST /reset-password called")
+
+    if not request.new_password or not request.confirm_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Both password fields are required."
+        )
+    if request.new_password != request.confirm_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Passwords do not match. Please re-enter both fields."
+        )
+    if not is_valid_password(request.new_password):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Password does not meet strength requirements: "
+                "min 8 characters, 1 uppercase, 1 lowercase, "
+                "2 digits, 1 special character (!@#$%^&* etc.)"
+            )
+        )
+
+    # ── Rule 4: Token validation + old password check + DB update ─
+    success, message = reset_user_password(
+        token=request.token,
+        new_password=request.new_password
+    )
+
+    if not success:
+        logger.warning("reset_password_endpoint: reset failed — %s", message)
+        raise HTTPException(status_code=400, detail=message)
+
+    logger.info("reset_password_endpoint: password reset successful")
+    return {
+        "status":  "success",
+        "message": "Your password has been reset successfully. You can now log in."
     }

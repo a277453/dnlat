@@ -473,13 +473,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
                         'registry_files', 'acu_files', 'unidentified'):
             file_categories[branch] = [Path(p).name for p in file_categories[branch]]
 
-        # # Delete the run folder from Temp so all content is now in memory.
-        # try:
-        #     shutil.rmtree(extract_path, ignore_errors=False)
-        #     logger.info(f"Temp run folder deleted: {extract_path}")
-        # except Exception as e:
-        #     logger.error(f"Failed to delete Temp run folder {extract_path}: {e}")
-
+        
         # ------------------ SESSION CREATION------------------
         logger.info("Creating/updating session")
 

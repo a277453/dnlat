@@ -1069,24 +1069,24 @@ def show_register_page():
 
             email = email.strip().lower()
             name = name.strip().title()
-            
+            #CAtharv_0702:Changed the spacing in logging.
             if not all([email, name, password, confirm_password, employee_code]):
-                st.error("  All fields are required")
+                st.error("All fields are required")
 
             elif not re.match(email_pattern, email):
                 st.error("Please use your official Diebold Nixdorf email ID")
 
             elif not re.match(name_pattern, name):
-                st.error("  Name must contain only letters and spaces")    
+                st.error("Name must contain only letters and spaces")    
             
             elif not is_valid_password(password):
                 st.error("Password must be at least 8 characters long and include uppercase, lowercase, Min 2 digits, and special character.")
 
             elif password != confirm_password:
-                st.error("  Passwords do not match with confirm password")
+                st.error("Passwords do not match with confirm password")
 
             elif is_invalid_emp_code(employee_code):
-                st.error("  Please enter a valid 8-digit employee code")
+                st.error("Please enter a valid 8-digit employee code")
 
 
             else:
@@ -2664,15 +2664,15 @@ def render_registry_compare():
                             text_a = safe_decode(content_a)
                             text_b = safe_decode(content_b)
                             
-                            # Store in session state so it persists across checkbox reruns
-                            st.session_state.registry_comparison = {
-                                'text_a': text_a,
-                                'text_b': text_b,
-                                'fname_a': f"Package 1: {selected_filename}",
-                                'fname_b': f"Package 2: {selected_filename}",
-                                'selected_file': selected_filename
-                            }
-                            st.rerun()
+                            # Check if files are identical
+                            if text_a == text_b:
+                                st.success("No changes in Registry - Files are identical")
+                                st.info(f"**{selected_filename}** has no differences between Package 1 and Package 2")
+                            else:
+                                # Render side-by-side comparison
+                                fname_a = f"Package 1: {selected_filename}"
+                                fname_b = f"Package 2: {selected_filename}"
+                                render_side_by_side_diff(text_a, text_b, fname_a, fname_b)
 
                         except Exception as e:
                             st.error(f"Error comparing files: {str(e)}")
@@ -4683,6 +4683,7 @@ RAISES:
             st.markdown("---")
             st.markdown("####   AI Analysis")
             
+            logger.info(f"Ollama output was:- {result}")
             analysis_text = result.get('analysis', 'No analysis available')
             
             # Display in a theme-aware box
@@ -4848,26 +4849,47 @@ RAISES:
                                         result_data = response.json()
                                         st.success(result_data['message'])
                                         
-                                        # Clear form
-                                        keys_to_clear = [
-                                            f"{feedback_key_prefix}_rating",
-                                            f"{feedback_key_prefix}_alternative",
-                                            f"{feedback_key_prefix}_comment",
-                                            f"{feedback_key_prefix}_user_select"
-                                        ]
-                                        for key in keys_to_clear:
-                                            if key in st.session_state:
-                                                del st.session_state[key]
+                                        feedback_data = {
+                                            "transaction_id": selected_txn_id,
+                                            "rating": st.session_state.get(f"{feedback_key_prefix}_rating", 3),
+                                            "alternative_cause": st.session_state.get(f"{feedback_key_prefix}_alternative", anomaly_categories[0]),
+                                            "comment": st.session_state.get(f"{feedback_key_prefix}_comment", ""),
+                                            "user_name": st.session_state.get("username"),
+                                            "user_email": user_email,
+                                            "model_version": result.get("metadata", {}).get("model", "unknown"),
+                                            "original_llm_response": result.get('analysis', '')
+                                        }
                                         
-                                        import time
-                                        time.sleep(1)
-                                        st.rerun()
-                                    else:
-                                        error_detail = response.json().get('detail', 'Failed to submit')
-                                        st.error(f"  {error_detail}")
+                                        response = requests.post(
+                                            f"{API_BASE_URL}/submit-llm-feedback",
+                                            json=feedback_data,
+                                            timeout=30
+                                        )
                                         
-                                except Exception as e:
-                                    st.error(f"  Error submitting feedback: {str(e)}")
+                                        if response.status_code == 200:
+                                            result_data = response.json()
+                                            st.success(result_data['message'])
+                                            
+                                            # Clear form
+                                            keys_to_clear = [
+                                                f"{feedback_key_prefix}_rating",
+                                                f"{feedback_key_prefix}_alternative",
+                                                f"{feedback_key_prefix}_comment",
+                                                f"{feedback_key_prefix}_user_select"
+                                            ]
+                                            for key in keys_to_clear:
+                                                if key in st.session_state:
+                                                    del st.session_state[key]
+                                            
+                                            import time
+                                            time.sleep(1)
+                                            st.rerun()
+                                        else:
+                                            error_detail = response.json().get('detail', 'Failed to submit')
+                                            st.error(f"  {error_detail}")
+                                            
+                                    except Exception as e:
+                                        st.error(f"  Error submitting feedback: {str(e)}")
 
                 with col2:
                     if st.button("Clear Form", 

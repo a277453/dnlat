@@ -15,39 +15,39 @@ logger.info("Starting session_service")
 
 class SessionService:
     """
-    CLASS: SessionService
+        CLASS: SessionService
 
-DESCRIPTION:
-    Manages lifecycle and data storage for sessions created during file
-    processing. Supports creation, retrieval, updating, deletion, and
-    checking of session existence.
+        DESCRIPTION:
+            Manages lifecycle and data storage for sessions created during file
+            processing. Supports creation, retrieval, updating, deletion, and
+            checking of session existence.
 
-USAGE:
-    service = SessionService()
-    service.create_session("123", file_categories={...})
-    data = service.get_session("123")
+        USAGE:
+            service = SessionService()
+            service.create_session("123", file_categories={...})
+            data = service.get_session("123")
 
     """
     
     def __init__(self):
         """
-    FUNCTION: __init__
+        FUNCTION: __init__
 
-    DESCRIPTION:
-        Initializes the in-memory session dictionary used to store all
-        session-related data.
+        DESCRIPTION:
+            Initializes the in-memory session dictionary used to store all
+            session-related data.
 
-    USAGE:
-        service = SessionService()
+        USAGE:
+            service = SessionService()
 
-    PARAMETERS:
-        None
+        PARAMETERS:
+            None
 
-    RETURNS:
-        None
+        RETURNS:
+            None
 
-    RAISES:
-        None
+        RAISES:
+            None
         """
         # In-memory storage (use Redis/Database in production)
         self._sessions: Dict[str, Dict[str, Any]] = {}
@@ -86,22 +86,22 @@ RAISES:
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
-        FUNCTION: get_session
+            FUNCTION: get_session
 
-DESCRIPTION:
-    Retrieves complete session data for a given session ID.
+            DESCRIPTION:
+                Retrieves complete session data for a given session ID.
 
-USAGE:
-    session = service.get_session("abc")
+            USAGE:
+                session = service.get_session("abc")
 
-PARAMETERS:
-    session_id (str) : Session identifier.
+            PARAMETERS:
+                session_id (str) : Session identifier.
 
-RETURNS:
-    dict | None : Session data if found, otherwise None.
+            RETURNS:
+                dict | None : Session data if found, otherwise None.
 
-RAISES:
-    None
+            RAISES:
+                None
         """
         session = self._sessions.get(session_id)
         if session:
@@ -112,23 +112,23 @@ RAISES:
 
     def get_session_data(self, session_id: str, key: str) -> Any:
         """
-        FUNCTION: get_session_data
+            FUNCTION: get_session_data
 
-DESCRIPTION:
-    Retrieves a specific key/value stored in a session.
+            DESCRIPTION:
+                Retrieves a specific key/value stored in a session.
 
-USAGE:
-    value = service.get_session_data("abc", "file_categories")
+            USAGE:
+                value = service.get_session_data("abc", "file_categories")
 
-PARAMETERS:
-    session_id (str) : Session identifier.
-    key (str)        : Key to fetch from session data.
+            PARAMETERS:
+                session_id (str) : Session identifier.
+                key (str)        : Key to fetch from session data.
 
-RETURNS:
-    Any | None : Value of the key, or None if session/key doesn't exist.
+            RETURNS:
+                Any | None : Value of the key, or None if session/key doesn't exist.
 
-RAISES:
-    None
+            RAISES:
+                None
         """
         session = self.get_session(session_id)
         if session:
@@ -140,28 +140,28 @@ RAISES:
 
     def update_session(self, session_id: str, key: str = None, value: Any = None, data: Dict = None) -> bool:
         """
-        FUNCTION: update_session
+            FUNCTION: update_session
 
-        DESCRIPTION:
-            Updates session data. Supports updating a single key/value pair or
-            merging an entire dictionary of updates.
+            DESCRIPTION:
+                Updates session data. Supports updating a single key/value pair or
+                merging an entire dictionary of updates.
 
-        USAGE:
-            service.update_session("abc", key="selected_type", value="ui_journals")
-            OR
-            service.update_session("abc", data={"processed_data": {...}})
+            USAGE:
+                service.update_session("abc", key="selected_type", value="ui_journals")
+                OR
+                service.update_session("abc", data={"processed_data": {...}})
 
-        PARAMETERS:
-            session_id (str) : Session identifier.
-            key (str?)       : A single key to update.
-            value (Any?)     : Value to set for the key.
-            data (dict?)     : Dictionary of multiple keys/values to update.
+            PARAMETERS:
+                session_id (str) : Session identifier.
+                key (str?)       : A single key to update.
+                value (Any?)     : Value to set for the key.
+                data (dict?)     : Dictionary of multiple keys/values to update.
 
-        RETURNS:
-            bool : True if updated, False if session does not exist.
+            RETURNS:
+                bool : True if updated, False if session does not exist.
 
-        RAISES:
-            None
+            RAISES:
+                None
         """
         if session_id in self._sessions:
             if data:
@@ -177,22 +177,22 @@ RAISES:
 
     def get_file_categories(self, session_id: str) -> Optional[Dict[str, list]]:
         """
-        FUNCTION: get_file_categories
+            FUNCTION: get_file_categories
 
-DESCRIPTION:
-    Returns file categories stored in a session.
+            DESCRIPTION:
+                Returns file categories stored in a session.
 
-USAGE:
-    categories = service.get_file_categories("abc")
+            USAGE:
+                categories = service.get_file_categories("abc")
 
-PARAMETERS:
-    session_id (str) : Session identifier.
+            PARAMETERS:
+                session_id (str) : Session identifier.
 
-RETURNS:
-    dict | None : File categories or None if session does not exist.
+            RETURNS:
+                dict | None : File categories or None if session does not exist.
 
-RAISES:
-    None
+            RAISES:
+                None
         """
         session = self.get_session(session_id)
         if session:
@@ -203,23 +203,23 @@ RAISES:
 
     def set_selected_type(self, session_id: str, file_type: str) -> bool:
         """
-        FUNCTION: set_selected_type
+            FUNCTION: set_selected_type
 
-DESCRIPTION:
-    Updates the selected file type for the session.
+            DESCRIPTION:
+                Updates the selected file type for the session.
 
-USAGE:
-    service.set_selected_type("abc", "customer_journals")
+            USAGE:
+                service.set_selected_type("abc", "customer_journals")
 
-PARAMETERS:
-    session_id (str) : Session identifier.
-    file_type (str)  : Selected file type value.
+            PARAMETERS:
+                session_id (str) : Session identifier.
+                file_type (str)  : Selected file type value.
 
-RETURNS:
-    bool : True if updated, False otherwise.
+            RETURNS:
+                bool : True if updated, False otherwise.
 
-RAISES:
-    None
+            RAISES:
+                None
         """
         result = self.update_session(session_id, 'selected_type', file_type)
         if result:
@@ -228,22 +228,22 @@ RAISES:
 
     def get_selected_type(self, session_id: str) -> Optional[str]:
         """
-        FUNCTION: get_selected_type
+            FUNCTION: get_selected_type
 
-DESCRIPTION:
-    Retrieves the selected file type for a session.
+            DESCRIPTION:
+                Retrieves the selected file type for a session.
 
-USAGE:
-    t = service.get_selected_type("abc")
+            USAGE:
+                t = service.get_selected_type("abc")
 
-PARAMETERS:
-    session_id (str) : Session identifier.
+            PARAMETERS:
+                session_id (str) : Session identifier.
 
-RETURNS:
-    str | None : Selected type or None if not set or session missing.
+            RETURNS:
+                str | None : Selected type or None if not set or session missing.
 
-RAISES:
-    None
+            RAISES:
+                None
         """
         session = self.get_session(session_id)
         if session:
@@ -255,22 +255,22 @@ RAISES:
 
     def delete_session(self, session_id: str) -> bool:
         """
-        FUNCTION: delete_session
+            FUNCTION: delete_session
 
-    DESCRIPTION:
-        Deletes the entire session from storage.
+            DESCRIPTION:
+                Deletes the entire session from storage.
 
-    USAGE:
-        service.delete_session("abc")
+            USAGE:
+                service.delete_session("abc")
 
-    PARAMETERS:
-        session_id (str) : Session identifier.
+            PARAMETERS:
+                session_id (str) : Session identifier.
 
-    RETURNS:
-        bool : True if deleted, False otherwise.
+            RETURNS:
+                bool : True if deleted, False otherwise.
 
-    RAISES:
-        None
+            RAISES:
+                None
         """
         if session_id in self._sessions:
             del self._sessions[session_id]
@@ -281,22 +281,22 @@ RAISES:
 
     def session_exists(self, session_id: str) -> bool:
         """
-        FUNCTION: session_exists
+            FUNCTION: session_exists
 
-    DESCRIPTION:
-        Checks whether a session with the given ID exists.
+            DESCRIPTION:
+                Checks whether a session with the given ID exists.
 
-    USAGE:
-        exists = service.session_exists("abc")
+            USAGE:
+                exists = service.session_exists("abc")
 
-    PARAMETERS:
-        session_id (str) : Session identifier.
+            PARAMETERS:
+                session_id (str) : Session identifier.
 
-    RETURNS:
-        bool : True if session exists, otherwise False.
+            RETURNS:
+                bool : True if session exists, otherwise False.
 
-    RAISES:
-        None
+            RAISES:
+                None
         """
         exists = session_id in self._sessions
         logger.debug(f"Session exists check for {session_id}: {exists}") 

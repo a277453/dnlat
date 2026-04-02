@@ -14,12 +14,13 @@ from fastapi.logger import logger
 from modules.analysis import create_analysis_table, create_feedback_table, create_userresponse_database
 from modules.streamlit_logger import logger as frontend_logger
 import time
-from modules.login import register_user
-import re as _re; from datetime import datetime as _dt
+from modules.login import create_reset_tokens_table, register_user, is_valid_password, is_same_as_old_password
+import re as _re
+from datetime import datetime as _dt
 
 
 # Import authentication functions
-from admin_setup import create_dn_diagnostics_database, initialize_admin_table
+from admin_setup import create_dn_diagnostics_database, initialize_admin_table, validate_env
 from modules.login import (
     create_login_history_table,
     initialize_session,
@@ -31,6 +32,9 @@ from modules.login import (
 )
 # IMPORTANT 
 initialize_session()
+# def init_app():
+#     validate_env()
+#     create_dn_diagnostics_database()
 
 frontend_logger.info("Streamlit app loaded")
 
@@ -45,140 +49,391 @@ st.set_page_config(
 )
 
 # ============================================
-# CSS STYLES
+# THEME STATE INITIALIZATION
 # ============================================
-#new change(hide icon )
-st.markdown("""
+if 'theme' not in st.session_state:
+    st.session_state.theme = 'dark'
+
+def is_dark():
+    return st.session_state.get('theme', 'dark') == 'dark'
+
+# ============================================
+# THEME-AWARE CSS INJECTION
+# ============================================
+def inject_theme_css():
+    dark = is_dark()
+
+    # ── colour tokens ──────────────────────────────────────────────
+    if dark:
+        bg_main        = "#0a0a0a"
+        bg_card        = "#1a1a1a"
+        bg_deep        = "#0f0f0f"
+        border_col     = "#2a2a2a"
+        border_input   = "#404040"
+        text_primary   = "#ffffff"
+        text_secondary = "#e0e0e0"
+        text_muted     = "#9ca3af"
+        text_code      = "#e0e0e0"
+        line_num_col   = "#666666"
+        sidebar_grad   = "linear-gradient(180deg, #1a1a1a 0%, #0f0f0f 100%)"
+        sidebar_border = "#2a2a2a"
+        diff_scroll_bg = "#0f0f0f"
+        diff_cont_bg   = "#2a2a2a"
+        diff_pane_bg   = "#0f0f0f"
+        diff_line_border = "#1a1a1a"
+        diff_hover_bg  = "#1a1a1a"
+        uploader_bg    = "#1a1a1a"
+        uploader_hover = "#1f1f1f"
+        select_bg      = "#1a1a1a"
+        input_bg       = "#1a1a1a"
+    else:
+        bg_main        = "#f0f4f8"
+        bg_card        = "#ffffff"
+        bg_deep        = "#e8edf2"
+        border_col     = "#d1d9e0"
+        border_input   = "#b0bec5"
+        text_primary   = "#0d1117"
+        text_secondary = "#1e2a35"
+        text_muted     = "#546e7a"
+        text_code      = "#1e2a35"
+        line_num_col   = "#90a4ae"
+        sidebar_grad   = "linear-gradient(180deg, #e8edf2 0%, #dde3ea 100%)"
+        sidebar_border = "#cdd5de"
+        diff_scroll_bg = "#f5f7fa"
+        diff_cont_bg   = "#d1d9e0"
+        diff_pane_bg   = "#f5f7fa"
+        diff_line_border = "#e4eaf0"
+        diff_hover_bg  = "#edf1f5"
+        uploader_bg    = "#ffffff"
+        uploader_hover = "#f5f7fa"
+        select_bg      = "#ffffff"
+        input_bg       = "#ffffff"
+
+    st.markdown(f"""
     <style>
-    /* Completely hide all Streamlit branding and deploy button */
-    #MainMenu {visibility: hidden !important;}
-    footer {visibility: hidden !important;}
-    header {visibility: hidden !important;}
-    
-    [data-testid="stToolbar"] {
-        display: none !important;
-    }
-    
-    [data-testid="stDecoration"] {
-        display: none !important;
-    }
-    
-    button[kind="header"] {
-        display: none !important;
-    }
-    
-    .css-1dp5vir {
-        display: none !important;
-    }
-    
-    /* Your existing styles below... */        
-    #------------------------------------------------
-    /* Global Styles */
-    .main {
-        background-color: #0a0a0a;
-        color: #e0e0e0;
-    }
-    
-    .block-container {
+    /* ── Hide Streamlit branding ── */
+    #MainMenu {{visibility: hidden !important;}}
+    footer {{visibility: hidden !important;}}
+    header {{visibility: hidden !important;}}
+    [data-testid="stToolbar"]    {{display: none !important;}}
+    [data-testid="stDecoration"] {{display: none !important;}}
+    button[kind="header"]        {{display: none !important;}}
+    .css-1dp5vir                 {{display: none !important;}}
+
+    /* ── Fill full viewport so no black gap shows on scroll ── */
+    html {{
+        background-color: {bg_main} !important;
+        min-height: 100% !important;
+    }}
+    body {{
+        background-color: {bg_main} !important;
+        min-height: 100vh !important;
+    }}
+
+    /* ── Global background & base text ── */
+    .stApp, .main {{
+        background-color: {bg_main} !important;
+        color: {text_secondary} !important;
+    }}
+
+    /* Force ALL text elements to use theme colour */
+    .stApp p, .stApp span, .stApp div,
+    [data-testid="stMarkdownContainer"],
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] span,
+    [data-testid="stText"],
+    .stText {{
+        color: {text_secondary} !important;
+    }}
+
+    /* ── Form & widget labels (Username, Password etc.) ── */
+    label,
+    .stTextInput label,
+    .stSelectbox label,
+    .stFileUploader label,
+    .stTextArea label,
+    .stNumberInput label,
+    .stCheckbox label,
+    .stRadio label,
+    [data-testid="stWidgetLabel"],
+    [data-testid="stWidgetLabel"] p,
+    [data-testid="stWidgetLabel"] span,
+    .stForm label,
+    .stForm [data-testid="stWidgetLabel"] p {{
+        color: {text_primary} !important;
+        font-weight: 600 !important;
+    }}
+
+    /* ── Caption / helper text ── */
+    .stCaption, [data-testid="stCaptionContainer"],
+    [data-testid="stCaptionContainer"] p {{
+        color: {text_muted} !important;
+    }}
+
+    /* ── Input fields ── */
+    .stTextInput > div > div > input,
+    .stTextInput > div > div > input:focus {{
+        background-color: {input_bg} !important;
+        border: 2px solid {border_input} !important;
+        border-radius: 8px !important;
+        color: {text_primary} !important;
+        height: 48px !important;
+        padding: 0 1rem !important;
+        caret-color: {text_primary} !important;
+    }}
+    .stTextInput > div > div > input:focus {{
+        border-color: #2563eb !important;
+        box-shadow: 0 0 0 3px rgba(37,99,235,0.18) !important;
+    }}
+    .stTextInput > div > div > input::placeholder {{
+        color: {text_muted} !important;
+        opacity: 1 !important;
+    }}
+
+    /* ── Password eye icon ── */
+    .stTextInput > div > div > button {{
+        background-color: {input_bg} !important;
+        border: none !important;
+        color: {text_muted} !important;
+    }}
+    .stTextInput > div > div > button svg {{
+        fill: {text_muted} !important;
+        stroke: {text_muted} !important;
+    }}
+
+    /* ── Input wrapper border (the outer div Streamlit draws) ── */
+    .stTextInput > div > div,
+    .stTextInput > div {{
+        background-color: {input_bg} !important;
+        border-color: {border_input} !important;
+    }}
+
+    /* ── Textarea ── */
+    .stTextArea > div > div > textarea {{
+        background-color: {input_bg} !important;
+        border: 2px solid {border_input} !important;
+        border-radius: 8px !important;
+        color: {text_primary} !important;
+        caret-color: {text_primary} !important;
+    }}
+    .stTextArea > div > div > textarea::placeholder {{
+        color: {text_muted} !important;
+        opacity: 1 !important;
+    }}
+
+    /* ── Select Box & Multiselect — trigger box ── */
+    .stSelectbox > div > div,
+    .stSelectbox > div > div > div,
+    .stMultiSelect > div > div,
+    .stMultiSelect > div > div > div {{
+        background-color: {select_bg} !important;
+        border: 2px solid {border_input} !important;
+        border-radius: 8px !important;
+        color: {text_secondary} !important;
+    }}
+
+    /* Inner control & value container */
+    [data-baseweb="select"] > div,
+    [data-baseweb="select"] > div > div {{
+        background-color: {select_bg} !important;
+        color: {text_primary} !important;
+    }}
+
+    /* The single-value text shown inside the closed box */
+    [data-baseweb="select"] [data-baseweb="select"] div,
+    [data-baseweb="select"] div[class*="ValueContainer"] div,
+    [data-baseweb="select"] div[class*="singleValue"],
+    [data-baseweb="select"] input {{
+        background-color: {select_bg} !important;
+        color: {text_primary} !important;
+        caret-color: {text_primary} !important;
+    }}
+
+    /* Placeholder text */
+    [data-baseweb="select"] div[class*="placeholder"],
+    [data-baseweb="select"] span[data-testid="stSelectboxVirtualDropdown"] {{
+        color: {text_muted} !important;
+    }}
+
+    /* Dropdown arrow icon */
+    [data-baseweb="select"] svg {{
+        fill: {text_muted} !important;
+    }}
+
+    /* ── Popover panel — rendered at <body> level (portal), needs global scope ── */
+    /* Outer shell */
+    [data-baseweb="popover"],
+    [data-baseweb="popover"] > div,
+    [data-baseweb="popover"] > div > div,
+    [data-baseweb="popover"] > div > div > div {{
+        background-color: {select_bg} !important;
+        border: 1px solid {border_input} !important;
+        border-radius: 8px !important;
+        box-shadow: 0 4px 16px rgba(0,0,0,{'0.4' if dark else '0.12'}) !important;
+        color: {text_primary} !important;
+    }}
+
+    /* Menu / listbox wrapper */
+    [data-baseweb="select"] [role="listbox"],
+    [data-baseweb="menu"],
+    [data-baseweb="menu"] > ul,
+    [data-baseweb="popover"] ul,
+    [data-baseweb="popover"] [data-baseweb="menu"],
+    [data-baseweb="popover"] [data-baseweb="menu"] > ul {{
+        background-color: {select_bg} !important;
+        color: {text_primary} !important;
+    }}
+
+    /* Every option row — default state */
+    [data-baseweb="select"] [role="option"],
+    [data-baseweb="menu"] li,
+    [data-baseweb="menu"] [role="option"],
+    [data-baseweb="popover"] li,
+    [data-baseweb="popover"] [role="option"] {{
+        background-color: {select_bg} !important;
+        color: {text_primary} !important;
+    }}
+
+    /* Option text spans */
+    [data-baseweb="select"] [role="option"] span,
+    [data-baseweb="menu"] li span,
+    [data-baseweb="menu"] [role="option"] span,
+    [data-baseweb="popover"] li span,
+    [data-baseweb="popover"] [role="option"] span {{
+        color: {text_primary} !important;
+    }}
+
+    /* Hover & keyboard-focused option */
+    [data-baseweb="select"] [role="option"]:hover,
+    [data-baseweb="select"] [aria-selected="true"],
+    [data-baseweb="menu"] li:hover,
+    [data-baseweb="menu"] [role="option"]:hover,
+    [data-baseweb="menu"] [role="option"][aria-selected="true"],
+    [data-baseweb="popover"] li:hover,
+    [data-baseweb="popover"] [role="option"]:hover,
+    [data-baseweb="popover"] [role="option"][aria-selected="true"] {{
+        background-color: {bg_deep} !important;
+        color: {text_primary} !important;
+    }}
+
+    /* Multiselect tag / pill chips */
+    [data-baseweb="tag"] {{
+        background-color: {bg_deep} !important;
+        color: {text_primary} !important;
+        border: 1px solid {border_input} !important;
+    }}
+    [data-baseweb="tag"] span,
+    [data-baseweb="tag"] [role="presentation"] {{
+        color: {text_primary} !important;
+        fill: {text_primary} !important;
+    }}
+
+    /* Selected value text / span inside closed selectbox */
+    [data-baseweb="select"] [data-baseweb="tag"],
+    [data-baseweb="select"] span {{
+        color: {text_primary} !important;
+        background-color: transparent !important;
+    }}
+
+    /* ── Number input ── */
+    .stNumberInput > div > div > input {{
+        background-color: {input_bg} !important;
+        border: 2px solid {border_input} !important;
+        color: {text_primary} !important;
+    }}
+
+    /* ── Checkbox & Radio ── */
+    .stCheckbox span, .stRadio span {{
+        color: {text_secondary} !important;
+    }}
+
+    /* ── Form submit button (inside st.form) ── */
+    [data-testid="stForm"] .stButton > button,
+    [data-testid="stFormSubmitButton"] > button {{
+        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
+        font-weight: 700 !important;
+    }}
+
+    /* ── Form container border ── */
+    [data-testid="stForm"] {{
+        border: 1px solid {border_col} !important;
+        border-radius: 12px !important;
+        padding: 1.5rem !important;
+        background-color: {bg_card} !important;
+    }}
+
+    /* ── Block container ── */
+    .block-container {{
         padding-top: 0.75rem;
         padding-bottom: 0.75rem;
         max-width: 1400px;
-    }
-    
-    /* Reduce gap between Streamlit elements */
-    .element-container {
-        margin-bottom: 0 !important;
-    }
-    
+    }}
+    .element-container {{ margin-bottom: 0 !important; }}
     [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"],
-    [data-testid="stVerticalBlock"] > div {
-        gap: 0.25rem !important;
-    }
-    
-    /* Kill Streamlit's default 1rem top padding on every block wrapper */
-    div[data-testid="stVerticalBlock"] > div {
+    [data-testid="stVerticalBlock"] > div {{ gap: 0.25rem !important; }}
+    div[data-testid="stVerticalBlock"] > div {{
         padding-top: 0 !important;
         padding-bottom: 0 !important;
-    }
-    
-    /* Reduce metric padding */
-    [data-testid="stMetric"] {
-        padding: 0.4rem 0 !important;
-    }
-    
-    /* Reduce horizontal block gaps */
-    [data-testid="stHorizontalBlock"] {
-        gap: 0.5rem !important;
-    }
-    
-    /* Tighten dividers (--- markdown) */
-    hr {
-        margin: 0.4rem 0 !important;
-    }
-    
-    /* Reduce stMarkdown paragraph spacing */
-    [data-testid="stMarkdownContainer"] p {
-        margin-bottom: 0.2rem !important;
-    }
-    
-    /* Reduce column gaps */
-    [data-testid="column"] {
-        padding: 0 0.3rem !important;
-    }
-    
-    /* Tighten selectbox and uploader top gap */
+    }}
+    [data-testid="stMetric"]          {{ padding: 0.4rem 0 !important; }}
+    [data-testid="stHorizontalBlock"] {{ gap: 0.5rem !important; }}
+    hr {{ margin: 0.4rem 0 !important; }}
+    [data-testid="column"] {{ padding: 0 0.3rem !important; }}
     [data-testid="stFileUploader"],
-    [data-testid="stSelectbox"] {
-        margin-top: 0 !important;
-        margin-bottom: 0.3rem !important;
-    }
-    
-    /* Sidebar Styles */
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1a1a 0%, #0f0f0f 100%);
-        border-right: 1px solid #2a2a2a;
-    }
-    
-    /* Typography */
-    h1 {
-        color: #ffffff !important;
+    [data-testid="stSelectbox"] {{ margin-top: 0 !important; margin-bottom: 0.3rem !important; }}
+
+    /* ── Sidebar ── */
+    [data-testid="stSidebar"] {{
+        background: {sidebar_grad};
+        border-right: 1px solid {sidebar_border};
+    }}
+
+    /* ── Typography ── */
+    h1 {{
+        color: {text_primary} !important;
         font-size: 2.5rem !important;
         font-weight: 700 !important;
         margin-bottom: 0.5rem !important;
-    }
-    
-    h2 {
-        color: #ffffff !important;
+    }}
+    h2 {{
+        color: {text_primary} !important;
         font-size: 1.75rem !important;
         font-weight: 600 !important;
         margin: 0 0 0.25rem 0 !important;
         padding-top: 0 !important;
         border-bottom: 2px solid #2563eb;
         padding-bottom: 0.25rem;
-    }
-    
-    /* Remove space Streamlit wraps around markdown h2 blocks */
-    [data-testid="stMarkdownContainer"] h2 {
+    }}
+    [data-testid="stMarkdownContainer"] h2 {{
         margin-top: 0 !important;
         padding-top: 0 !important;
-    }
-    
-    /* Target the element-container div wrapping h2 sections */
-    div[data-testid="stVerticalBlock"] > div:has(> [data-testid="stMarkdownContainer"] > h2) {
+    }}
+    div[data-testid="stVerticalBlock"] > div:has(> [data-testid="stMarkdownContainer"] > h2) {{
         padding-top: 0 !important;
         padding-bottom: 0 !important;
         margin-top: 0.4rem !important;
         margin-bottom: 0 !important;
-    }
-    
-    h3 {
-        color: #e0e0e0 !important;
+    }}
+    h3 {{
+        color: {text_secondary} !important;
         font-size: 1.25rem !important;
         font-weight: 600 !important;
-    }
-    
-    /* Button Styles */
-    .stButton > button {
+    }}
+
+    /* ── Alerts / info / warning / error / success boxes ── */
+    [data-testid="stAlert"] {{
+        background-color: {bg_card} !important;
+        border-color: {border_col} !important;
+    }}
+    [data-testid="stAlert"] p,
+    [data-testid="stAlert"] div {{
+        color: {text_primary} !important;
+    }}
+
+    /* ── Buttons ── */
+    .stButton > button {{
         background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
         color: #ffffff;
         border: none;
@@ -190,188 +445,192 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
         width: 100%;
         height: 36px;
-    }
-    
-    .stButton > button:hover {
+    }}
+    .stButton > button:hover {{
         background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
         box-shadow: 0 6px 12px rgba(37, 99, 235, 0.35);
         transform: translateY(-1px);
-    }
-    
-    /* File Uploader */
-    [data-testid="stFileUploader"] {
-        background-color: #1a1a1a;
-        border: 2px dashed #404040;
-        border-radius: 12px;
-        padding: 2rem;
+    }}
+
+    /* ── Theme toggle button — same style as all other buttons ── */
+
+    /* ── File Uploader ── */
+    /* ── File Uploader outer wrapper ── */
+    [data-testid="stFileUploader"] {{
+        background-color: {uploader_bg} !important;
+        border: 2px dashed {border_input} !important;
+        border-radius: 12px !important;
+        padding: 1rem !important;
         transition: all 0.3s ease;
-    }
-    
-    [data-testid="stFileUploader"]:hover {
-        border-color: #2563eb;
-        background-color: #1f1f1f;
-    }
-    
-    /* Select Box */
-    .stSelectbox > div > div {
-        background-color: #1a1a1a;
-        border: 1px solid #404040;
-        border-radius: 8px;
-        color: #e0e0e0;
-        height: 48px;
-    }
-    
-    /* Text Input */
-    .stTextInput > div > div > input {
-        background-color: #1a1a1a;
-        border: 1px solid #404040;
-        border-radius: 8px;
-        color: #e0e0e0;
-        height: 48px;
-        padding: 0 1rem;
-    }
-    
-    /* Metric Cards */
-    [data-testid="stMetricValue"] {
+    }}
+    [data-testid="stFileUploader"]:hover {{
+        border-color: #2563eb !important;
+        background-color: {uploader_hover} !important;
+    }}
+
+    /* ── Dropzone inner box (the dark box Streamlit renders) ── */
+    [data-testid="stFileUploaderDropzone"],
+    [data-testid="stFileUploaderDropzoneInput"],
+    section[data-testid="stFileUploaderDropzone"],
+    div[data-testid="stFileUploaderDropzone"] {{
+        background-color: {uploader_bg} !important;
+        border: 1px solid {border_input} !important;
+        border-radius: 8px !important;
+    }}
+
+    /* ── Dropzone text: "Drag and drop", "Limit 200MB" ── */
+    [data-testid="stFileUploaderDropzone"] span,
+    [data-testid="stFileUploaderDropzone"] p,
+    [data-testid="stFileUploaderDropzone"] small,
+    [data-testid="stFileUploaderDropzone"] div {{
+        color: {text_secondary} !important;
+    }}
+
+    /* ── Upload cloud icon ── */
+    [data-testid="stFileUploaderDropzone"] svg {{
+        fill: {text_muted} !important;
+        stroke: {text_muted} !important;
+        color: {text_muted} !important;
+    }}
+
+    /* ── "Browse files" button inside dropzone ── */
+    [data-testid="stFileUploaderDropzone"] button,
+    [data-testid="stFileUploaderDropzone"] .stButton > button,
+    [data-testid="stBaseButton-secondary"],
+    button[data-testid="stBaseButton-secondary"] {{
+        background-color: {bg_card} !important;
+        color: {text_primary} !important;
+        border: 2px solid {border_input} !important;
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+    }}
+    [data-testid="stFileUploaderDropzone"] button:hover,
+    button[data-testid="stBaseButton-secondary"]:hover {{
+        background-color: {bg_deep} !important;
+        border-color: #2563eb !important;
+        color: #2563eb !important;
+    }}
+
+    /* ── Metric Cards ── */
+    [data-testid="stMetricValue"] {{
         font-size: 1.75rem;
         font-weight: 700;
-        color: #ffffff;
-    }
-    
-    [data-testid="stMetricLabel"] {
+        color: {text_primary};
+    }}
+    [data-testid="stMetricLabel"] {{
         font-size: 0.875rem;
-        color: #9ca3af;
+        color: {text_muted};
         text-transform: uppercase;
         letter-spacing: 0.5px;
         font-weight: 500;
-    }
-    
-    /* Data Tables */
-    .dataframe {
-        border: 1px solid #2a2a2a !important;
+    }}
+
+    /* ── Data Tables ── */
+    .dataframe {{
+        border: 1px solid {border_col} !important;
         border-radius: 8px;
         overflow: hidden;
-    }
-    
-    .dataframe thead tr th {
-        background-color: #1a1a1a !important;
-        color: #ffffff !important;
+    }}
+    .dataframe thead tr th {{
+        background-color: {bg_card} !important;
+        color: {text_primary} !important;
         font-weight: 600 !important;
         text-transform: uppercase;
         font-size: 0.75rem;
         padding: 1rem !important;
-    }
-    
-    .dataframe tbody tr:hover {
-        background-color: #1f1f1f !important;
-    }
-    
-    /* File Comparison Styles */
-    .legend-item {
+    }}
+    .dataframe tbody tr:hover {{
+        background-color: {bg_deep} !important;
+    }}
+
+    /* ── File Comparison Styles ── */
+    .legend-item {{
         display: inline-flex;
         align-items: center;
         gap: 8px;
         padding: 8px 12px;
-        background-color: #1a1a1a;
+        background-color: {bg_card};
         border-radius: 6px;
         font-size: 0.875rem;
-        color: #e0e0e0;
-    }
-    
-    .legend-color {
-        width: 20px;
-        height: 20px;
-        border-radius: 4px;
-    }
-    
-    /* Single scroll wrapper for both panes */
-    .diff-scroll-wrapper {
+        color: {text_secondary};
+    }}
+    .legend-color {{ width: 20px; height: 20px; border-radius: 4px; }}
+
+    .diff-scroll-wrapper {{
         overflow-x: hidden;
         overflow-y: auto;
         max-height: 70vh;
-        border: 1px solid #2a2a2a;
+        border: 1px solid {border_col};
         border-radius: 8px;
-        background-color: #0f0f0f;
-    }
-    
-    .diff-container {
+        background-color: {diff_scroll_bg};
+    }}
+    .diff-container {{
         display: flex;
         gap: 1px;
-        background-color: #2a2a2a;
+        background-color: {diff_cont_bg};
         width: 100%;
-    }
-    
-    .diff-pane-col {
+    }}
+    .diff-pane-col {{
         flex: 1;
         min-width: 0;
         overflow: hidden;
-        background-color: #0f0f0f;
-    }
-    
-    .diff-col-title {
-        color: #ffffff !important;
+        background-color: {diff_pane_bg};
+    }}
+    .diff-col-title {{
+        color: {text_primary} !important;
         font-size: 1.25rem !important;
         font-weight: 600 !important;
         padding: 12px 16px;
         margin: 0 !important;
-        background-color: #1a1a1a;
-        border-bottom: 1px solid #2a2a2a;
+        background-color: {bg_card};
+        border-bottom: 1px solid {border_col};
         position: sticky;
         top: 0;
         z-index: 20;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif !important;
-    }
-    
-    .diff-pane {
-        background-color: #0f0f0f;
+    }}
+    .diff-pane {{
+        background-color: {diff_pane_bg};
         border: none;
         font-family: 'Courier New', monospace;
-    }
-    
-    .diff-pane-header {
-        background-color: #1a1a1a;
-        color: #ffffff;
+    }}
+    .diff-pane-header {{
+        background-color: {bg_card};
+        color: {text_primary};
         padding: 12px 16px;
         font-weight: 600;
         font-size: 0.875rem;
-        border-bottom: 1px solid #2a2a2a;
+        border-bottom: 1px solid {border_col};
         text-transform: uppercase;
         letter-spacing: 0.5px;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif !important;
-    }
-    
-    .diff-line {
+    }}
+    .diff-line {{
         display: flex;
         align-items: flex-start;
         padding: 6px 12px;
         font-size: 13px;
         line-height: 1.6;
-        color: #e0e0e0;
-        border-bottom: 1px solid #1a1a1a;
+        color: {text_code};
+        border-bottom: 1px solid {diff_line_border};
         white-space: pre-wrap;
         word-break: break-all;
         font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
         min-height: 24px;
-    }
-    
-    .diff-line:hover {
-        background-color: #1a1a1a;
-    }
-    
-    /* Hide empty lines when both sides are empty */
-    .diff-line.diff-empty-line {
+    }}
+    .diff-line:hover {{ background-color: {diff_hover_bg}; }}
+    .diff-line.diff-empty-line {{
         display: none !important;
         visibility: hidden !important;
         height: 0 !important;
         padding: 0 !important;
         margin: 0 !important;
         border: none !important;
-    }
-    
-    .diff-line-number {
+    }}
+    .diff-line-number {{
         display: inline-block;
         min-width: 50px;
-        color: #666666;
+        color: {line_num_col};
         text-align: right;
         padding-right: 16px;
         user-select: none;
@@ -379,30 +638,206 @@ st.markdown("""
         font-weight: 500;
         align-self: flex-start;
         padding-top: 1px;
-    }
-    
-    .diff-content-change {
-        background-color: rgba(239, 68, 68, 0.40);
+    }}
+    .diff-content-change {{
+        background-color: rgba(239, 68, 68, 0.{'40' if dark else '15'});
         border-left: 4px solid #ef4444;
-        color: #ffffff;
-    }
-    
-    .diff-whitespace-change {
-        background-color: rgba(168, 85, 247, 0.30);
+        color: {text_primary};
+    }}
+    .diff-whitespace-change {{
+        background-color: rgba(168, 85, 247, 0.{'30' if dark else '12'});
         border-left: 4px solid #a855f7;
-        color: #ffffff;
-    }
-    
-    .diff-identical {
-        background-color: transparent;
-    }
+        color: {text_primary};
+    }}
+    .diff-identical {{ background-color: transparent; }}
+
+    /* ── Expander header ── */
+    [data-testid="stExpander"] {{
+        border: 1px solid {border_col} !important;
+        border-radius: 8px !important;
+        background-color: {bg_card} !important;
+        overflow: hidden !important;
+    }}
+    [data-testid="stExpander"] summary,
+    [data-testid="stExpander"] > details > summary,
+    div[data-testid="stExpander"] > details > summary {{
+        background-color: {bg_card} !important;
+        color: {text_primary} !important;
+        padding: 0.75rem 1rem !important;
+        border-radius: 8px !important;
+    }}
+    [data-testid="stExpander"] summary:hover,
+    [data-testid="stExpander"] > details > summary:hover {{
+        background-color: {bg_deep} !important;
+    }}
+    [data-testid="stExpander"] summary p,
+    [data-testid="stExpander"] summary span,
+    [data-testid="stExpander"] summary svg {{
+        color: {text_primary} !important;
+        fill: {text_muted} !important;
+    }}
+    /* Expander body */
+    [data-testid="stExpander"] > details > div,
+    [data-testid="stExpanderDetails"] {{
+        background-color: {bg_card} !important;
+        border-top: 1px solid {border_col} !important;
+    }}
+
+    /* ── st.code block ── */
+    [data-testid="stCode"],
+    [data-testid="stCode"] > div,
+    [data-testid="stCode"] pre,
+    .stCode, .stCode > div, .stCode pre,
+    [class*="CodeBlock"], [class*="codeBlock"] {{
+        background-color: {bg_deep} !important;
+        border: 1px solid {border_col} !important;
+        border-radius: 6px !important;
+        color: {text_code} !important;
+    }}
+    [data-testid="stCode"] code,
+    .stCode code {{
+        background-color: transparent !important;
+        color: {text_code} !important;
+    }}
+    /* Copy button in code block */
+    [data-testid="stCode"] button,
+    [data-testid="stCodeCopyButton"] {{
+        background-color: {bg_deep} !important;
+        color: {text_muted} !important;
+        border: 1px solid {border_col} !important;
+    }}
+
+    /* ── st.json block ── */
+    [data-testid="stJson"],
+    [data-testid="stJson"] > div,
+    [data-testid="stJson"] pre,
+    .stJson, .stJson > div {{
+        background-color: {bg_deep} !important;
+        border: 1px solid {border_col} !important;
+        border-radius: 6px !important;
+        color: {text_code} !important;
+    }}
+    /* JSON key / string / number colours in light mode */
+    [data-testid="stJson"] .string-value  {{ color: {'#ce9178' if dark else '#0550ae'} !important; }}
+    [data-testid="stJson"] .key-label     {{ color: {'#9cdcfe' if dark else '#953800'} !important; }}
+    [data-testid="stJson"] .number-value  {{ color: {'#b5cea8' if dark else '#116329'} !important; }}
+    [data-testid="stJson"] .boolean-value {{ color: {'#569cd6' if dark else '#8250df'} !important; }}
+    [data-testid="stJson"] .null-value    {{ color: {text_muted} !important; }}
+
     </style>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
+
+# Inject CSS on every render
+inject_theme_css()
 
 # ============================================
 # GLOBAL VARIABLES
 # ============================================
 API_BASE_URL = "http://backend:8000/api/v1"
+
+# ============================================
+# THEMED TABLE HELPER
+# ============================================
+def render_log_block(text, max_height=400):
+    """
+    Renders transaction log / pre-formatted text in a theme-aware scrollable box.
+    Replaces st.code() which always uses a dark canvas in light mode.
+    """
+    dark     = is_dark()
+    bg       = "#1e1e1e"   if dark else "#f6f8fa"
+    text_col = "#d4d4d4"   if dark else "#1e2a35"
+    border   = "#3a3a3a"   if dark else "#d1d9e0"
+    ln_col   = "#606060"   if dark else "#9ca3af"
+    scroll_thumb = "#505050" if dark else "#b0bec5"
+    scroll_track = "#1e1e1e" if dark else "#f0f2f6"
+
+    lines = str(text).splitlines()
+    rows  = "".join(
+        f"<tr>"
+        f"<td style='padding:1px 12px 1px 8px; color:{ln_col}; text-align:right; "
+        f"user-select:none; font-size:12px; white-space:nowrap; min-width:36px;'>{i+1}</td>"
+        f"<td style='padding:1px 8px; color:{text_col}; font-size:13px; white-space:pre;'>{line}</td>"
+        f"</tr>"
+        for i, line in enumerate(lines)
+    )
+
+    st.markdown(
+        f"<div style='background:{bg}; border:1px solid {border}; border-radius:8px; "
+        f"max-height:{max_height}px; overflow:auto; "
+        f"scrollbar-width:thin; scrollbar-color:{scroll_thumb} {scroll_track};'>"
+        f"<table style='border-collapse:collapse; width:100%; "
+        f"font-family:\"Courier New\",Consolas,monospace;'>"
+        f"<tbody>{rows}</tbody></table></div>",
+        unsafe_allow_html=True
+    )
+
+
+def render_themed_table(df, height=320):
+    """
+    Renders a pandas DataFrame as a fully theme-aware HTML table.
+    Uses the same colour tokens as inject_theme_css() so dark/light
+    mode is always consistent.  Replaces st.dataframe() which draws
+    on an HTML <canvas> and therefore ignores all CSS overrides.
+    Default height=320px shows ~8 rows; anything beyond scrolls.
+    Pass height=None to show all rows without a scrollbar.
+    """
+    dark = is_dark()
+
+    # ── colour tokens (mirrors inject_theme_css) ──────────────────
+    bg_header    = "#1a1a1a" if dark else "#f0f2f6"
+    bg_row       = "#0f0f0f" if dark else "#ffffff"
+    bg_row_alt   = "#141414" if dark else "#f8fafc"
+    bg_hover     = "#1f1f1f" if dark else "#f0f4f8"
+    text_header  = "#ffffff" if dark else "#0d1117"
+    text_cell    = "#e0e0e0" if dark else "#1e2a35"
+    border_inner = "#2a2a2a" if dark else "#d1d9e0"
+    border_outer = "#2a2a2a" if dark else "#b0bec5"
+    header_sep   = "#404040" if dark else "#b0bec5"
+    scrollbar_thumb = "#404040" if dark else "#b0bec5"
+    scrollbar_track = "#1a1a1a" if dark else "#f0f2f6"
+
+    # Sticky header + scrollable body
+    body_scroll = f"max-height:{height}px; overflow-y:auto;" if height else ""
+
+    # Build header row (sticky so it stays visible while scrolling)
+    headers_html = "".join(
+        f"<th style='padding:10px 14px; text-align:left; font-weight:600; "
+        f"font-size:0.78rem; color:{text_header}; background:{bg_header}; "
+        f"border-bottom:2px solid {header_sep}; white-space:nowrap; "
+        f"letter-spacing:0.3px; position:sticky; top:0; z-index:1;'>{col}</th>"
+        for col in df.columns
+    )
+
+    # Build body rows
+    rows_html = ""
+    for i, (_, row) in enumerate(df.iterrows()):
+        row_bg = bg_row if i % 2 == 0 else bg_row_alt
+        cells = "".join(
+            f"<td style='padding:10px 14px; color:{text_cell}; "
+            f"border-bottom:1px solid {border_inner}; font-size:0.875rem; "
+            f"white-space:nowrap;'>{val}</td>"
+            for val in row
+        )
+        rows_html += (
+            f"<tr style='background:{row_bg};' "
+            f"onmouseover=\"this.style.background='{bg_hover}'\" "
+            f"onmouseout=\"this.style.background='{row_bg}'\">"
+            f"{cells}</tr>"
+        )
+
+    html = (
+        f"<div style='border:1px solid {border_outer}; border-radius:8px; "
+        f"overflow:hidden; width:100%;'>"
+        f"<div style='{body_scroll} overflow-x:auto; "
+        f"scrollbar-width:thin; scrollbar-color:{scrollbar_thumb} {scrollbar_track};'>"
+        f"<table style='width:100%; border-collapse:collapse; "
+        f"font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;'>"
+        f"<thead><tr>{headers_html}</tr></thead>"
+        f"<tbody>{rows_html}</tbody>"
+        f"</table></div></div>"
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
 
 # ============================================
 # LOGIN PAGE UI
@@ -412,6 +847,21 @@ def show_login_page():
     """
     Display login page UI
     """
+    # -- Theme toggle in top-right corner --
+    _, col_theme = st.columns([6, 1])
+    with col_theme:
+        # Theme toggle — label reflects the ACTIVE theme
+        def _toggle_theme_login():
+            st.session_state.theme = 'light' if st.session_state.login_theme_toggle else 'dark'
+
+        st.toggle(
+            "Light Mode",
+            value=not is_dark(),
+            key="login_theme_toggle",
+            help="Switch between dark and light theme.",
+            on_change=_toggle_theme_login
+        )
+
     # Center the login form
     col1, col2, col3 = st.columns([1, 2, 1])
 
@@ -439,7 +889,7 @@ def show_login_page():
 
         # Handle login
         if submit:
-            if not username or not password:
+            if not username:
                 st.error("  Please enter username and password")
             else:
                 with st.spinner("Authenticating..."):
@@ -470,6 +920,20 @@ def show_login_page():
         if st.button(" Register New User", use_container_width=True):
             st.session_state.page = "register"
             st.rerun()
+
+        # ---------------------------
+        # FORGOT PASSWORD BUTTON
+        # ---------------------------
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_left, col_center, col_right = st.columns([1, 2, 1])
+        with col_center:
+            if st.button(
+                "Forgot Password?",
+                use_container_width=True,
+                key="forgot_password_btn"
+            ):
+                st.session_state.page = "forgot_password"
+                st.rerun()
 def is_invalid_emp_code(emp_code: str) -> bool:
     """
     Check if employee code is sequential or repeating pattern.
@@ -497,39 +961,25 @@ def is_invalid_emp_code(emp_code: str) -> bool:
 
     return False
 
-def is_valid_password(password: str) -> bool:
-    """
-    Validates password strength.
-    Rules:
-    - Minimum 8 characters
-    - At least 1 uppercase letter
-    - At least 1 lowercase letter
-    - At least 2 digits
-    - At least 1 special character
-    """
-    if len(password) < 8:
-        return False
-
-    if not any(c.isupper() for c in password):
-        return False
-
-    if not any(c.islower() for c in password):
-        return False
-
-    #  MINIMUM 2 DIGITS CHECK
-    if sum(c.isdigit() for c in password) < 2:
-        return False
-
-    if not any(c in "!@#$%^&*()-_=+[]{}|;:'\",.<>?/`~" for c in password):
-        return False
-
-    return True
-
 
 def show_register_page():
     """
     Display registration page UI
     """
+    # -- Theme toggle in top-right corner --
+    _, col_theme = st.columns([6, 1])
+    with col_theme:
+        def _toggle_theme_register():
+            st.session_state.theme = 'light' if st.session_state.register_theme_toggle else 'dark'
+
+        st.toggle(
+            "Light Mode",
+            value=not is_dark(),
+            key="register_theme_toggle",
+            help="Switch between dark and light theme.",
+            on_change=_toggle_theme_register
+        )
+
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col2:
@@ -635,6 +1085,334 @@ def show_register_page():
         # BACK TO LOGIN
         # ---------------------------
         if st.button(" Back to Login", use_container_width=True):
+            st.session_state.page = "login"
+            st.rerun()
+
+
+# ============================================
+# FORGOT PASSWORD PAGE
+# Identity Verification — Username + Employee Code
+# ============================================
+
+def show_forgot_password_page():
+    """
+    Forgot Password page.
+
+    User enters Username + Employee Code.
+    On submit, calls POST /api/v1/forgot-password which:
+      1. Verifies identity (username + employee_code + is_active=TRUE)
+      2. Generates a secure reset token
+      3. Sends the reset email with a link containing the real app URL
+
+    Any validation error is returned by the API and shown to the user.
+    """
+    inject_theme_css()
+
+    # ── Theme toggle top-right ─────────────────────────────────────
+    _, col_theme = st.columns([6, 1])
+    with col_theme:
+        theme_label = "Light Mode" if is_dark() else "Dark Mode"
+        theme_on = st.toggle(
+            theme_label,
+            value=not is_dark(),
+            key="fp_theme_toggle",
+            help="Switch between dark and light theme."
+        )
+        if theme_on == is_dark():
+            st.session_state.theme = 'light' if theme_on else 'dark'
+            st.rerun()
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col2:
+        st.markdown(
+            "<h2 style='text-align:center; margin-top:80px;'>Forgot Password</h2>",
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            "<p style='text-align:center; color:#9ca3af;'>"
+            "Enter your registered Username and Employee Code to verify your identity."
+            "</p>",
+            unsafe_allow_html=True
+        )
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        with st.form("forgot_password_form"):
+            fp_username = st.text_input(
+                "Username",
+                placeholder="Enter your registered username",
+                key="fp_username"
+            )
+            fp_emp_code = st.text_input(
+                "Employee Code",
+                placeholder="Enter your 8-digit employee code",
+                max_chars=8,
+                key="fp_emp_code"
+            )
+            fp_submit = st.form_submit_button(
+                "Verify Identity",
+                use_container_width=True
+            )
+
+        # ── Handle form submission ─────────────────────────────────
+        if fp_submit:
+
+            # ── Client-side  ────────
+            if not fp_username.strip() or not fp_emp_code.strip():
+                st.error("Please enter both Username and Employee Code.")
+
+            elif not fp_emp_code.strip().isdigit() or len(fp_emp_code.strip()) != 8:
+                st.error("Employee Code must be exactly 8 digits.")
+
+            else:
+                # ── Detect real app URL from browser Host header ───
+                try:
+                    _host  = st.context.headers.get("Host", "localhost:8501")
+                    _proto = (
+                        "https"
+                        if st.context.headers.get("X-Forwarded-Proto") == "https"
+                        else "http"
+                    )
+                    _base_url = f"{_proto}://{_host}"
+                except Exception:
+                    _base_url = "http://backend:8501"
+
+                # ── POST /forgot-password ──────────────────────────
+                # API handles: identity check + token + email in one call.
+                # Returns 400 for bad identity, 500 if email fails.
+                with st.spinner("Verifying identity and sending reset email..."):
+                    try:
+                        _resp = requests.post(
+                            f"{API_BASE_URL}/forgot-password",
+                            json={
+                                "username":      fp_username.strip(),
+                                "employee_code": fp_emp_code.strip(),
+                                "base_url":      _base_url
+                            },
+                            timeout=30
+                        )
+
+                        if _resp.status_code == 200:
+                            st.success(
+                                "A password reset link has been sent to your email.\n\n"
+                                "Please check your inbox (and spam folder) and "
+                                "click the link within **30 minutes**."
+                            )
+                            frontend_logger.info(
+                                "Reset email dispatched via API for user: %s",
+                                fp_username.strip()
+                            )
+                        else:
+                            _detail = _resp.json().get("detail", "Unknown error")
+                            st.error(_detail)
+                            frontend_logger.warning(
+                                "POST /forgot-password returned %s for %s: %s",
+                                _resp.status_code, fp_username.strip(), _detail
+                            )
+
+                    except requests.exceptions.ConnectionError:
+                        st.error(
+                            "Cannot reach the API server. "
+                            "Please ensure the backend is running on port 8000."
+                        )
+                    except requests.exceptions.Timeout:
+                        st.error("Request timed out. Please try again.")
+                    except Exception as _e:
+                        st.error("An unexpected error occurred. Please try again.")
+                        frontend_logger.error(
+                            "POST /forgot-password unexpected error: %s", _e
+                        )
+
+        # ── Back to Login ──────────────────────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Back to Login", use_container_width=True, key="fp_back_btn"):
+            st.session_state.page = "login"
+            st.rerun()
+
+
+# ============================================
+# RESET PASSWORD PAGE  (Step 3 of 3)
+# New Password Form + DB Update
+# ============================================
+
+def show_reset_password_page():
+    """
+    Step 3 of the Password Reset flow.
+
+    Triggered when user clicks the reset link from their email.
+    Token is stored in st.session_state["incoming_reset_token"] by main().
+
+    Flow:
+    -----
+    1. GET /validate-reset-token  -> confirm token still valid, get username
+    2. Show new-password form with all 4 validation rules enforced
+    3. POST /reset-password       -> update DB, consume token, redirect to login
+    """
+    inject_theme_css()
+
+    # ── Theme toggle top-right ────────────────────────────────────
+    _, col_theme = st.columns([6, 1])
+    with col_theme:
+        theme_label = "Light Mode" if is_dark() else "Dark Mode"
+        theme_on = st.toggle(
+            theme_label,
+            value=not is_dark(),
+            key="rp_theme_toggle",
+            help="Switch between dark and light theme."
+        )
+        if theme_on == is_dark():
+            st.session_state.theme = "light" if theme_on else "dark"
+            st.rerun()
+
+    token = st.session_state.get("incoming_reset_token", None)
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col2:
+        st.markdown(
+            "<h2 style='text-align:center; margin-top:80px;'>Reset Your Password</h2>",
+            unsafe_allow_html=True
+        )
+
+        # ── Guard: no token in session ────────────────────────────
+        if not token:
+            st.error(
+                "No reset token found. "
+                "Please use the link from your email or request a new one."
+            )
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Back to Login", use_container_width=True, key="rp_no_token_back"):
+                st.session_state.page = "login"
+                st.rerun()
+            return
+
+        # ── Step 1: Validate token via API ────────────────────────
+        try:
+            _val_resp = requests.get(
+                f"{API_BASE_URL}/validate-reset-token",
+                params={"token": token},
+                timeout=10
+            )
+        except Exception as _e:
+            st.error("Cannot reach the API server. Please ensure it is running.")
+            frontend_logger.error("validate-reset-token API call failed: %s", _e)
+            return
+
+        if _val_resp.status_code != 200:
+            _detail = _val_resp.json().get("detail", "Invalid or expired token.")
+            st.error(_detail)
+            st.markdown("<br>", unsafe_allow_html=True)
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("Request New Reset", use_container_width=True, key="rp_new_reset"):
+                    st.session_state.pop("incoming_reset_token", None)
+                    st.session_state.page = "forgot_password"
+                    st.rerun()
+            with col_b:
+                if st.button("Back to Login", use_container_width=True, key="rp_expired_back"):
+                    st.session_state.pop("incoming_reset_token", None)
+                    st.session_state.page = "login"
+                    st.rerun()
+            return
+
+        username = _val_resp.json().get("username", "")
+
+        # ── Show which account this reset is for ──────────────────
+        st.markdown(
+            f"<p style='text-align:center; color:#9ca3af;'>"
+            f"Setting new password for <strong>{username}</strong></p>",
+            unsafe_allow_html=True
+        )
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── Reset form ─────────────────────────────────────────────
+        with st.form("reset_password_form"):
+            new_password = st.text_input(
+                "New Password",
+                type="password",
+                placeholder="Enter your new password",
+                key="rp_new_password"
+            )
+            confirm_password = st.text_input(
+                "Confirm New Password",
+                type="password",
+                placeholder="Re-enter your new password",
+                key="rp_confirm_password"
+            )
+            rp_submit = st.form_submit_button(
+                "Reset Password",
+                use_container_width=True
+            )
+
+        # ── Handle submission — 4 validation rules ────────────────
+        if rp_submit:
+
+            # ── Rule 1: Both fields must be filled ────────────────
+            if not new_password.strip() or not confirm_password.strip():
+                st.error("Both New Password and Confirm Password fields are required.")
+
+            # ── Rule 2: New password and Confirm password must be same ─
+            elif new_password != confirm_password:
+                st.error(
+                    "Please make sure both fields are exactly the same."
+                )
+
+            # ── Rule 3: Password must meet strength requirements ───
+            elif not is_valid_password(new_password):
+                st.error(
+                    "Password does not meet the strength requirements:\n"
+                    "- Minimum 8 characters\n"
+                    "- At least 1 uppercase letter (A-Z)\n"
+                    "- At least 1 lowercase letter (a-z)\n"
+                    "- At least 2 digits (0-9)\n"
+                    "- At least 1 special character (!@#$%^&* etc.)"
+                )
+
+            # ── Rule 4: New password must not be same as old password ─
+            elif is_same_as_old_password(username, new_password):
+                st.error(
+                    "New password must be different from your current password. "
+                    "Please choose a different password."
+                )
+
+            else:
+                with st.spinner("Updating your password..."):
+                    try:
+                        _reset_resp = requests.post(
+                            f"{API_BASE_URL}/reset-password",
+                            json={
+                                "token":            token,
+                                "new_password":     new_password,
+                                "confirm_password": confirm_password
+                            },
+                            timeout=15
+                        )
+                    except Exception as _e:
+                        st.error("Cannot reach the API server. Please try again.")
+                        frontend_logger.error("POST /reset-password API call failed: %s", _e)
+                        _reset_resp = None
+
+                if _reset_resp and _reset_resp.status_code == 200:
+                    st.success("Password reset successful!")
+                    st.info("You can now log in with your new password.")
+                    frontend_logger.info("Password reset completed for user: %s", username)
+                    st.session_state.pop("incoming_reset_token", None)
+                    st.session_state.pop("reset_verified_username", None)
+                    st.session_state.page = "login"
+                    st.rerun()
+
+                elif _reset_resp:
+                    _detail = _reset_resp.json().get("detail", "Reset failed.")
+                    st.error(_detail)
+                    frontend_logger.warning(
+                        "Password reset failed for user %s: %s", username, _detail
+                    )
+
+        # ── Back to Login ─────────────────────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Back to Login", use_container_width=True, key="rp_back_btn"):
+            st.session_state.pop("incoming_reset_token", None)
+            st.session_state.pop("reset_verified_username", None)
             st.session_state.page = "login"
             st.rerun()
 
@@ -1139,7 +1917,7 @@ def render_side_by_side_diff(content1: str, content2: str, filename1: str, filen
     html_comparison += '<div class="diff-container">'
     
     # Left pane
-    html_comparison += f'<div class="diff-pane-col"><h4 class="diff-col-title">Source A: {filename1}</h4>'
+    html_comparison += f'<div class="diff-pane-col"><h4 class="diff-col-title"> Source A: {filename1}</h4>'
     html_comparison += '<div class="diff-pane"><div class="diff-pane-header">ORIGINAL FILE</div>'
     
     for i in range(max_lines):
@@ -1169,7 +1947,7 @@ def render_side_by_side_diff(content1: str, content2: str, filename1: str, filen
     html_comparison += '</div></div>'
     
     # Right pane
-    html_comparison += f'<div class="diff-pane-col"><h4 class="diff-col-title">Source B: {filename2}</h4>'
+    html_comparison += f'<div class="diff-pane-col"><h4 class="diff-col-title"> Source B: {filename2}</h4>'
     html_comparison += '<div class="diff-pane"><div class="diff-pane-header">MODIFIED FILE</div>'
     
     for i in range(max_lines):
@@ -1272,21 +2050,16 @@ def render_transaction_stats():
             if 'statistics' in data:
                 stats_df = pd.DataFrame(data['statistics'])
 
-                # Convert to numeric so Streamlit auto right-aligns, use column_config to show units
-                col_config = {}
                 if 'Success Rate' in stats_df.columns:
-                    stats_df['Success Rate'] = pd.to_numeric(stats_df['Success Rate'].astype(str).str.replace('%', '', regex=False), errors='coerce')
-                    col_config['Success Rate'] = st.column_config.NumberColumn('Success Rate', format='%.1f%%')
+                    stats_df['Success Rate'] = pd.to_numeric(
+                        stats_df['Success Rate'].astype(str).str.replace('%', '', regex=False), errors='coerce'
+                    ).map(lambda x: f"{x:.1f}%" if pd.notna(x) else "")
                 if 'Avg Duration' in stats_df.columns:
-                    stats_df['Avg Duration'] = pd.to_numeric(stats_df['Avg Duration'].astype(str).str.replace('s', '', regex=False), errors='coerce')
-                    col_config['Avg Duration'] = st.column_config.NumberColumn('Avg Duration', format='%.1f s')
+                    stats_df['Avg Duration'] = pd.to_numeric(
+                        stats_df['Avg Duration'].astype(str).str.replace('s', '', regex=False), errors='coerce'
+                    ).map(lambda x: f"{x:.1f} s" if pd.notna(x) else "")
 
-                st.dataframe(
-                    stats_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config=col_config
-                )
+                render_themed_table(stats_df)
             # ========================================
             # SECTION 2: Source File Filter
             # ========================================
@@ -1486,11 +2259,7 @@ def render_transaction_stats():
                                     else:
                                         display_df_show = display_df.copy()
                                         display_df_show['Duration (s)'] = display_df_show['Duration (s)'].astype(str)
-                                        st.dataframe(
-                                            display_df_show,
-                                            use_container_width=True,
-                                            hide_index=True
-                                        )
+                                        render_themed_table(display_df_show)
                                     
                                 else:
                                     st.warning("  No transactions found for the selected source files.")
@@ -1635,7 +2404,7 @@ RAISES:
                             st.info(f"Found {len(display_df)} matching entries.")
                         
                         # Display table
-                        st.dataframe(display_df, use_container_width=True, height=400)
+                        render_themed_table(display_df, height=400)
                         
                         # Download button
                         csv = display_df.to_csv(index=False)
@@ -2345,12 +3114,12 @@ def render_transaction_comparison():
                         with log_col1:
                             st.markdown(f"##### Transaction 1: {txn1_id}")
                             txn1_log = comparison_data.get('txn1_log', 'No log available')
-                            st.code(txn1_log, language="log", line_numbers=True)
+                            render_log_block(txn1_log)
                         
                         with log_col2:
                             st.markdown(f"##### Transaction 2: {txn2_id}")
                             txn2_log = comparison_data.get('txn2_log', 'No log available')
-                            st.code(txn2_log, language="log", line_numbers=True)
+                            render_log_block(txn2_log)
                     
                     # ========================================
                     # TAB 3: Detailed Analysis
@@ -2783,7 +3552,7 @@ def render_ui_flow_individual():
                     st.markdown("---")
                     st.markdown("####   Transaction Log")
                     with st.expander("View Full Transaction Log", expanded=False):
-                        st.code(viz_data.get('transaction_log', 'No log available'), language="text")
+                        render_log_block(viz_data.get('transaction_log', 'No log available'))
                 
                 else:
                     error_detail = viz_response.json().get('detail', 'Visualization failed')
@@ -2950,17 +3719,24 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
     
     # Calculate height based on number of screens
     height = max(400, max_screens * 75)
-    
+
+    # Theme-aware colors
+    _is_dark = st.session_state.get('theme', 'dark') == 'dark'
+    _plot_bg   = '#0E1117' if _is_dark else '#ffffff'
+    _paper_bg  = '#0E1117' if _is_dark else '#f0f4f8'
+    _font_col  = '#ffffff'  if _is_dark else '#0d1117'
+    _title_col = '#ffffff'  if _is_dark else '#0d1117'
+
     # Update layout
     fig.update_layout(
         height=height,
         showlegend=False,
-        plot_bgcolor='#0E1117',
-        paper_bgcolor='#0E1117',
-        font=dict(color='white'),
+        plot_bgcolor=_plot_bg,
+        paper_bgcolor=_paper_bg,
+        font=dict(color=_font_col),
         title=dict(
             text=f"UI Flow: {txn_id}",
-            font=dict(size=16, color='white'),
+            font=dict(size=16, color=_title_col),
             x=0.5,
             xanchor='center'
         ),
@@ -3711,7 +4487,7 @@ RAISES:
             # Show first 700 characters as preview
             preview = transaction_log[:700] + "..." if len(transaction_log) > 700 else transaction_log
             st.subheader("Transaction Log Preview")
-            st.code(transaction_log)            
+            render_log_block(transaction_log)
 
         # STEP 7: LLM Analysis
         st.markdown("---")
@@ -3790,13 +4566,16 @@ RAISES:
             logger.info(f"Ollama output was:- {result}")
             analysis_text = result.get('analysis', 'No analysis available')
             
-            # Display in a nice box
+            # Display in a theme-aware box
+            _a_bg     = "#1e1e1e" if is_dark() else "#f6f8fa"
+            _a_border = "#4CAF50"
+            _a_text   = "#ffffff" if is_dark() else "#1e2a35"
             st.markdown(
-                f"""
-                <div style='background-color: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #4CAF50;'>
-                <pre style='color: #ffffff; white-space: pre-wrap; word-wrap: break-word; font-family: monospace; font-size: 14px;'>{analysis_text}</pre>
-                </div>
-                """,
+                f"<div style='background-color:{_a_bg}; padding:20px; border-radius:10px; "
+                f"border-left:5px solid {_a_border};'>"
+                f"<pre style='color:{_a_text}; white-space:pre-wrap; word-wrap:break-word; "
+                f"font-family:monospace; font-size:14px; margin:0;'>{analysis_text}</pre>"
+                f"</div>",
                 unsafe_allow_html=True
             )
             
@@ -3819,7 +4598,7 @@ RAISES:
                 users = {
                     "Select User": {"email": "", "passcode": ""},
                     "Ashish Trivedi (ashish.trivedi@dieboldnixdorf.com)": {"email": "ashish.trivedi@dieboldnixdorf.com", "passcode": "1234"},
-                    "Arthav Deshpande (arthav.deshpande@dieboldnixdorf.com)": {"email": "arthav.deshpande@dieboldnixdorf.com", "passcode": "5678"},
+                    "Atharv Deshpande (atharv.deshpande@dieboldnixdorf.com)": {"email": "atharv.deshpande@dieboldnixdorf.com", "passcode": "5678"},
                     "Prasad Avasare (prasad.avasare@dieboldnixdorf.com)": {"email": "prasad.avasare@dieboldnixdorf.com", "passcode": "9012"},
                     "Saniya Payal(saniya.payal@dieboldnixdorf.com)": {"email": "saniya.payal@dieboldnixdorf.com", "passcode": "3456"}
                 }
@@ -4338,12 +5117,7 @@ RAISES:
                                 width="small"
                             )
 
-                    st.dataframe(
-                        start_df, 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config=column_config
-                    )
+                    render_themed_table(start_df)
                     
                     st.markdown("---")
                     
@@ -4379,12 +5153,7 @@ RAISES:
                                 width="small"
                             )
 
-                    st.dataframe(
-                        first_df, 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config=column_config
-                    )
+                    render_themed_table(first_df)
                     
                     st.markdown("---")
                     
@@ -4417,48 +5186,93 @@ RAISES:
                             'Comment': st.column_config.TextColumn('Comment', help='Additional notes')
                         }
                         
-                        # Apply styling for success/failure
-                        def highlight_state(row):
-                            summary = str(row['Transaction Summary with Result']).strip().lower()
-                            
-                            # Create a list of styles for each column
-                            styles = ['color: white'] * len(row)  # Default all columns to white
-                            
-                            # Find the index of 'Transaction Summary with Result' column
-                            summary_col_idx = row.index.get_loc('Transaction Summary with Result')
-                            
-                            # Apply color only to the summary column
-                            if summary == 'successful':
-                                styles[summary_col_idx] = 'color: green; font-weight: bold'
-                            elif summary == 'unsuccessful':
-                                styles[summary_col_idx] = 'color: red; font-weight: bold'
-                            else:
-                                styles[summary_col_idx] = 'color: white'
-                            
-                            return styles
-                        
-                        styled_df = txn_df.style.apply(highlight_state, axis=1)
-                        
-                        # Add click handling for View Counters
-                        st.dataframe(
-                            styled_df, 
-                            use_container_width=True, 
-                            hide_index=True,
-                            on_select="rerun",
-                            selection_mode="single-row",
-                            key="counter_txn_table",
-                            column_config=txn_column_config
+                        # Build themed HTML table with colour-coded summary column
+                        dark = is_dark()
+                        bg_hdr  = "#1a1a1a" if dark else "#f0f2f6"
+                        bg_row_ = "#0f0f0f" if dark else "#ffffff"
+                        bg_alt  = "#141414" if dark else "#f8fafc"
+                        bg_hov  = "#1f1f1f" if dark else "#f0f4f8"
+                        txt_hdr = "#ffffff"  if dark else "#0d1117"
+                        txt_cel = "#e0e0e0" if dark else "#1e2a35"
+                        bdr_in  = "#2a2a2a" if dark else "#d1d9e0"
+                        bdr_out = "#2a2a2a" if dark else "#b0bec5"
+                        bdr_sep = "#404040" if dark else "#b0bec5"
+
+                        cols = list(txn_df.columns)
+                        summary_col = 'Transaction Summary with Result'
+
+                        hdr_html = "".join(
+                            f"<th style='padding:10px 14px; text-align:left; font-weight:600; "
+                            f"font-size:0.78rem; color:{txt_hdr}; background:{bg_hdr}; "
+                            f"border-bottom:2px solid {bdr_sep}; white-space:nowrap; "
+                            f"letter-spacing:0.3px; position:sticky; top:0; z-index:2;'>{c}</th>"
+                            for c in cols
                         )
-                        
-                        # Get selected row
-                        if st.session_state.get("counter_txn_table") and st.session_state["counter_txn_table"].get("selection"):
-                            selected_rows = st.session_state["counter_txn_table"]["selection"].get("rows", [])
-                            
-                            if selected_rows:
-                                selected_idx = selected_rows[0]
-                                selected_row = txn_df.iloc[selected_idx]
-                                
-                                if selected_row['Counter Summary'] == 'View Counters':
+
+                        body_html = ""
+                        for i, (_, row) in enumerate(txn_df.iterrows()):
+                            rb = bg_row_ if i % 2 == 0 else bg_alt
+                            cells = ""
+                            for c in cols:
+                                val = row[c]
+                                extra = ""
+                                if c == summary_col:
+                                    v = str(val).strip().lower()
+                                    if v == 'successful':
+                                        extra = "color:#16a34a; font-weight:600;"
+                                    elif v == 'unsuccessful':
+                                        extra = "color:#dc2626; font-weight:600;"
+                                cells += (
+                                    f"<td style='padding:10px 14px; color:{txt_cel}; "
+                                    f"border-bottom:1px solid {bdr_in}; font-size:0.875rem; "
+                                    f"white-space:nowrap; {extra}'>{val}</td>"
+                                )
+                            body_html += (
+                                f"<tr style='background:{rb};' "
+                                f"onmouseover=\"this.style.background='{bg_hov}'\" "
+                                f"onmouseout=\"this.style.background='{rb}'\">"
+                                f"{cells}</tr>"
+                            )
+
+                        scrollbar_thumb = "#404040" if dark else "#b0bec5"
+                        scrollbar_track = "#1a1a1a" if dark else "#f0f2f6"
+
+                        st.markdown(
+                            f"<div style='border:1px solid {bdr_out}; border-radius:8px; "
+                            f"overflow:hidden; width:100%;'>"
+                            f"<div style='max-height:320px; overflow-y:auto; overflow-x:auto; "
+                            f"scrollbar-width:thin; scrollbar-color:{scrollbar_thumb} {scrollbar_track};'>"
+                            f"<table style='width:100%; border-collapse:collapse; "
+                            f"font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;'>"
+                            f"<thead><tr>{hdr_html}</tr></thead>"
+                            f"<tbody>{body_html}</tbody></table></div></div>",
+                            unsafe_allow_html=True
+                        )
+
+                        # Selectbox replaces on_select row clicking
+                        selectable = [
+                            f"{r['Date Timestamp']} | {r['Transaction ID']} | {r['Transaction Type']}"
+                            for _, r in txn_df.iterrows()
+                            if r.get('Counter Summary') == 'View Counters'
+                        ]
+                        txn_options = ["— Select a transaction to view counters —"] + selectable
+                        chosen = st.selectbox(
+                            "Select transaction to view counters",
+                            options=txn_options,
+                            key="counter_txn_select"
+                        )
+
+                        selected_row = None
+                        if chosen != txn_options[0]:
+                            for _, r in txn_df.iterrows():
+                                label = f"{r['Date Timestamp']} | {r['Transaction ID']} | {r['Transaction Type']}"
+                                if label == chosen:
+                                    selected_row = r
+                                    break
+
+                        # Get selected row (mirrors original logic)
+                        if selected_row is not None:
+                            if selected_row['Counter Summary'] == 'View Counters':
                                     st.markdown("---")
                                     st.markdown(f"####  Counters for Transaction: {selected_row['Transaction ID']}")
                                     st.caption(f"Time: {selected_row['Date Timestamp']}")
@@ -4559,17 +5373,12 @@ RAISES:
                                                     width="small"
                                                 )
                                         
-                                        st.dataframe(
-                                            counter_display_df, 
-                                            use_container_width=True, 
-                                            hide_index=True,
-                                            column_config=detail_column_config
-                                        )
+                                        render_themed_table(counter_display_df)
                                         
                                         st.caption(f"Showing {len(counter_display_df)} unique counter record(s)")
                                         
                                         if st.button("✕ Close Counters View", key="close_counters"):
-                                            st.session_state["counter_txn_table"]["selection"]["rows"] = []
+                                            st.session_state["counter_txn_select"] = txn_options[0]
                                             st.rerun()
                                     else:
                                         st.info("No logical counters found for this transaction timeframe")
@@ -4610,12 +5419,7 @@ RAISES:
                                 width="small"
                             )
 
-                    st.dataframe(
-                        last_df, 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config=column_config
-                    )
+                    render_themed_table(last_df)
                 
                 else:
                     error_detail = response.json().get('detail', 'Failed to get counter data')
@@ -4782,32 +5586,32 @@ def render_acu_single_parse(): # MODIFIED
             display_df = display_df[mask]
         
         # Display table
-        st.dataframe(
-            display_df[['Parameter', 'Value']],
-            use_container_width=True,
-            hide_index=True,
-            key="acu_data_table",
-            on_select="rerun",
-            selection_mode="single-row"
-        )
+        render_themed_table(display_df[['Parameter', 'Value']])
         
         st.caption(f"Showing {len(display_df)} of {len(df)} parameters")
         
+        # Selectbox replaces on_select row clicking
+        param_options = ["— Select a parameter to view documentation —"] + list(display_df['Parameter'])
+        chosen_param = st.selectbox(
+            "Select a parameter to view documentation",
+            options=param_options,
+            key="acu_data_select"
+        )
+
         # Show documentation for selected row
-        selection = st.session_state.get("acu_data_table", {}).get("selection", {})
-        if selection.get("rows"):
-            selected_row_index = selection["rows"][0]
-            selected_param = display_df.iloc[selected_row_index]
-            
-            if selected_param.get('Details'):
-                st.markdown("---")
-                st.markdown(f"####   Documentation: `{selected_param['Parameter']}`")
-                with st.container(border=True):
-                    st.markdown(selected_param['Details'])
-            else:
-                st.info("  Click a row to see documentation (if available)")
+        if chosen_param != param_options[0]:
+            matches = display_df[display_df['Parameter'] == chosen_param]
+            if not matches.empty:
+                selected_param = matches.iloc[0]
+                if selected_param.get('Details'):
+                    st.markdown("---")
+                    st.markdown(f"####   Documentation: `{selected_param['Parameter']}`")
+                    with st.container(border=True):
+                        st.markdown(selected_param['Details'])
+                else:
+                    st.info("  No documentation available for this parameter")
         else:
-            st.info("  Click a row to see documentation (if available)")
+            st.info("  Select a parameter above to see documentation (if available)")
         
         # Download
         st.markdown("---")
@@ -5032,27 +5836,37 @@ def show_main_app():
     # Get current user
     user = get_current_user()
     
-    # Header with welcome message and logout button
-    col1, col2 = st.columns([5, 1])
-    
+    # Header with welcome message, theme toggle and logout button
+    col1, col_btns = st.columns([6, 2])
+
     with col1:
         display_name = user.get('name') or user.get('username', 'User')
         st.markdown(
             f"""
-            <div style="
-                font-size: 24px;
-                font-weight: 700;
-            ">
+            <div style="font-size: 24px; font-weight: 700; padding-top: 4px;">
                 Welcome {display_name}
             </div>
             """,
             unsafe_allow_html=True
         )
 
-    with col2:
-        if st.button(" Logout", use_container_width=True, key="logout_btn"):
-            logout_user()
-            st.rerun()
+    with col_btns:
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            def _toggle_theme_register():
+                st.session_state.theme = 'light' if st.session_state.register_theme_toggle else 'dark'
+
+            st.toggle(
+                "Light Mode",
+                value=not is_dark(),
+                key="register_theme_toggle",
+                help="Switch between dark and light theme.",
+                on_change=_toggle_theme_register
+            )
+        with btn_col2:
+            if st.button(" Logout", use_container_width=True, key="logout_btn"):
+                logout_user()
+                st.rerun()
     
     st.markdown("---")
     
@@ -5489,17 +6303,49 @@ def main():
     """
     # Initialize session
     initialize_session()
-    create_dn_diagnostics_database()
-    initialize_admin_table()
-    create_login_history_table()
-    create_userresponse_database()
-    create_analysis_table()
-    create_feedback_table() 
+
+    # ── DB setup on every startup ────────────────────────────────────
+    # dev_mode is  determined by credentials at login time, not by a
+    # pre-login toggle, so we always initialise the DB on app load.
+    # The calls are wrapped in try/except so a down DB never blocks the
+    # login page from rendering.
+    try:
+        create_dn_diagnostics_database()
+        initialize_admin_table()
+        create_login_history_table()
+        create_reset_tokens_table()          # Step 2 — password reset tokens table
+        create_userresponse_database()
+        create_analysis_table()
+        create_feedback_table()
+    except Exception as _db_err:
+        frontend_logger.error("DB setup failed on startup: %s", _db_err)
+    # ─────────────────────────────────────────────────────────────────
+
+    # ── Password Reset via URL token (Step 2 → Step 3) ──────────────
+    # When the user clicks the reset link from their email, the URL
+    # will contain ?reset_token=<token>.  We detect that here and
+    # route them to the password reset page (Step 3 will expand this).
+    _query_params = st.query_params
+    _reset_token_from_url = _query_params.get("reset_token", None)
+
+    if _reset_token_from_url and not is_logged_in():
+        # Store token in session so Step 3 can validate and consume it.
+        st.session_state["incoming_reset_token"] = _reset_token_from_url
+        st.session_state.page = "reset_password"
+        # Clear the token from the URL bar for cleanliness
+        st.query_params.clear()
+        st.rerun()
+    # ─────────────────────────────────────────────────────────────────
+
     if not is_logged_in():
         if st.session_state.page == "login":
             show_login_page()
         elif st.session_state.page == "register":
             show_register_page()
+        elif st.session_state.page == "forgot_password":
+            show_forgot_password_page()
+        elif st.session_state.page == "reset_password":
+            show_reset_password_page()
     else:
         # LOGGED IN → MAIN APP
         show_main_app()

@@ -39,6 +39,7 @@ import time
 from modules.logging_config import logger
 from fastapi import FastAPI
 from modules.analysis import store_metadata, store_feedback, get_user_role, get_analysis_records, get_feedback_records
+from modules.login import (verify_reset_identity,generate_reset_token,send_reset_email,validate_reset_token,reset_user_password,is_valid_password)
 
 import logging
 
@@ -3962,4 +3963,470 @@ def get_counter_column_descriptions():
         'St': 'Status - Indicates status of Logical cassette',
         'HWsens': 'HWsens',
         'Record_Type': 'Record Type'
+    }
+
+# ============================================
+# GET ANALYSIS RECORDS
+# ============================================
+
+@router.get("/get-analysis-records")
+async def fetch_analysis_records(
+    transaction_id: str = Query(..., description="Transaction ID to look up"),
+    employee_code:  str = Query(..., description="Employee code of logged in user"),
+):
+    """
+        Retrieve analysis records for a specific transaction and employee.
+
+        Endpoint:
+        ---------
+        GET /get-analysis-records
+
+        Description:
+        ------------
+        Fetches all analysis records from the database that match the
+        provided transaction_id and employee_code.
+
+        This endpoint is typically used by the frontend to display
+        previously generated LLM analysis results for a logged-in user.
+
+        Query Parameters:
+        -----------------
+        transaction_id : str (required)
+            Unique transaction identifier to search for.
+
+        employee_code : str (required)
+            Employee code of the authenticated user.
+            Ensures users can only access their own records.
+
+        Returns:
+        --------
+        200 OK:
+            {
+                "status": "success",
+                "count": int,
+                "records": [
+                    {
+                        "transaction_id": str,
+                        "employee_code": str,
+                        "model": str,
+                        "transaction_type": str,
+                        "transaction_state": str,
+                        "source_file": str,
+                        "start_time": str,
+                        "end_time": str,
+                        "log_length": int,
+                        "response_length": int,
+                        "analysis_time_seconds": float,
+                        "llm_analysis": str,
+                        "created_at": datetime
+                    }
+                ]
+            }
+
+        404 Not Found:
+            Raised when no matching records are found.
+
+        Raises:
+        -------
+        HTTPException:
+            - 404 if no records exist for the given transaction_id.
+
+        Logging:
+        --------
+        Logs transaction_id and employee_code for traceability.
+
+        Security Note:
+        --------------
+        employee_code should ideally be derived from authentication
+        context (e.g., JWT/session) rather than passed as a query parameter.
+    """
+    logger.info(f"Fetching analysis records — txn: {transaction_id}, emp: {employee_code}")
+
+    records = get_analysis_records(
+        transaction_id = transaction_id,
+        employee_code  = employee_code,
+    )
+
+    if not records:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No records found for transaction_id='{transaction_id}'"
+        )
+
+    return {
+        "status": "success",
+        "count":   len(records),
+        "records": records
+    }
+
+# ============================================
+# GET FEEDBACK RECORDS
+# ============================================
+
+@router.get("/get-feedback-records")
+async def fetch_feedback_records(
+    transaction_id: str = Query(..., description="Transaction ID"),
+    user_name:      str = Query(..., description="Logged in username")
+):
+    """
+        Retrieve feedback records for a specific transaction and user.
+
+        Endpoint:
+        ---------
+        GET /get-feedback-records
+
+        Description:
+        ------------
+        Fetches all feedback entries associated with the given
+        transaction_id and user_name from the database.
+
+        This endpoint allows users to view their previously submitted
+        feedback related to a specific transaction analysis.
+
+        Query Parameters:
+        -----------------
+        transaction_id : str (required)
+            Unique identifier of the transaction.
+
+        user_name : str (required)
+            Username of the logged-in user.
+            Used to ensure users only access their own feedback records.
+
+        Returns:
+        --------
+        200 OK:
+            {
+                "status": "success",
+                "count": int,
+                "records": [
+                    {
+                        "transaction_id": str,
+                        "user_name": str,
+                        "rating": int,
+                        "alternative_cause": str,
+                        "comment": str,
+                        "model_version": str,
+                        "submitted_at": datetime
+                    }
+                ]
+            }
+
+        404 Not Found:
+            Raised when no feedback records exist for the given transaction_id.
+
+        Raises:
+        -------
+        HTTPException:
+            - 404 if no feedback is found.
+
+        Logging:
+        --------
+        Logs transaction_id and user_name for monitoring and traceability.
+
+        Security Note:
+        --------------
+        user_name should ideally be derived from authenticated session
+        context (e.g., JWT token or session middleware) instead of being
+        passed as a query parameter.
+    """
+    logger.info(f"Fetching feedback records — txn: {transaction_id}, user: {user_name}")
+
+    records = get_feedback_records(
+        transaction_id = transaction_id,
+        user_name      = user_name
+    )
+
+    if not records:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No feedback found for transaction_id='{transaction_id}'"
+        )
+
+    return {
+        "status":  "success",
+        "count":   len(records),
+        "records": records
+    }
+
+
+# ============================================
+# FORGOT PASSWORD ENDPOINTS
+# ============================================
+class ForgotPasswordRequest(BaseModel):
+    username:      str
+    employee_code: str
+    base_url:      str  # actual app URL detected from browser, passed by Streamlit UI
+
+class ResetPasswordRequest(BaseModel):
+    token:            str
+    new_password:     str
+    confirm_password: str
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /forgot-password
+# ─────────────────────────────────────────────────────────────────────────────
+@router.post("/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest):
+    """
+        Handles the Forgot.
+        Endpoint:
+        ---------
+        POST /api/v1/forgot-password
+
+        Description:
+        ------------
+        1. Verifies that the username + employee_code combination
+           exists in the DB and the account is active.
+        2. If valid, generates a secure single-use reset token and
+           stores it in the password_reset_tokens table.
+        3. Sends a password reset email to the user containing a
+           link built from the base_url passed by the frontend.
+
+        Request Body:
+        -------------
+        {
+            "username":      "user@example.com",
+            "employee_code": "12345678",
+            "base_url":      "http://192.168.1.5:8501"
+        }
+
+        base_url is the actual URL the Streamlit app is being accessed
+        from (detected via st.context.headers on the frontend). This
+        ensures the reset link in the email works on any machine on the
+        network, not just localhost.
+
+        Returns:
+        --------
+        200 OK:
+            { "status": "success", "message": "Reset email sent." }
+
+        400 Bad Request:
+            { "detail": "Invalid username or employee code." }
+
+        500 Internal Server Error:
+            { "detail": "Could not send reset email." }
+
+        Security:
+        ---------
+        - Returns generic 400 for invalid identity (no info leak).
+        - Token is single-use and expires in 30 minutes.
+        - Previous active tokens for the user are invalidated.
+    """
+    logger.info("send forgot-password— user: %s", request.username)
+
+    # ── Step 1: Verify identity ────────────────────────────────────
+    is_valid = verify_reset_identity(
+        username=request.username.strip(),
+        employee_code=request.employee_code.strip()
+    )
+
+    if not is_valid:
+        logger.warning(
+            "forgot_password: identity check failed for user: %s",
+            request.username
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid username or employee code. "
+                   "Please check your details and try again."
+        )
+
+    # ── Step 2: Generate token ─────────────────────────────────────
+    token = generate_reset_token(request.username.strip())
+
+    if not token:
+        logger.error(
+            "forgot_password: token generation failed for user: %s",
+            request.username
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to generate reset token. Please try again."
+        )
+
+    # ── Step 3: Send email with real base_url ──────────────────────
+    email_sent = send_reset_email(
+        to_email=request.username.strip(),
+        token=token,
+        base_url=request.base_url.strip() if request.base_url else None
+    )
+
+    if not email_sent:
+        logger.error(
+            "forgot_password: email failed for user: %s",
+            request.username
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Identity verified but email could not be sent. "
+                   "Please contact your administrator."
+        )
+
+    logger.info(
+        "forgot_password: reset email dispatched for user: %s via %s",
+        request.username, request.base_url
+    )
+    return {
+        "status":  "success",
+        "message": "A password reset link has been sent to your email. "
+                   "Please check your inbox and click the link within 30 minutes."
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /validate-reset-token
+# Step: Check if a token is still valid before showing the reset form
+# ─────────────────────────────────────────────────────────────────────────────
+@router.get("/validate-reset-token")
+async def validate_token_endpoint(token: str = Query(..., description="Reset token from email link")):
+    """
+        Validates a password reset token.
+
+        Endpoint:
+        ---------
+        GET /api/v1/validate-reset-token?token=<token>
+
+        Description:
+        ------------
+        Checks whether the given token:
+        - Exists in the password_reset_tokens table.
+        - Has not been used (is_used = FALSE).
+        - Has not expired (expires_at > NOW()).
+
+        Called by the Streamlit frontend when the user lands on the
+        reset password page, before showing the new password form.
+
+        Query Parameters:
+        -----------------
+        token : str (required)
+            The URL-safe reset token from the email link.
+
+        Returns:
+        --------
+        200 OK (valid):
+            { "status": "valid", "username": "user@example.com" }
+
+        400 Bad Request (invalid/expired):
+            { "detail": "Reset link is invalid or has expired." }
+
+        Security:
+        ---------
+        Does not reveal WHY the token is invalid (expired vs used).
+    """
+    logger.info("validate-reset-token called")
+
+    username = validate_reset_token(token)
+
+    if not username:
+        logger.warning("validate_token_endpoint: invalid/expired token")
+        raise HTTPException(
+            status_code=400,
+            detail="This reset link is invalid or has expired. "
+                   "Please request a new password reset."
+        )
+
+    logger.info("validate_token_endpoint: valid token for user: %s", username)
+    return {
+        "status":   "valid",
+        "username": username
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /reset-password
+# Step : Validate all  rules + update password + consume token
+# ─────────────────────────────────────────────────────────────────────────────
+@router.post("/reset-password")
+async def reset_password_endpoint(request: ResetPasswordRequest):
+    """
+        Resets the user's password after full validation.
+
+        Endpoint:
+        ---------
+        POST /api/v1/reset-password
+
+        Description:
+        ------------
+        Applies all 4 password validation rules before updating:
+
+        Rule 1 — Both fields filled:
+            new_password and confirm_password must not be empty.
+
+        Rule 2 — Passwords match:
+            new_password must equal confirm_password exactly.
+
+        Rule 3 — Strong password (is_valid_password):
+            - Minimum 8 characters
+            - At least 1 uppercase letter
+            - At least 1 lowercase letter
+            - At least 2 digits
+            - At least 1 special character
+
+        Rule 4 — Not same as old password:
+            New password hash must differ from the current stored hash.
+
+        Then:
+        - Updates password_hash in Users table.
+        - Marks the token as is_used = TRUE (single-use).
+        - Logs a password_reset event in login_history.
+
+        Request Body:
+        -------------
+        {
+            "token":            "<reset token>",
+            "new_password":     "NewPass@123",
+            "confirm_password": "NewPass@123"
+        }
+
+        Returns:
+        --------
+        200 OK:
+            { "status": "success", "message": "Password reset successfully." }
+
+        400 Bad Request:
+            { "detail": "<specific validation error message>" }
+
+        Security:
+        ---------
+        - Token is validated and consumed atomically.
+        - Password is SHA-256 hashed before storage.
+        - Expired/used tokens are rejected at this stage too.
+    """
+    logger.info("POST /reset-password called")
+
+    if not request.new_password or not request.confirm_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Both password fields are required."
+        )
+    if request.new_password != request.confirm_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Passwords do not match. Please re-enter both fields."
+        )
+    if not is_valid_password(request.new_password):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Password does not meet strength requirements: "
+                "min 8 characters, 1 uppercase, 1 lowercase, "
+                "2 digits, 1 special character (!@#$%^&* etc.)"
+            )
+        )
+
+    # ── Rule 4: Token validation + old password check + DB update ─
+    success, message = reset_user_password(
+        token=request.token,
+        new_password=request.new_password
+    )
+
+    if not success:
+        logger.warning("reset_password_endpoint: reset failed — %s", message)
+        raise HTTPException(status_code=400, detail=message)
+
+    logger.info("reset_password_endpoint: password reset successful")
+    return {
+        "status":  "success",
+        "message": "Your password has been reset successfully. You can now log in."
     }

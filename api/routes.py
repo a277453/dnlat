@@ -1,5 +1,3 @@
-from pyexpat.errors import messages
-
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from modules.extraction import ZipExtractionService
 from modules.categorization import CategorizationService

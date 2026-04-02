@@ -15,11 +15,12 @@ from modules.analysis import create_analysis_table, create_feedback_table, creat
 from modules.streamlit_logger import logger as frontend_logger
 import time
 from modules.login import create_reset_tokens_table, register_user, is_valid_password, is_same_as_old_password
-import re as _re; from datetime import datetime as _dt
+import re as _re
+from datetime import datetime as _dt
 
 
 # Import authentication functions
-from admin_setup import create_dn_diagnostics_database, initialize_admin_table
+from admin_setup import create_dn_diagnostics_database, initialize_admin_table, validate_env
 from modules.login import (
     create_login_history_table,
     initialize_session,
@@ -31,6 +32,9 @@ from modules.login import (
 )
 # IMPORTANT 
 initialize_session()
+# def init_app():
+#     validate_env()
+#     create_dn_diagnostics_database()
 
 frontend_logger.info("Streamlit app loaded")
 
@@ -729,7 +733,7 @@ inject_theme_css()
 # ============================================
 # GLOBAL VARIABLES
 # ============================================
-API_BASE_URL = "http://localhost:8000/api/v1"
+API_BASE_URL = "http://backend:8000/api/v1"
 
 # ============================================
 # THEMED TABLE HELPER
@@ -1171,7 +1175,7 @@ def show_forgot_password_page():
                     )
                     _base_url = f"{_proto}://{_host}"
                 except Exception:
-                    _base_url = "http://localhost:8501"
+                    _base_url = "http://backend:8501"
 
                 # ── POST /forgot-password ──────────────────────────
                 # API handles: identity check + token + email in one call.

@@ -42,6 +42,7 @@ class CategorizationService:
             'trc_error': [],
             'registry_files': [],
             'acu_files': [],
+            'journal_llm_files': [],
             'unidentified': []
         }
 
@@ -172,6 +173,7 @@ class CategorizationService:
             'REGISTRY': 'registry_files',
             'CUSTOMER': 'customer_journals',
             'UI':       'ui_journals',
+            'JOURNAL':  'journal_llm_files',  # .jrn files from JOURNAL folder that are required by the LLM.
         }
         if parent_name in BRANCH_TO_CATEGORY:
             mapped = BRANCH_TO_CATEGORY[parent_name]
@@ -217,10 +219,15 @@ class CategorizationService:
 
         # === UI JOURNALS ===
         has_ui_folder = any('ui' in parent and 'journal' in parent for parent in all_parents)
-
         if has_ui_folder and file_name_lower.endswith('.jrn'):
             logger.debug("MATCH: Found in UI JOURNAL folder -> ui_journals")
             return 'ui_journals'
+
+        # === JOURNAL-FOLDER JRN FILES FOR LLM===
+        has_journal_folder = any(p.upper() == 'JOURNAL' for p in all_parents)
+        if has_journal_folder and file_name_lower.endswith('.jrn'):
+            logger.debug("MATCH: Found in JOURNAL folder -> journal_llm_files")
+            return 'journal_llm_files'
 
         # === TRC TRACE FILES ===
         has_trace_folder = any('trace' in parent for parent in all_parents)

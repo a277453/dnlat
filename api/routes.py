@@ -138,6 +138,7 @@ async def debug_zip_members(file: UploadFile = File(...)):
         BadZipFile : If the uploaded file is not a valid ZIP archive.
         Exception  : Any unexpected errors during reading or processing the ZIP file.
     """
+    session_id = _resolve_session_id(session_id)
     logger.info(" Received request: /debug-zip-members")  
     try:
         zip_bytes = await file.read()
@@ -362,7 +363,8 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         # phase below, then replaced by filename-only lists before session storage.
         file_categories = {
             'customer_journals': [], 'ui_journals': [], 'trc_trace': [],
-            'trc_error': [], 'registry_files': [], 'acu_files': [], 'unidentified': []
+            'trc_error': [], 'registry_files': [], 'acu_files': [],
+            'journal_llm_files': [], 'unidentified': []
         }
         
         # Step 3: Add the correctly identified ACU files to the categories FIRST
@@ -430,6 +432,17 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             except Exception as e:
                 logger.error(f"[UI] failed to load {p.name}: {e}")
 
+        # --- JOURNAL-FOLDER WITH FILES FOR LLM---
+        # These come from the JOURNAL folder (not from VCP-PRO/JOURNALS/UI) and must NOT be passed to the UI Flow of Individual Transaction feature.
+        journal_llm_contents: dict = {}
+        for path_str in file_categories.get('journal_llm_files', []):
+            p = Path(path_str)
+            try:
+                journal_llm_contents[p.name] = _read_text(p)
+                logger.debug(f"[JOURNAL] Mapped content to filename: {p.name}")
+            except Exception as e:
+                logger.error(f"[JOURNAL] failed to load {p.name}: {e}")
+
         # --- TRC TRACE ---
         trc_trace_contents: dict = {}
         for path_str in file_categories.get('trc_trace', []):
@@ -470,7 +483,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
         # Convert file_categories from full disk paths to filenames only.
         for branch in ('customer_journals', 'ui_journals', 'trc_trace', 'trc_error',
-                        'registry_files', 'acu_files', 'unidentified'):
+                        'registry_files', 'acu_files', 'journal_llm_files', 'unidentified'):
             file_categories[branch] = [Path(p).name for p in file_categories[branch]]
 
         
@@ -488,6 +501,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         session_service.update_session(CURRENT_SESSION_ID, 'registry_contents',registry_contents)
         session_service.update_session(CURRENT_SESSION_ID, 'customer_journal_contents',customer_journal_contents)
         session_service.update_session(CURRENT_SESSION_ID, 'ui_journal_contents',ui_journal_contents)
+        session_service.update_session(CURRENT_SESSION_ID, 'journal_llm_contents',journal_llm_contents)
         session_service.update_session(CURRENT_SESSION_ID, 'trc_trace_contents',trc_trace_contents)
         session_service.update_session(CURRENT_SESSION_ID, 'trc_error_contents',trc_error_contents)
         session_service.update_session(CURRENT_SESSION_ID, 'extra_contents', extra_contents)
@@ -682,6 +696,7 @@ async def extract_registry_from_zip(file: UploadFile = File(...)):
             - 400 if the uploaded file is not a ZIP
             - 500 for unexpected errors during extraction
     """
+    session_id = _resolve_session_id(session_id)
     logger.info(f"Received request: /extract-registry-from-zip for file: {file.filename}")
 
     if not file.filename.lower().endswith('.zip'):
@@ -3454,7 +3469,7 @@ def parse_counter_data_from_trc(log_lines: list) -> list:
             None : Function handles parsing errors internally and skips invalid lines.
 """
 
-    import re
+    session_id = _resolve_session_id(session_id)
     counter_rows = []
     
     # Find header line
@@ -3882,6 +3897,7 @@ async def get_counter_data(
                 - 500 : For any unexpected errors during processing
 """
 
+    session_id = _resolve_session_id(session_id)
     try:
         # print(f" Getting counter data for transaction: {request.transaction_id}")
         
@@ -4313,6 +4329,7 @@ async def fetch_analysis_records(
         employee_code should ideally be derived from authentication
         context (e.g., JWT/session) rather than passed as a query parameter.
     """
+    
     logger.info(f"Fetching analysis records — txn: {transaction_id}, emp: {employee_code}")
 
     records = get_analysis_records(

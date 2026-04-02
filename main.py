@@ -1,13 +1,26 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi import Request
 from api import routes
 from pathlib import Path
 from modules.logging_config import logger
 from fastapi.logger import logger
 from contextlib import asynccontextmanager  # <- Added for lifespan
+from modules.login import decode_access_token, PUBLIC_PATHS
 from api.routes import PROCESSED_FILES_DIR
 
 
+# Global variable to store the processed files directory
+PROCESSED_FILES_DIR = None
+
+# def set_processed_files_dir(directory: str):
+#     global PROCESSED_FILES_DIR
+#     PROCESSED_FILES_DIR = directory
+#     logger.info(f"✓ Processed files directory set to: {directory}")
+
+def get_processed_files_dir() -> str:
+    return PROCESSED_FILES_DIR
 
 # ============================================
 # LIFESPAN HANDLER
@@ -51,6 +64,83 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ============================================
+# GLOBAL JWT AUTH MIDDLEWARE
+# ============================================
+@app.middleware("http")
+async def jwt_auth_middleware(request: Request, call_next):
+    """
+    Blocks every request that is NOT in PUBLIC_PATHS unless a valid
+    Authorization: Bearer <jwt> header is present.
+
+    Missing / invalid token → 401 (logged to terminal)
+    Role violations         → 403 (handled per-endpoint by require_elevated_role)
+    """
+    path = request.url.path
+
+    if (
+        path in PUBLIC_PATHS
+        or path.startswith("/docs")
+        or path.startswith("/redoc")
+        or path.startswith("/openapi")
+    ):
+        return await call_next(request)
+
+    auth_header = request.headers.get("Authorization", "")
+
+    if not auth_header.startswith("Bearer "):
+        logger.warning(
+            "MIDDLEWARE [401] path='%s' method='%s' client='%s' — no token",
+            path, request.method,
+            request.client.host if request.client else "unknown",
+        )
+        return JSONResponse(
+            status_code=401,
+            content={
+                "status":  "error",
+                "code":    401,
+                "error":   "Unauthorized",
+                "message": (
+                    "No authentication token provided. "
+                    "Log in through the application first. "
+                    "Direct browser or Postman access is blocked."
+                ),
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = auth_header.split(" ", 1)[1]
+    try:
+        payload = decode_access_token(token)
+        request.state.current_user = payload
+        logger.debug(
+            "MIDDLEWARE OK user='%s' role='%s' path='%s'",
+            payload.get("sub"), payload.get("role"), path,
+        )
+    except Exception as exc:
+        detail = getattr(exc, "detail", {})
+        if not isinstance(detail, dict):
+            detail = {"message": str(detail)}
+        logger.warning(
+            "MIDDLEWARE [401] path='%s' — invalid/expired token: %s",
+            path, detail.get("message", ""),
+        )
+        return JSONResponse(
+            status_code=401,
+            content={
+                "status":  "error",
+                "code":    401,
+                "error":   "Unauthorized",
+                "message": detail.get(
+                    "message",
+                    "Invalid or expired session token. Please log in again.",
+                ),
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return await call_next(request)
 
 # Include existing routers
 app.include_router(routes.router, prefix="/api/v1", tags=["analysis-engine"])

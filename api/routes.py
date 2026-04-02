@@ -21,7 +21,8 @@ from modules.xml_parser_logic import parse_xml_to_dataframe
 from pathlib import Path
 from typing import Dict, List, Optional
 import shutil
-from fastapi import Body
+from fastapi import Body, Header
+from pydantic import BaseModel
 import os
 import pandas as pd
 from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal
@@ -39,19 +40,79 @@ import time
 
 #  Import our central logger
 from modules.logging_config import logger
-from fastapi import FastAPI
 from modules.analysis import store_metadata, store_feedback, get_user_role, get_analysis_records, get_feedback_records
-from modules.login import (verify_reset_identity,generate_reset_token,send_reset_email,validate_reset_token,reset_user_password,is_valid_password)
+from modules.login import (verify_reset_identity,generate_reset_token,send_reset_email,validate_reset_token,reset_user_password,is_valid_password,authenticate_user_backend,register_user,is_user_pending_approval,log_login_event,create_access_token)
 
 import logging
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 
 logger.info("Logger initialized at startup")
 
-app = FastAPI()
-
-
 router = APIRouter()
 logger.info("FastAPI app started")
+
+# ============================================
+# RBAC DEPENDENCY
+# ============================================
+# Roles allowed to access all endpoints.
+# USER role is restricted to individual-transaction endpoints only.
+ALLOWED_ROLES = {"ADMIN", "DEV_MODE"}
+
+async def require_elevated_role(
+    authorization: str = Header(default=None),
+):
+    """
+    FastAPI dependency — reads the JWT from Authorization: Bearer header,
+    decodes it, and asserts the role is ADMIN or DEV_MODE.
+
+    Returns 401 if token is missing or invalid.
+    Returns 403 if role is not in ALLOWED_ROLES (i.e. role == USER).
+    Both responses are logged to the terminal.
+    """
+    from modules.login import decode_access_token
+
+    if not authorization or not authorization.startswith("Bearer "):
+        logger.warning(
+            "RBAC [401] — missing Authorization header on elevated endpoint"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "status": "error",
+                "code": 401,
+                "error": "Unauthorized",
+                "message": (
+                    "Authentication token missing. "
+                    "Log in through the application to access this endpoint."
+                ),
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = authorization.split(" ", 1)[1]
+    payload = decode_access_token(token)   # raises 401 automatically if bad
+    role = payload.get("role", "")
+
+    if role not in ALLOWED_ROLES:
+        logger.warning(
+            "RBAC [403] — user='%s' role='%s' denied on elevated endpoint",
+            payload.get("sub"), role,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "status": "error",
+                "code": 403,
+                "error": "Forbidden",
+                "message": (
+                    f"Access denied. Role '{role}' does not have permission "
+                    f"to access this endpoint. Required role: ADMIN or DEV_MODE."
+                ),
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 log_file=Path("app.log")
 
@@ -816,7 +877,7 @@ async def extract_registry_from_zip(file: UploadFile = File(...)):
             detail=f"Error extracting registry files: {str(e)}"
         )
 
-@router.get("/get-registry-contents")
+@router.get("/get-registry-contents", dependencies=[Depends(require_elevated_role)])
 async def get_registry_contents(session_id: Optional[str] = Query(default=None)):
     """
 FUNCTION: get_registry_contents
@@ -880,8 +941,8 @@ RAISES:
 # ACU PARSER ENDPOINTS
 # ============================================
 
-@router.get("/get-acu-files")
-async def get_acu_files(session_id: str = Query(default=None)):
+@router.get("/get-acu-files", dependencies=[Depends(require_elevated_role)])
+async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
         get_acu_files
@@ -979,8 +1040,8 @@ async def get_acu_files(session_id: str = Query(default=None)):
             detail=f"Error retrieving ACU files: {str(e)}"
         )
 
-@router.post("/parse-acu-files")
-async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str = Query(default=None)):
+@router.post("/parse-acu-files", dependencies=[Depends(require_elevated_role)])
+async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
         parse_acu_files
@@ -1716,8 +1777,8 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
             detail=f"Error filtering transactions: {str(e)}"
         )
 
-@router.get("/transaction-statistics")
-async def get_transaction_statistics(session_id: str = Query(default=None)):
+@router.get("/transaction-statistics", dependencies=[Depends(require_elevated_role)])
+async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
         get_transaction_statistics
@@ -1824,8 +1885,8 @@ async def get_transaction_statistics(session_id: str = Query(default=None)):
             detail=f"Error generating statistics: {str(e)}"
         )
 
-@router.post("/compare-transactions-flow")
-async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body(...),session_id: str = Query(default=None)):
+@router.post("/compare-transactions-flow", dependencies=[Depends(require_elevated_role)])
+async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
         compare_transactions_flow
@@ -2326,8 +2387,8 @@ async def debug_session(session_id: str = Query(default=None)):
         )
 
 
-@router.post("/visualize-individual-transaction-flow")
-async def visualize_individual_transaction_flow(request: TransactionVisualizationRequest,session_id: str = Query(default=None)):
+@router.post("/visualize-individual-transaction-flow", dependencies=[Depends(require_elevated_role)])
+async def visualize_individual_transaction_flow(request: TransactionVisualizationRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
     FUNCTION:
         visualize_individual_transaction_flow
@@ -2643,8 +2704,8 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
             detail=f"Visualization failed: {str(e)}"
         )
 
-@router.post("/generate-consolidated-flow")
-async def generate_consolidated_flow(source_file: str = Body(...),transaction_type: str = Body(...),session_id: str = Query(default=None)):
+@router.post("/generate-consolidated-flow", dependencies=[Depends(require_elevated_role)])
+async def generate_consolidated_flow(source_file: str = Body(...),transaction_type: str = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
 FUNCTION:
     generate_consolidated_flow
@@ -3065,7 +3126,19 @@ class FeedbackSubmission(BaseModel):
     original_llm_response: str
 
 @router.post("/submit-llm-feedback")
-async def submit_llm_feedback(feedback: FeedbackSubmission,session_id: str = Query(default=None)):
+async def submit_llm_feedback(feedback: FeedbackSubmission, session_id: str = Query(default=CURRENT_SESSION_ID), authorization: str = Header(default=None)):
+    from modules.login import decode_access_token
+    if authorization and authorization.startswith("Bearer "):
+        payload = decode_access_token(authorization.split(" ", 1)[1])
+        if payload.get("role") == "ADMIN":
+            logger.warning(
+                "FEEDBACK [403] — user='%s' role='ADMIN' attempted to submit feedback (blocked)",
+                payload.get("sub"),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="ADMIN role is not permitted to submit feedback.",
+            )
     """
 FUNCTION:
     submit_llm_feedback
@@ -3675,9 +3748,8 @@ def extract_counter_blocks_from_string(content: str) -> list:
         logger.error(f"Error extracting counter blocks from string: {e}")
     return all_counter_blocks
 
-@router.get("/get-matching-sources-for-trc")
-
-async def get_matching_sources_for_trc(session_id: str = Query(default=None)):
+@router.get("/get-matching-sources-for-trc", dependencies=[Depends(require_elevated_role)])
+async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_SESSION_ID)):
     """
         FUNCTION: get_matching_sources_for_trc
 
@@ -3743,7 +3815,7 @@ async def get_matching_sources_for_trc(session_id: str = Query(default=None)):
         logger.error(f"[TRC-MATCH] error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
-@router.post("/get-counter-data")
+@router.post("/get-counter-data", dependencies=[Depends(require_elevated_role)])
 async def get_counter_data(
     request: CounterDataRequest,
     session_id: str = Query(default=None)
@@ -4157,7 +4229,7 @@ def get_counter_column_descriptions():
 # GET ANALYSIS RECORDS
 # ============================================
 
-@router.get("/get-analysis-records")
+@router.get("/get-analysis-records", dependencies=[Depends(require_elevated_role)])
 async def fetch_analysis_records(
     transaction_id: str = Query(..., description="Transaction ID to look up"),
     employee_code:  str = Query(..., description="Employee code of logged in user"),
@@ -4252,7 +4324,7 @@ async def fetch_analysis_records(
 # GET FEEDBACK RECORDS
 # ============================================
 
-@router.get("/get-feedback-records")
+@router.get("/get-feedback-records", dependencies=[Depends(require_elevated_role)])
 async def fetch_feedback_records(
     transaction_id: str = Query(..., description="Transaction ID"),
     user_name:      str = Query(..., description="Logged in username")
@@ -4619,3 +4691,136 @@ async def reset_password_endpoint(request: ResetPasswordRequest):
         "status":  "success",
         "message": "Your password has been reset successfully. You can now log in."
     }
+
+
+# ============================================
+# AUTH ENDPOINTS
+# ============================================
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class LoginResponse(BaseModel):
+    username: str
+    name: str | None = None
+    employee_code: str
+    role: str
+    session_token: str
+
+class RegisterRequest(BaseModel):
+    email: str
+    name: str
+    password: str
+    employee_code: str
+    role: str = "USER"
+
+class LogoutRequest(BaseModel):
+    username: str
+
+
+@router.post("/auth/login", response_model=LoginResponse)
+async def auth_login(request: LoginRequest):
+    """
+    Verify username + password against the Users table.
+    Returns user info + signed JWT session_token on success (200).
+    Returns 401 for wrong credentials.
+    Returns 403 if account exists but is pending admin approval.
+    """
+    logger.info("POST /auth/login: user: %s", request.username)
+
+    user = authenticate_user_backend(request.username.strip(), request.password)
+
+    if user:
+        log_login_event(username=user["username"], action="login")
+        logger.info("Login successful: user=%s role=%s", user["username"], user.get("role"))
+        token = create_access_token(
+            username=user["username"],
+            role=user.get("role", "USER"),
+            employee_code=user.get("employee_code", ""),
+        )
+        return LoginResponse(
+            username=user["username"],
+            name=user.get("name"),
+            employee_code=user.get("employee_code", ""),
+            role=user.get("role", "USER"),
+            session_token=token,
+        )
+
+    if is_user_pending_approval(request.username.strip(), request.password):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is pending admin approval. "
+                   "Please contact your administrator to activate your account.",
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid username or password.",
+    )
+
+
+@router.post("/auth/register", status_code=status.HTTP_201_CREATED)
+async def auth_register(request: RegisterRequest):
+    """Create a new user account (inactive by default)."""
+    logger.info("POST /auth/register — email: %s", request.email)
+
+    if not is_valid_password(request.password):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Password does not meet strength requirements: "
+                "min 8 characters, 1 uppercase, 1 lowercase, "
+                "2 digits, 1 special character."
+            ),
+        )
+
+    success, message = register_user(
+        request.email,
+        request.name,
+        request.password,
+        request.employee_code,
+        request.role or "USER",
+    )
+
+    if success:
+        logger.info("Registration successful — email: %s", request.email)
+        return {"status": "success", "message": message}
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=message,
+    )
+
+
+@router.post("/auth/logout")
+async def auth_logout(request: LogoutRequest):
+    """Write a logout event to login_history."""
+    logger.info("POST /auth/logout — user: %s", request.username)
+    log_login_event(username=request.username, action="logout")
+    return {"status": "success"}
+
+
+@router.post("/auth/initialize-db")
+async def auth_initialize_db():
+    """Bootstrap all required tables. Called once from the FastAPI lifespan handler."""
+    from admin_setup import create_dn_diagnostics_database, initialize_admin_table
+    from modules.login import create_login_history_table, create_reset_tokens_table
+    from modules.analysis import (
+        create_userresponse_database,
+        create_analysis_table,
+        create_feedback_table,
+    )
+    try:
+        create_dn_diagnostics_database()
+        initialize_admin_table()
+        create_login_history_table()
+        create_reset_tokens_table()
+        create_userresponse_database()
+        create_analysis_table()
+        create_feedback_table()
+        logger.info("DB bootstrap complete")
+        return {"status": "success", "message": "All tables initialised"}
+    except Exception as e:
+        logger.exception("DB bootstrap failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"DB bootstrap failed: {e}")

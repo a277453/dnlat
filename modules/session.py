@@ -55,6 +55,8 @@ class SessionService:
         DESCRIPTION:
             Binds this instance to the module-level _SHARED_SESSIONS dict so
             that all SessionService instances share the same in-memory store.
+            Initializes the in-memory session dictionary used to store all
+            session-related data.
 
         USAGE:
             service = SessionService()

@@ -42,6 +42,7 @@ import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import hashlib
 import os
+from modules.login import get_db_connection
 from modules.streamlit_logger import logger as frontend_logger
 from dotenv import load_dotenv
 load_dotenv()  # auto load from root

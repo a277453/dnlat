@@ -2,6 +2,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import os
 import re
+import zipfile
+import io
 from modules.logging_config import logger
 import logging
 
@@ -43,12 +45,13 @@ class CategorizationService:
             'unidentified': []
         }
 
+    
     def categorize_files(
         self,
         extract_path: Path,
         file_categories: Dict[str, List[str]],
         exclude_files: set = None,
-        mode: Optional[str] = None
+        mode: Optional[str] = None,
     ) -> Dict[str, List[str]]:
         """
         FUNCTION: categorize_files
@@ -90,8 +93,9 @@ class CategorizationService:
             if not file_path.is_file():
                 continue
 
-            if file_path.name in exclude_files:
-                logger.debug(f"Skipping excluded file (ACU): {file_path.name}")
+            # Never read or categorize anything stored in the EXTRA branch folder
+            if file_path.parent.name.upper() == 'EXTRA':
+                logger.debug(f"Skipping every file in EXTRA branch.")
                 continue
 
             if str(file_path) in processed_files:
@@ -128,18 +132,23 @@ class CategorizationService:
         return file_categories
 
     def _detect_category(self, file_path: Path, mode: Optional[str] = None) -> str:
+    
         """
         FUNCTION: _detect_category
 
         DESCRIPTION:
             Detects the category of a given file based on filename and content.
+            When zip_map is provided, it is consulted first using the file's
+            normalized path as the lookup key, avoiding content-based reads
+            for files already resolved from the ZIP structure.
 
         USAGE:
-            category = service._detect_category(Path("/tmp/file.jrn"), mode=None)
+            category = service._detect_category(Path("/tmp/file.jrn"), mode=None, zip_map=zip_map)
 
         PARAMETERS:
-            file_path (Path)   : Path of the file to categorize
-            mode (str, optional) : Special mode affecting categorization
+            file_path (Path)              : Path of the file to categorize
+            mode (str, optional)          : Special mode affecting categorization
+            zip_map (dict, optional)      : Structure map from build_zip_structure_map()
 
         RETURNS:
             str : File category (e.g., 'customer_journals', 'unidentified')
@@ -154,6 +163,28 @@ class CategorizationService:
         logger.debug(f"Analyzing file: {file_path.name}")
         logger.debug(f"Path hierarchy: {' > '.join(file_path.parts[:-1])}")
         logger.debug(f"Normalized path: {normalized_path}")
+
+        # === BRANCH FOLDER PATH ===
+        parent_name = file_path.parent.name.upper()  # e.g. "ACU", "TRC", "REGISTRY" …
+        BRANCH_TO_CATEGORY = {
+            'ACU':      'acu_files',
+            'TRC':      'trc_trace',       # TRC branch holds both trace and error and the content detection will split them if needed
+            'REGISTRY': 'registry_files',
+            'CUSTOMER': 'customer_journals',
+            'UI':       'ui_journals',
+        }
+        if parent_name in BRANCH_TO_CATEGORY:
+            mapped = BRANCH_TO_CATEGORY[parent_name]
+            # For the TRC branch, we will distinguish trace vs error by filename/extension
+            if parent_name == 'TRC':
+                ext = file_name_lower
+                if 'error' in file_name_lower or file_name_lower.endswith('.trc'):
+                    mapped = 'trc_error'
+                else:
+                    mapped = 'trc_trace'
+            logger.debug(f"BRANCH FAST-PATH: {file_path.name} (parent={parent_name}) -> {mapped}")
+            return mapped
+
 
         # === REGISTRY FILES ===
         has_registry_folder = any('registry' in parent or 'reg' in parent for parent in all_parents)
@@ -212,20 +243,34 @@ class CategorizationService:
             logger.debug("MATCH: Found in ERROR folder -> trc_error")
             return 'trc_error'
 
-        # === CONTENT-BASED DETECTION ===
-        if file_name_lower.endswith(('.jrn', '.prn')):
-            logger.debug("Running content-based detection...")
-            file_type = self._detect_file_type_by_content(str(file_path))
-            logger.debug(f"Content type detected: {file_type}")
-
-            if "Customer Journal" in file_type:
-                return 'customer_journals'
-            elif "UI Journal" in file_type:
-                return 'ui_journals'
-            elif "TRC Trace" in file_type:
+        # === TRC FILES BY FILENAME (e.g. TRCTRACE.PRN, TRCERROR.PRN) ===
+        if file_name_lower.endswith(('.prn', '.trc')):
+            trc_signals = ('trctrace', 'trc_trace', 'trcerror', 'trc_error', 'trace', 'error')
+            stem_lower = os.path.splitext(file_name_lower)[0]
+            if any(sig in stem_lower for sig in trc_signals):
+                if 'error' in stem_lower or file_name_lower.endswith('.trc'):
+                    logger.debug("MATCH: TRC signal in filename -> trc_error")
+                    return 'trc_error'
+                logger.debug("MATCH: TRC signal in filename -> trc_trace")
                 return 'trc_trace'
-            elif "TRC Error" in file_type:
-                return 'trc_error'
+
+        # === STRUCTURE-ONLY FALLBACK FOR AMBIGUOUS FILES ===
+        # If zip_map was provided but the file wasn't matched above, the ZIP structure
+        # gave no clear signal — do not fall back to reading file content.
+        # If zip_map was not provided, apply the original folder-name heuristics only.
+        if file_name_lower.endswith(('.jrn', '.prn')):
+                file_type = self._detect_file_type_by_content(str(file_path))
+                logger.debug(f"Content type detected: {file_type}")
+
+                if "Customer Journal" in file_type:
+                    if not has_ui_folder:
+                        return 'unidentified'
+                elif "UI Journal" in file_type:
+                    return 'ui_journals'
+                elif "TRC Trace" in file_type:
+                    return 'trc_trace'
+                elif "TRC Error" in file_type:
+                    return 'trc_error'
 
         logger.debug("NO MATCH: File will be unidentified")
         return 'unidentified'

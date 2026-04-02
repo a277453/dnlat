@@ -19,6 +19,7 @@ import re as _re
 from datetime import datetime as _dt
 
 
+
 # Import authentication functions
 from admin_setup import create_dn_diagnostics_database, initialize_admin_table, validate_env
 from modules.login import (
@@ -885,7 +886,9 @@ def show_login_page():
                 placeholder="Enter your password",
                 key="login_password"
             )
-            submit = st.form_submit_button("Login", use_container_width=True)
+            # Button label reflects dev mode state
+            btn_label = "Enter Dev Mode" if st.session_state.get("dev_mode", False) else "Login"
+            submit = st.form_submit_button(btn_label, use_container_width=True)
 
         # Handle login
         if submit:
@@ -2332,7 +2335,7 @@ RAISES:
     Exception                           : For any unexpected errors during execution
 """
 
-    st.markdown("####  Registry File Viewer")
+    st.markdown("#### Registry File Viewer")
 
     # Get registry contents from session via API
     try:
@@ -2343,7 +2346,7 @@ RAISES:
         )
         
         if response.status_code != 200:
-            st.error("  Failed to load registry files from session")
+            st.error("Failed to load registry files from session")
             logger.error(f"API call failed with status: {response.status_code}")
             return
             
@@ -2351,7 +2354,7 @@ RAISES:
         registry_contents = registry_data.get('registry_contents', {})
         
         if not registry_contents:
-            st.warning("  No registry files found in the uploaded package.")
+            st.warning("No registry files found in the uploaded package.")
             return
 
         # Create file selection dropdown
@@ -2446,23 +2449,23 @@ def render_registry_compare():
     try:
         response = requests.get(
             f"{API_BASE_URL}/get-registry-contents",
-            params={"session_id": "current_session"},
+            params={"session_id":"current_session"},
             timeout=30
         )
         
         if response.status_code != 200:
-            st.error("  Failed to load registry files from first package")
+            st.error("Failed to load registry files from first package")
             return
             
         registry_data = response.json()
         registry_contents_a = registry_data.get('registry_contents', {})
         
         if not registry_contents_a:
-            st.warning("  No registry files found in the first uploaded package.")
+            st.warning("No registry files found in the first uploaded package.")
             return
         
         st.markdown("#### Step 1: First Package (Already Loaded)")
-        st.success(f"  Loaded {len(registry_contents_a)} registry file(s) from main package")
+        st.success(f"Loaded {len(registry_contents_a)} registry file(s) from main package")
         
         # Show available files from first package
         with st.expander("View files in first package"):
@@ -4261,7 +4264,7 @@ def render_consolidated_flow():
                         st.error(f"  {error_detail}")
                         
                 except requests.exceptions.Timeout:
-                    st.error("⏱  Request timeout. Please try again.")
+                    st.error("Request timeout. Please try again.")
                 except requests.exceptions.ConnectionError:
                     st.error("  Connection error. Ensure the API server is running.")
                 except Exception as e:
@@ -5016,12 +5019,12 @@ RAISES:
         source_transactions = txn_df[txn_df['Source File'] == selected_source]
         
         if len(source_transactions) == 0:
-            st.warning(f"  No transactions found in source '{selected_source}'")
+            st.warning(f"No transactions found in source '{selected_source}'")
             return
         
         # Transaction selection
         st.markdown("---")
-        st.markdown("####   Select Transaction")
+        st.markdown("#### Select Transaction")
 
         # Filter to only transactions from this specific source file
         source_only_transactions = txn_df[txn_df['Source File'] == selected_source].copy()
@@ -5157,7 +5160,7 @@ RAISES:
                     
                     st.markdown("---")
                     
-                    st.markdown("####   Counter per Transaction")
+                    st.markdown("#### Counter per Transaction")
 
                     if 'counter_per_transaction' in counter_data and counter_data['counter_per_transaction']:
                         txn_table_data = []

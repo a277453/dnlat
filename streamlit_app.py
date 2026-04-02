@@ -20,6 +20,7 @@ from datetime import datetime as _dt
 
 
 
+
 # Import authentication functions
 from admin_setup import create_dn_diagnostics_database, initialize_admin_table, validate_env
 from modules.login import (
@@ -734,7 +735,7 @@ inject_theme_css()
 # ============================================
 # GLOBAL VARIABLES
 # ============================================
-API_BASE_URL = "http://backend:8000/api/v1"
+API_BASE_URL = "http://localhost:8000/api/v1"
 
 # ============================================
 # THEMED TABLE HELPER
@@ -3284,7 +3285,7 @@ def render_ui_flow_individual():
             Any unexpected errors during API calls, analysis, filtering, or visualization
             are caught and displayed via Streamlit.
     """
-    st.markdown("####   UI Flow of Individual Transaction")
+    st.markdown("#### UI Flow of Individual Transaction")
     
     need_analysis = False
     
@@ -3527,7 +3528,7 @@ def render_ui_flow_individual():
                     
                     # Display UI flow
                     st.markdown("---")
-                    st.markdown("####   UI Flow Visualization")
+                    st.markdown("#### UI Flow Visualization")
                     
                     ui_flow = viz_data.get('ui_flow', [])
                     has_flow = viz_data.get('has_flow', False)
@@ -5690,7 +5691,7 @@ RAISES:
             except Exception as e:
                 st.error(f"Error loading Source A: {e}")
     else:
-        st.success(f"✓ **Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
+        st.success(f"**Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
     
     st.markdown("---")
     

@@ -25,6 +25,7 @@ Public API:
     match_journal_file(customer_file, ui_journal_files)  -> str | None
     parse_journal(file_path)                             -> pd.DataFrame
     extract_diagnostic_context(file_path, start, end)   -> dict
+    extract_diagnostic_context_from_content(content, filename, start, end) -> dict
     mask_ej_log(transaction_log)                         -> str
 """
 
@@ -486,8 +487,9 @@ def extract_diagnostic_context(
 
                 # Host reply (6304)
                 if msg_id == '6304':
+                    _cleaned_rest = re.sub(r'\s+', ' ', rest).strip()
                     result['host_replies'].append(
-                        f"{ts_str} {re.sub(r'\\s+', ' ', rest).strip()}"
+                        f"{ts_str} {_cleaned_rest}"
                     )
 
                 # Transaction UUID (6306)
@@ -597,6 +599,270 @@ def extract_diagnostic_context(
         "extract_diagnostic_context: %s [%s-%s] steps=%d host=%d chip=%d "
         "errors=%d states=%d cards=%d",
         file_path.name, start_time_str, end_time_str,
+        len(result['protocol_steps']), len(result['host_requests']),
+        len(result['chip_decision']), len(result['device_errors']),
+        len(result['device_states']), len(result['card_events']),
+    )
+    return result
+
+
+def extract_diagnostic_context_from_content(
+    jrn_content: str,
+    jrn_filename: str,
+    start_time_str: str,
+    end_time_str: str
+) -> Dict:
+    """
+    FUNCTION: extract_diagnostic_context_from_content
+
+    DESCRIPTION:
+        In-memory version of extract_diagnostic_context.
+        Identical diagnostic extraction logic but reads from a string
+        (session memory) instead of a file path on disk. This is needed
+        because the temp extraction folder is deleted before the LLM
+        analysis endpoint runs.
+
+        See extract_diagnostic_context docstring for full category list.
+
+    PARAMETERS:
+        jrn_content    (str) : Raw text content of the JOURNAL .jrn file.
+        jrn_filename   (str) : Filename (for logging only).
+        start_time_str (str) : Transaction start "HH:MM:SS".
+        end_time_str   (str) : Transaction end   "HH:MM:SS".
+
+    RETURNS:
+        dict : All diagnostic fields. Empty-but-valid dict on any error.
+    """
+    empty: Dict = {
+        'protocol_steps': [], 'app_state_start': None, 'app_state_end': None,
+        'host_requests': [], 'host_replies': [], 'host_outcome': None,
+        'host_notes': [], 'trn_numbers': [], 'stan_values': [],
+        'response_codes': [], 'terminal_id': None, 'transaction_types': [],
+        'uuids': [], 'emv_events': [], 'chip_decision': [], 'tvr_tsi': None,
+        'cryptogram_info': [], 'device_errors': [], 'device_states': [],
+        'card_events': [], 'customer_actions': [],
+    }
+
+    if not jrn_content or not jrn_content.strip():
+        logger.warning("extract_diagnostic_context_from_content: empty content for %s", jrn_filename)
+        return empty
+
+    def _to_time(s: str) -> Optional[dtime]:
+        try:
+            p = s.strip().split(':')
+            return dtime(int(p[0]), int(p[1]), int(p[2]))
+        except Exception:
+            return None
+
+    t_start = _to_time(start_time_str)
+    t_end   = _to_time(end_time_str)
+    if t_start is None or t_end is None:
+        logger.warning(
+            "extract_diagnostic_context_from_content: invalid times %s/%s",
+            start_time_str, end_time_str
+        )
+        return empty
+
+    result = {k: ([] if isinstance(v, list) else v) for k, v in empty.items()}
+
+    re_line     = re.compile(r'^\s*(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(.*)')
+    re_errornr  = re.compile(r'ErrorNr:\s*(\d+)\s*\(Class:\s*(\S+)\s+Code:\s*(\S+)')
+    re_devstate = re.compile(r'State of .* device (\S+).*changed to:\s*(\S+(?:\s+\(\d+\))?)')
+    re_tdr      = re.compile(r'(TDR_\w+\(\w+\)|TA_EVENT\(\w+\))\s*[-\u2192>]+\s*(\w+)')
+    re_tdr_ret  = re.compile(r'(TDR_\w+|TA_EVENT)\s*\((\w+)\).*returned\s+(\w+)\s*\(\d+\)')
+    re_appstate = re.compile(r'Application state is:\s*(\w+\s*\(\d+\))')
+    re_uuid     = re.compile(r'TRANSACTION UUID:\s*<([^>]*)>')
+    re_ci       = re.compile(r'CI\s*=\s*([0-9A-Fa-f]{2})')
+    re_tvr      = re.compile(r'TVR\s*=\s*(\S+).*TSI\s*=\s*(\S+)')
+
+    CARD_IDS     = {'3205', '3245', '3973', '5135'}
+    EMV_IDS      = {'3951', '3952', '3953', '3954', '3214'}
+    CHIP_DEC_IDS = {'3960', '3961', '3275'}
+    CRYPT_IDS    = {'3955', '3956'}
+
+    last_app_before: Optional[str] = None
+    first_app_after: Optional[str] = None
+    pending_err:     bool           = False
+    pending_err_ts:  str            = ''
+
+    try:
+        for raw in jrn_content.splitlines():
+            line = raw.strip()
+            if not line:
+                pending_err = False
+                continue
+
+            if pending_err:
+                me = re_errornr.search(line)
+                if me:
+                    result['device_errors'].append(
+                        f"{pending_err_ts} ErrorNr:{me.group(1)} "
+                        f"Class:{me.group(2)} Code:{me.group(3)}"
+                    )
+                pending_err = False
+                continue
+
+            m = re_line.match(line)
+            if not m:
+                continue
+
+            ts_str, msg_id, rest = m.group(1), m.group(2), m.group(3)
+            ts = _to_time(ts_str)
+            if ts is None:
+                continue
+
+            in_window = (t_start <= ts <= t_end)
+
+            # App state (tracked outside window too)
+            if msg_id == '1015':
+                ma = re_appstate.search(rest)
+                if ma:
+                    sv = ma.group(1).strip()
+                    if ts < t_start:
+                        last_app_before = sv
+                    elif in_window and result['app_state_start'] is None:
+                        result['app_state_start'] = sv
+                    elif ts > t_end and first_app_after is None:
+                        first_app_after = sv
+
+            if not in_window:
+                continue
+
+            # Protocol steps
+            mt_ret = re_tdr_ret.search(rest)
+            if mt_ret:
+                step = f"{mt_ret.group(1)}({mt_ret.group(2)})\u2192{mt_ret.group(3)}"
+                if step not in result['protocol_steps']:
+                    result['protocol_steps'].append(step)
+            else:
+                for mt in re_tdr.finditer(rest):
+                    step = f"{mt.group(1)}\u2192{mt.group(2)}"
+                    if step not in result['protocol_steps']:
+                        result['protocol_steps'].append(step)
+
+            # Host request (6303)
+            if msg_id == '6303':
+                km = re.search(r'\(KEY:\s*([^,)]+)', rest)
+                tm = re.search(r'TRANSACTION REQUEST\s+(\S+)', rest)
+                result['host_requests'].append(
+                    f"{ts_str} REQUEST:{tm.group(1).strip() if tm else ''} "
+                    f"KEY:{km.group(1).strip() if km else ''}"
+                )
+
+            # Host reply (6304)
+            if msg_id == '6304':
+                _cleaned_rest = re.sub(r'\s+', ' ', rest).strip()
+                result['host_replies'].append(
+                    f"{ts_str} {_cleaned_rest}"
+                )
+
+            # Transaction UUID (6306)
+            if msg_id == '6306':
+                mu = re_uuid.search(rest)
+                if mu:
+                    result['uuids'].append(f"{ts_str} UUID:<{mu.group(1)}>")
+
+            # 41005 receipt decode
+            if msg_id == '41005' and '\\0a' in rest:
+                receipt = _decode_receipt_block(rest)
+                if receipt.get('transaction_type'):
+                    tt = receipt['transaction_type']
+                    if tt not in result['transaction_types']:
+                        result['transaction_types'].append(tt)
+                if receipt.get('trn_number'):
+                    tn = receipt['trn_number']
+                    if tn not in result['trn_numbers']:
+                        result['trn_numbers'].append(tn)
+                if receipt.get('stan') and receipt['stan'] != 'N/A':
+                    sv = receipt['stan']
+                    if sv not in result['stan_values']:
+                        result['stan_values'].append(sv)
+                if receipt.get('response_code') and receipt['response_code'] != 'N/A':
+                    rc = receipt['response_code']
+                    if rc not in result['response_codes']:
+                        result['response_codes'].append(rc)
+                if receipt.get('terminal_id') and result['terminal_id'] is None:
+                    result['terminal_id'] = receipt['terminal_id']
+                if receipt.get('host_outcome'):
+                    result['host_outcome'] = receipt['host_outcome']
+                for note in receipt.get('host_notes', []):
+                    if note not in result['host_notes']:
+                        result['host_notes'].append(note)
+
+            # EMV events (3951-3954, 3214)
+            if msg_id in EMV_IDS:
+                if msg_id == '3954':
+                    aid_m = re.search(r"AID\s+'([A-Fa-f0-9]+)'", rest)
+                    safe  = f"AID:{aid_m.group(1)}" if aid_m else _mask_line(rest)
+                else:
+                    safe = _mask_line(rest)
+                result['emv_events'].append(f"{ts_str} [{msg_id}] {safe}")
+
+            # Chip decision (3960, 3961, 3275)
+            if msg_id in CHIP_DEC_IDS:
+                result['chip_decision'].append(
+                    f"{ts_str} [{msg_id}] {re.sub(r'  +', ' ', rest).strip()}"
+                )
+
+            # TVR/TSI (3959)
+            if msg_id == '3959':
+                mt = re_tvr.search(rest)
+                if mt:
+                    result['tvr_tsi'] = f"TVR={mt.group(1)} TSI={mt.group(2)}"
+
+            # Cryptogram info (3955, 3956)
+            if msg_id in CRYPT_IDS:
+                mc   = re_ci.search(rest)
+                lbl  = 'FirstGenerateAC' if msg_id == '3955' else 'SecondGenerateAC'
+                result['cryptogram_info'].append(
+                    f"{lbl} CI={mc.group(1) if mc else 'unknown'}"
+                )
+
+            # Customer action (3259)
+            if msg_id == '3259':
+                result['customer_actions'].append(
+                    f"{ts_str} {re.sub(r'  +', ' ', rest).strip()}"
+                )
+
+            # Device state changes (5011)
+            if msg_id == '5011':
+                md = re_devstate.search(rest)
+                if md:
+                    result['device_states'].append(
+                        f"{ts_str} {md.group(1)} \u2192 {md.group(2)}"
+                    )
+
+            # ErrorNr
+            if 'ErrorNr:' in rest:
+                me = re_errornr.search(rest)
+                if me:
+                    result['device_errors'].append(
+                        f"{ts_str} ErrorNr:{me.group(1)} "
+                        f"Class:{me.group(2)} Code:{me.group(3)}"
+                    )
+                else:
+                    pending_err, pending_err_ts = True, ts_str
+            elif 'Error notified' in rest:
+                pending_err, pending_err_ts = True, ts_str
+
+            # Card events
+            if msg_id in CARD_IDS:
+                clean = _mask_line(re.sub(r'<\w+>', '', rest).strip())
+                result['card_events'].append(f"{ts_str} [{msg_id}] {clean}")
+
+    except Exception as exc:
+        logger.error("extract_diagnostic_context_from_content: error on %s: %s", jrn_filename, exc)
+        return result
+
+    if result['app_state_start'] is None and last_app_before:
+        result['app_state_start'] = last_app_before
+    if first_app_after:
+        result['app_state_end'] = first_app_after
+
+    logger.info(
+        "extract_diagnostic_context_from_content: %s [%s-%s] steps=%d host=%d chip=%d "
+        "errors=%d states=%d cards=%d",
+        jrn_filename, start_time_str, end_time_str,
         len(result['protocol_steps']), len(result['host_requests']),
         len(result['chip_decision']), len(result['device_errors']),
         len(result['device_states']), len(result['card_events']),

@@ -7,13 +7,114 @@ import ollama
 from pathlib import Path
 from datetime import datetime
 
+import re as _re
+
 from modules.processing import LogPreprocessorService, TransactionMergerService
-from modules.journal_parser import match_journal_file
+from modules.journal_parser import (
+    match_journal_file,
+    extract_diagnostic_context_from_content,
+    mask_ej_log,
+)
 from modules.analysis import store_metadata
 from modules.logging_config import logger
 
 MODEL_NAME       = "llama3_log_analyzer"
 MIN_PROMPT_CHARS = 150
+
+# ── EJ line codes / patterns already captured by the structured record ────
+# Lines matching these are redundant — they duplicate what _build_ej_record
+# and extract_diagnostic_context already put into the JSON record.
+_EJ_REDUNDANT_CODES = {
+    '3207', '3239', '3202',       # txn open/close (ts_start/ts_end/status)
+    '3201',                        # txn number line
+}
+_EJ_REDUNDANT_PATTERNS = _re.compile(
+    r"(?i)"
+    r"Transaction no\.|"            # txn number — in txn_number
+    r"pan\s+'|"                     # PAN — stripped for PII
+    r"Function\s+'[^']+'\s+sel|"   # function type — in type
+    r"Account selected|"            # account — stripped by _compact
+    r"Total Amount |"               # amount — stripped by _compact
+    r"Identified notes:|"           # notes — stripped by _compact
+    r"state\s+'[^']+',\s+end-|"   # end-state — in status
+    r"Pin entered|"                 # pin — not diagnostic
+    r"Card successfully pres|"     # card returned — in card_ejected / events
+    r"Customer cancels|"            # cancel — in events/status
+    r"Transaction cancelled|"       # cancel — in events/status
+    r"Customer timeout|"            # timeout — in events/status
+    r"Transaction timed out|"       # timeout — in events/status
+    r"\*{5,}"                       # star separators — noise
+)
+
+
+def _compact_ej_for_prompt(transaction_log: str, max_lines: int = 40) -> str:
+    """
+    FUNCTION: _compact_ej_for_prompt
+
+    DESCRIPTION:
+        Produces a compact, non-redundant version of the CUSTOMER EJ log
+        for inclusion in the LLM prompt. Strips:
+          - Lines whose event code is already captured in the structured record
+          - Lines matching patterns already extracted by preprocess_ej
+          - PII via mask_ej_log
+          - Blank / star-separator lines
+          - 41004/41005 raw hex protocol lines (already decoded by JRN context)
+
+        Keeps only lines that might carry diagnostic information the
+        structured parsers don't cover (unusual codes, operator messages,
+        free-text warnings, hardware status lines, etc.).
+
+    PARAMETERS:
+        transaction_log (str)  : Raw per-transaction EJ log text.
+        max_lines       (int)  : Hard cap on output lines (default 40).
+
+    RETURNS:
+        str : Compact, PII-masked EJ excerpt. Empty string if nothing unique.
+    """
+    if not transaction_log or not transaction_log.strip():
+        return ""
+
+    # First apply PII masking + 41004/41005 strip
+    masked = mask_ej_log(transaction_log)
+
+    kept = []
+    line_re = _re.compile(r'^\s*(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(.*)$')
+
+    for line in masked.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Drop star separators
+        if _re.match(r'^\s*\*{3,}\s*$', stripped):
+            continue
+
+        m = line_re.match(stripped)
+        if m:
+            code = m.group(2)
+            msg  = m.group(3)
+
+            # Drop lines with codes already in the structured record
+            if code in _EJ_REDUNDANT_CODES:
+                continue
+
+            # Drop lines whose message matches an already-parsed pattern
+            if _EJ_REDUNDANT_PATTERNS.search(msg):
+                continue
+
+        else:
+            # Non-timestamped line — drop if it matches a redundant pattern
+            if _EJ_REDUNDANT_PATTERNS.search(stripped):
+                continue
+
+        kept.append(stripped)
+
+    # Truncate to max_lines
+    if len(kept) > max_lines:
+        kept = kept[:max_lines]
+        kept.append(f"... [{len(kept)} of {len(masked.splitlines())} lines shown]")
+
+    return '\n'.join(kept)
 
 
 def _build_ej_record_from_txn_data(txn_data: dict, transaction_log: str) -> dict:
@@ -153,11 +254,85 @@ def _build_ej_record_from_txn_data(txn_data: dict, transaction_log: str) -> dict
     return {k: v for k, v in record.items() if v not in (None, [], "", False)}
 
 
+def _enrich_record_with_jrn_context(record: dict, jrn_context: dict) -> dict:
+    """
+    FUNCTION: _enrich_record_with_jrn_context
+
+    DESCRIPTION:
+        Merges diagnostic fields from extract_diagnostic_context_from_content()
+        into the EJ record. Only non-empty fields are added so the LLM prompt
+        stays compact. Fields already present in the record (from session-time
+        enrichment) are NOT overwritten — the JRN context fills gaps only.
+
+    PARAMETERS:
+        record      (dict) : EJ record from _build_ej_record_from_txn_data.
+        jrn_context (dict) : Output of extract_diagnostic_context_from_content.
+
+    RETURNS:
+        dict : Enriched record (mutated in place and returned for convenience).
+    """
+    # Map jrn_context keys → record keys (only fields the LLM prompt uses)
+    FIELD_MAP = {
+        'protocol_steps':   'protocol_steps',
+        'device_errors':    'device_errors',
+        'device_states':    'device_states',
+        'card_events':      'card_events',
+        'app_state_start':  'app_state_start',
+        'app_state_end':    'app_state_end',
+        'response_codes':   'response_code',
+        'host_requests':    'host_requests',
+        'host_replies':     'host_replies',
+        'host_outcome':     'host_outcome',
+        'host_notes':       'host_notes',
+        'emv_events':       'emv_events',
+        'chip_decision':    'chip_decision',
+        'tvr_tsi':          'tvr_tsi',
+        'cryptogram_info':  'cryptogram_info',
+        'customer_actions': 'customer_actions',
+        'uuids':            'uuids',
+        'trn_numbers':      'trn_numbers',
+        'stan_values':      'stan_values',
+        'terminal_id':      'terminal_id',
+        'transaction_types': 'transaction_types',
+    }
+
+    for src_key, dst_key in FIELD_MAP.items():
+        src_val = jrn_context.get(src_key)
+
+        # Skip empty values
+        if src_val is None or src_val == [] or src_val == '':
+            continue
+
+        existing = record.get(dst_key)
+
+        # For list fields: extend if existing is empty, or merge without duplicates
+        if isinstance(src_val, list):
+            if not existing or existing == []:
+                record[dst_key] = src_val
+            elif isinstance(existing, list):
+                existing_set = set(str(e) for e in existing)
+                for item in src_val:
+                    if str(item) not in existing_set:
+                        existing.append(item)
+        # For scalar fields: fill only if blank
+        elif isinstance(src_val, str):
+            # response_codes is a list in jrn_context but scalar in record
+            if dst_key == 'response_code' and isinstance(src_val, list):
+                if not existing and src_val:
+                    record[dst_key] = src_val[0]
+            elif not existing:
+                record[dst_key] = src_val
+
+    return record
+
+
 def analyze_transaction(
     transaction_id: str,
     transaction_log: str,
     txn_data: dict,
     ui_journal_files: list,
+    ui_journal_contents: dict = None,
+    customer_journal_contents: dict = None,
     employee_code: str = None,
 ) -> dict:
     """
@@ -175,12 +350,20 @@ def analyze_transaction(
         3201 open line. This was causing the wrong ts_start to be selected
         and an entirely different transaction being sent to the LLM.
 
+        Data flow to LLM (both CUSTOMER + JOURNAL):
+        1. Structured EJ record — built from txn_data (CUSTOMER folder data).
+        2. JRN diagnostic context — extracted from JOURNAL folder .jrn content
+           in session memory via extract_diagnostic_context_from_content().
+           Merged into the EJ record as enrichment fields.
+        3. Masked EJ raw log — the CUSTOMER folder transaction log, PII-stripped,
+           appended as additional context for the LLM to reference.
+
         JRN enrichment path:
         - Primary:  JRN fields already present in txn_data (merged during
                     analyze_customer_journals at session creation time) — used directly.
         - Fallback: If JRN enrichment columns are empty (EJ-only session),
-                    attempt to match and merge the JRN file now via preprocess_jrn
-                    + TransactionMergerService.
+                    attempt to match and merge the JRN file now via
+                    extract_diagnostic_context_from_content (reads from session memory).
 
         Also includes:
         - Input monitoring (char count, estimated tokens, fingerprint)
@@ -189,11 +372,13 @@ def analyze_transaction(
         - Metadata storage via store_metadata
 
     PARAMETERS:
-        transaction_id   (str)  : Unique transaction identifier (filenameHHMMSS format).
-        transaction_log  (str)  : Raw per-transaction log text from the DataFrame.
-        txn_data         (dict) : Transaction row dict from session DataFrame.
-        ui_journal_files (list) : JOURNAL/-level JRN file paths (VCP-PRO excluded).
-        employee_code    (str)  : Optional employee code for metadata storage.
+        transaction_id           (str)  : Unique transaction identifier (filenameHHMMSS format).
+        transaction_log          (str)  : Raw per-transaction log text from the DataFrame.
+        txn_data                 (dict) : Transaction row dict from session DataFrame.
+        ui_journal_files         (list) : JOURNAL/-level JRN filenames (VCP-PRO excluded).
+        ui_journal_contents      (dict) : Filename→content map for UI + JOURNAL folder JRN files.
+        customer_journal_contents(dict) : Filename→content map for CUSTOMER folder EJ files.
+        employee_code            (str)  : Optional employee code for metadata storage.
 
     RETURNS:
         dict : Structured response with summary, analysis, timestamp, metadata.
@@ -202,6 +387,11 @@ def analyze_transaction(
         ValueError  : If the record has insufficient data for the model.
         ImportError : If the ollama package is not installed.
     """
+
+    if ui_journal_contents is None:
+        ui_journal_contents = {}
+    if customer_journal_contents is None:
+        customer_journal_contents = {}
 
     _preprocessor = LogPreprocessorService()
     _merger        = TransactionMergerService()
@@ -226,66 +416,135 @@ def analyze_transaction(
             "Transaction record has insufficient diagnostic information to send to the model."
         )
 
-    # ── STEP 2: Determine JRN enrichment path ────────────────────────────
-    # Primary: JRN fields already present in txn_data from session creation.
+    # ── STEP 2: JRN enrichment from JOURNAL folder ───────────────────────
+    # Use extract_diagnostic_context_from_content to get structured diagnostic
+    # data from the JOURNAL folder .jrn file. This is ALWAYS attempted when
+    # we have a matching JRN file, regardless of whether txn_data already has
+    # JRN fields — the JOURNAL folder may contain richer data.
+
     jrn_already_enriched = bool(
         txn_data.get("JRN Protocol Steps") or
         txn_data.get("JRN Response Code") or
         txn_data.get("JRN Device Errors")
     )
 
-    merged_record = ej_record
+    jrn_context_enriched = False
+    source_stem = str(txn_data.get('Source File') or txn_data.get('Source_File') or '')
+    matched_jrn_file = match_journal_file(source_stem, ui_journal_files)
 
-    if jrn_already_enriched:
-        logger.info(
-            f"JRN fields already present in txn_data for {transaction_id} — "
-            f"skipping JRN file re-read"
-        )
-    else:
-        # Fallback: EJ-only session — attempt JRN file match + merge now.
-        logger.info(
-            f"No JRN enrichment in txn_data for {transaction_id} — "
-            f"attempting JRN file fallback"
-        )
-        source_stem      = str(txn_data.get('Source File') or txn_data.get('Source_File') or '')
-        matched_jrn_file = match_journal_file(source_stem, ui_journal_files)
+    if matched_jrn_file:
+        jrn_filename = Path(matched_jrn_file).name
+        raw_jrn = ui_journal_contents.get(jrn_filename, '')
 
-        if matched_jrn_file:
-            try:
-                raw_jrn = Path(matched_jrn_file).read_text(encoding='utf-8', errors='replace')
-                if raw_jrn.strip():
-                    jrn_records = _preprocessor.preprocess_jrn(raw_jrn)
-                    if jrn_records:
-                        logger.info(
-                            f"JRN fallback: {len(jrn_records)} record(s) from "
-                            f"{Path(matched_jrn_file).name}"
-                        )
-                        merged_list = _merger.merge([ej_record], jrn_records)
-                        if merged_list:
-                            merged_record = merged_list[0]
-                            logger.info(f"JRN fallback merge successful for {transaction_id}")
-                    else:
-                        logger.warning(
-                            f"JRN fallback: no records extracted from "
-                            f"{Path(matched_jrn_file).name}"
-                        )
-                else:
-                    logger.warning(f"JRN fallback file is empty: {Path(matched_jrn_file).name}")
-            except Exception as jrn_err:
-                logger.warning(f"JRN fallback failed: {jrn_err} — using EJ only")
+        if raw_jrn and raw_jrn.strip():
+            ts_start = ej_record.get('ts_start', '')
+            ts_end   = ej_record.get('ts_end', '')
+
+            if ts_start and ts_end:
+                logger.info(
+                    f"Extracting JOURNAL diagnostic context from {jrn_filename} "
+                    f"[{ts_start}-{ts_end}] for {transaction_id}"
+                )
+                jrn_context = extract_diagnostic_context_from_content(
+                    jrn_content=raw_jrn,
+                    jrn_filename=jrn_filename,
+                    start_time_str=ts_start,
+                    end_time_str=ts_end,
+                )
+
+                # Count non-empty fields for logging
+                ctx_fields = sum(
+                    1 for v in jrn_context.values()
+                    if v and v != [] and v != ''
+                )
+                logger.info(
+                    f"JOURNAL context extracted: {ctx_fields} non-empty fields "
+                    f"from {jrn_filename}"
+                )
+
+                if ctx_fields > 0:
+                    _enrich_record_with_jrn_context(ej_record, jrn_context)
+                    jrn_context_enriched = True
+                    logger.info(
+                        f"EJ record enriched with JOURNAL context for {transaction_id}"
+                    )
+            else:
+                logger.warning(
+                    f"Cannot extract JOURNAL context — missing ts_start/ts_end "
+                    f"for {transaction_id}"
+                )
         else:
             logger.warning(
-                f"JRN fallback: no matching file for source '{source_stem}' — EJ only"
+                f"JOURNAL file '{jrn_filename}' not found or empty in session contents "
+                f"(available keys: {list(ui_journal_contents.keys())[:10]})"
             )
+    else:
+        logger.warning(
+            f"No matching JOURNAL file for source '{source_stem}' in {ui_journal_files}"
+        )
 
-    jrn_data_available = jrn_already_enriched or (merged_record is not ej_record)
-    logger.info(f"JRN data available: {jrn_data_available}")
+    # Legacy fallback: preprocess_jrn for EJ-only sessions with no JOURNAL
+    # context extracted above.
+    merged_record = ej_record
+    if not jrn_already_enriched and not jrn_context_enriched and matched_jrn_file:
+        jrn_filename = Path(matched_jrn_file).name
+        raw_jrn = ui_journal_contents.get(jrn_filename, '')
+        if raw_jrn and raw_jrn.strip():
+            try:
+                jrn_records = _preprocessor.preprocess_jrn(raw_jrn)
+                if jrn_records:
+                    logger.info(
+                        f"JRN preprocess_jrn fallback: {len(jrn_records)} record(s) "
+                        f"from {jrn_filename}"
+                    )
+                    merged_list = _merger.merge([ej_record], jrn_records)
+                    if merged_list:
+                        merged_record = merged_list[0]
+                        logger.info(
+                            f"JRN preprocess_jrn fallback merge successful "
+                            f"for {transaction_id}"
+                        )
+                else:
+                    logger.warning(
+                        f"JRN preprocess_jrn fallback: no records from {jrn_filename}"
+                    )
+            except Exception as jrn_err:
+                logger.warning(f"JRN preprocess_jrn fallback failed: {jrn_err}")
+
+    jrn_data_available = jrn_already_enriched or jrn_context_enriched or (merged_record is not ej_record)
+    logger.info(
+        f"JRN data summary | already_enriched={jrn_already_enriched} | "
+        f"context_enriched={jrn_context_enriched} | "
+        f"preprocess_merged={merged_record is not ej_record} | "
+        f"jrn_data_available={jrn_data_available}"
+    )
 
     # ── STEP 3: Build prompt ──────────────────────────────────────────────
     user_content = _preprocessor.build_prompt(
         [merged_record],
         atm_id=str(txn_data.get('Terminal ID', ''))
     )
+
+    # ── STEP 3b: Append compact CUSTOMER journal EJ excerpt ─────────────
+    # Only lines that carry diagnostic value NOT already in the structured
+    # record are kept.  PII is masked, redundant patterns stripped, and
+    # output is capped at 40 lines to avoid prompt bloat.
+    if transaction_log and transaction_log.strip():
+        compact_ej = _compact_ej_for_prompt(transaction_log, max_lines=40)
+        if compact_ej.strip():
+            user_content += (
+                "\n\n--- CUSTOMER JOURNAL (EJ) SUPPLEMENTARY LINES ---\n"
+                f"{compact_ej}"
+            )
+            logger.info(
+                f"Appended compact CUSTOMER EJ excerpt ({len(compact_ej)} chars, "
+                f"from {len(transaction_log)} raw) to LLM prompt for {transaction_id}"
+            )
+        else:
+            logger.info(
+                f"No non-redundant EJ lines for {transaction_id} — "
+                f"structured record covers everything"
+            )
 
     if len(user_content.strip()) < MIN_PROMPT_CHARS:
         raise ValueError(
@@ -320,13 +579,14 @@ def analyze_transaction(
     debug_path.write_text(
         json.dumps(
             {
-                "transaction_id":       transaction_id,
-                "messages":             messages,
-                "jrn_available":        jrn_data_available,
-                "jrn_already_enriched": jrn_already_enriched,
-                "prompt_chars":         prompt_char_count,
-                "prompt_tokens_est":    prompt_token_est,
-                "prompt_fingerprint":   prompt_fingerprint,
+                "transaction_id":        transaction_id,
+                "messages":              messages,
+                "jrn_available":         jrn_data_available,
+                "jrn_already_enriched":  jrn_already_enriched,
+                "jrn_context_enriched":  jrn_context_enriched,
+                "prompt_chars":          prompt_char_count,
+                "prompt_tokens_est":     prompt_token_est,
+                "prompt_fingerprint":    prompt_fingerprint,
             },
             indent=2,
             ensure_ascii=False
@@ -348,15 +608,23 @@ def analyze_transaction(
     actual_prompt_tokens   = response.get("prompt_eval_count", "N/A")
     actual_response_tokens = response.get("eval_count", "N/A")
 
-    logger.info(
-        f"LLM TOKEN USAGE | "
-        f"txn_id={transaction_id} | "
-        f"prompt_tokens={actual_prompt_tokens} | "
-        f"response_tokens={actual_response_tokens} | "
-        f"total_tokens={actual_prompt_tokens + actual_response_tokens
-            if isinstance(actual_prompt_tokens, int) and isinstance(actual_response_tokens, int)
-            else 'N/A'}"
-    )
+    if isinstance(actual_prompt_tokens, int) and isinstance(actual_response_tokens, int):
+        total_tokens = actual_prompt_tokens + actual_response_tokens
+        logger.info(
+            f"LLM TOKEN USAGE | "
+            f"txn_id={transaction_id} | "
+            f"prompt_tokens={actual_prompt_tokens} | "
+            f"response_tokens={actual_response_tokens} | "
+            f"total_tokens={total_tokens}"
+        )
+    else:
+        logger.info(
+            f"LLM TOKEN USAGE | "
+            f"txn_id={transaction_id} | "
+            f"prompt_tokens={actual_prompt_tokens} | "
+            f"response_tokens={actual_response_tokens} | "
+            f"total_tokens=N/A"
+        )
 
     logger.info(
         f"LLM analysis complete | "
@@ -401,6 +669,7 @@ def analyze_transaction(
             "end_time":              str(txn_data.get('End Time', '')),
             "source_file":           str(txn_data.get('Source File', 'Unknown')),
             "jrn_data_available":    jrn_data_available,
+            "jrn_context_enriched":  jrn_context_enriched,
             "analysis_time_seconds": analysis_duration,
             "prompt_tokens":         actual_prompt_tokens,
             "response_tokens":       actual_response_tokens,

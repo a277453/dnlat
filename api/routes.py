@@ -720,7 +720,7 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
         )
 
 @router.post("/extract-registry-from-zip")
-async def extract_registry_from_zip(file: UploadFile = File(...)):
+async def extract_registry_from_zip(file: UploadFile = File(...), session_id: str = Query(default=None)):
     """
     FUNCTION:
         extract_registry_from_zip
@@ -1450,6 +1450,7 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
         file_categories = session_service.get_file_categories(session_id)
         journal_files = file_categories.get('customer_journals', [])
         journal_contents = session_service.get_session_data(session_id, 'customer_journal_contents') or {}
+        ui_journal_files = file_categories.get('ui_journals', [])
 
         if not journal_files:
             logger.error("No customer journal files found")
@@ -1485,7 +1486,6 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
                     logger.debug(f"No transactions found in {source_filename}")
                     continue
 
-                df = pd.DataFrame(result["transactions"])
                 logger.info(f"Found {len(df)} transactions in {source_filename}")
 
                 all_transactions_df.append(df)
@@ -3076,7 +3076,7 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
 
         logger.info(f" Found transaction log ({len(transaction_log)} characters)")
 
-        # ── Filter UI journals (JOURNAL/ top-level only, exclude VCP-PRO) ─
+        # ── Filter UI journal filenames (exclude VCP-PRO path) ────────────
         file_categories = session_data.get('file_categories', {})
         all_ui_journals = file_categories.get('ui_journals', [])
         llm_ui_journals = [
@@ -3084,12 +3084,39 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
             if 'vcp-pro' not in str(f).replace('\\', '/').lower()
         ]
 
+        # ── Collect JRN + CUSTOMER contents from session memory ───────────
+        # The temp extraction folder is already deleted by this point, so
+        # the LLM must read all file data from session memory.
+        ui_journal_contents       = session_data.get('ui_journal_contents', {})
+        journal_llm_contents      = session_data.get('journal_llm_contents', {})
+        all_jrn_contents          = {**ui_journal_contents, **journal_llm_contents}
+        customer_journal_contents = session_data.get('customer_journal_contents', {})
+
+        logger.info(
+            f"[LLM-DEBUG] all_ui_journals={all_ui_journals} | "
+            f"llm_ui_journals={llm_ui_journals} | "
+            f"ui_journal_contents keys={list(ui_journal_contents.keys())} | "
+            f"journal_llm_contents keys={list(journal_llm_contents.keys())} | "
+            f"customer_journal_contents keys={list(customer_journal_contents.keys())}"
+        )
+
+        source_file = str(txn_data.get('Source File', ''))
+        has_jrn_proto = bool(txn_data.get('JRN Protocol Steps'))
+        has_jrn_errors = bool(txn_data.get('JRN Device Errors'))
+        logger.info(
+            f"[LLM-DEBUG] txn Source File={source_file} | "
+            f"txn has JRN Protocol Steps={has_jrn_proto} | "
+            f"txn has JRN Device Errors={has_jrn_errors}"
+        )
+
         # ── Delegate full LLM pipeline to llm_service ─────────────────────
         return analyze_transaction(
             transaction_id=transaction_id,
             transaction_log=transaction_log,
             txn_data=txn_data,
             ui_journal_files=llm_ui_journals,
+            ui_journal_contents=all_jrn_contents,
+            customer_journal_contents=customer_journal_contents,
             employee_code=request.employee_code,
         )
 

@@ -3,6 +3,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Query, status, D
 from modules.extraction import ZipExtractionService
 from modules.categorization import CategorizationService
 from modules.processing import ProcessingService
+from modules.llm_service import analyze_transaction
 from modules.session import session_service
 from modules.transaction_analyzer import TransactionAnalyzerService
 from modules.schemas import (
@@ -23,6 +24,8 @@ import shutil
 from fastapi import Body
 import os
 import pandas as pd
+from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal
+from modules.journal_parser import match_journal_file, mask_ej_log
 from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal, parse_ui_journal_from_string
 from datetime import datetime
 from collections import defaultdict
@@ -1326,6 +1329,8 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
         Analyzes customer journal files from a processed ZIP session and extracts transaction data.
         Combines transactions from all customer journal files, calculates statistics per transaction type,
         and updates the session with extracted transaction data and source file details.
+        If UI journal files are present in the session, each transaction is enriched with
+        JRN fields (protocol steps, device errors, response code, STAN, retract counter, etc.).
 
     USAGE:
         result = await analyze_customer_journals(session_id="current_session")
@@ -1342,7 +1347,8 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
                 'total_transactions': int,        # Total transactions extracted
                 'statistics': list[dict],         # Transaction stats per type
                 'source_files': list[str],        # List of journal source filenames
-                'source_file_count': int          # Number of source files processed
+                'source_file_count': int,         # Number of source files processed
+                'jrn_enriched': int               # Transactions enriched with UI journal data (0 if no JRN files)
             }
 
     RAISES:
@@ -1377,10 +1383,11 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
             )
         
         logger.info(f" Found {len(journal_files)} customer journal file(s)")
-        
+        logger.info(f" Found {len(ui_journal_files)} UI journal file(s)")
+
         # Initialize analyzer
         analyzer = TransactionAnalyzerService()
-        
+
         all_transactions_df = []
         source_files = []
         source_file_map = {}
@@ -1401,28 +1408,28 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
                 if df is None or df.empty:
                     logger.debug(f"No transactions found in {source_filename}")
                     continue
-                
-                logger.info(f"Found {len(df)} transactions")
-                
+
+                df = pd.DataFrame(result["transactions"])
+                logger.info(f"Found {len(df)} transactions in {source_filename}")
+
                 all_transactions_df.append(df)
-                
+
                 if 'Transaction ID' in df.columns:
-                    file_transactions_ids = df['Transaction ID'].tolist()
-                    source_file_map[source_filename] = file_transactions_ids
-                
+                    source_file_map[source_filename] = df['Transaction ID'].tolist()
+
             except Exception as e:
                 logger.error(f"Error processing {journal_filename}: {str(e)}")
                 import traceback
                 traceback.print_exc()
                 continue
-        
+
         if not all_transactions_df:
             logger.error("No transactions extracted from customer journal files")
             raise HTTPException(
                 status_code=400,
                 detail="No transactions could be extracted from the customer journal files."
             )
-        
+
         combined_df = pd.concat(all_transactions_df, ignore_index=True)
 
         logger.info(f"\n BEFORE RENAME:")
@@ -1430,21 +1437,20 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
         logger.info(f"   Columns: {combined_df.columns.tolist()}")
         if 'Source_File' in combined_df.columns:
             logger.info(f"   Unique Source_File values: {combined_df['Source_File'].unique()}")
-        
+
         if 'Source_File' in combined_df.columns:
             combined_df = combined_df.rename(columns={'Source_File': 'Source File'})
-        
+
         logger.info(f"Total transactions extracted: {len(combined_df)}")
         logger.info(f"Total source files: {len(source_files)}")
-        
+
         if 'Source File' in combined_df.columns:
             unique_sources_in_data = combined_df['Source File'].unique().tolist()
             logger.debug(f"Source files in data: {unique_sources_in_data}")
             logger.debug(f"Source files list: {source_files}")
-        
+
         transaction_records = combined_df.to_dict('records')
 
-        # ADD THESE DEBUG LINES
         logger.info(f"\n CONVERTING TO RECORDS:")
         logger.info(f"   Total records: {len(transaction_records)}")
         if transaction_records:
@@ -1465,11 +1471,11 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
         # ── Statistics ────────────────────────────────────────────────────────
         stats = []
         for txn_type in combined_df['Transaction Type'].unique():
-            type_df = combined_df[combined_df['Transaction Type'] == txn_type]
-            successful = len(type_df[type_df['End State'] == 'Successful'])
+            type_df      = combined_df[combined_df['Transaction Type'] == txn_type]
+            successful   = len(type_df[type_df['End State'] == 'Successful'])
             unsuccessful = len(type_df[type_df['End State'] == 'Unsuccessful'])
-            total = len(type_df)
-            
+            total        = len(type_df)
+
             stats.append({
                 'Transaction Type': txn_type,
                 'Total':            total,
@@ -1477,17 +1483,23 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
                 'Unsuccessful':     unsuccessful,
                 'Success Rate':     f"{(successful / total * 100):.1f}%" if total > 0 else "0%"
             })
-        
-        logger.info("Customer journal analysis completed successfully")
-        
+
+        # Count how many transactions were enriched with JRN data
+        _jrn_cols    = [c for c in combined_df.columns if c.startswith("JRN ")]
+        jrn_enriched = int(combined_df[_jrn_cols].notna().any(axis=1).sum()) \
+        if _jrn_cols else 0
+
+        logger.info(f"Customer journal analysis completed. JRN enriched: {jrn_enriched}")
+
         return {
-            'message': 'Customer journals analyzed successfully',
-            'total_transactions': len(combined_df),
-            'statistics': stats,
-            'source_files': source_files,
-            'source_file_count': len(source_files)
+            'message':              'Customer journals analyzed successfully',
+            'total_transactions':   len(combined_df),
+            'statistics':           stats,
+            'source_files':         source_files,
+            'source_file_count':    len(source_files),
+            'jrn_enriched':         jrn_enriched,
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1919,16 +1931,8 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
                 def extract_flow_with_durations(txn_data, txn_source_file, txn_label):
                     flow_screens = ["No screens in time range"]
 
-                    # Try to find matching UI journal first
-                    matching_ui_journal = None
-                    for ui_journal in ui_journals:
-                        ui_journal_name = Path(ui_journal).stem
-                        if ui_journal_name == txn_source_file:
-                            matching_ui_journal = ui_journal
-                            logger.info(f" Found matching UI journal for {txn_label}: {ui_journal_name}")
-                            break
-
-                    # If no exact match, try all UI journals
+                    # Use journal_parser.match_journal_file for exact stem matching
+                    matching_ui_journal = match_journal_file(txn_source_file, ui_journals)
                     ui_journals_to_check = [matching_ui_journal] if matching_ui_journal else ui_journals
 
                     for ui_journal_filename in ui_journals_to_check:
@@ -2412,14 +2416,8 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                 txn_source_file = str(txn_data.get('Source File', ''))
                 logger.info(f" Transaction source file: {txn_source_file}")
 
-                matching_ui_journal = None
-                for ui_journal in ui_journals:
-                    ui_journal_name = Path(ui_journal).stem
-                    if ui_journal_name == txn_source_file:
-                        matching_ui_journal = ui_journal
-                        logger.info(f" Found matching UI journal: {ui_journal_name}")
-                        break
-
+                # Use journal_parser.match_journal_file for exact stem matching
+                matching_ui_journal = match_journal_file(txn_source_file, ui_journals)
                 ui_journals_to_check = [matching_ui_journal] if matching_ui_journal else ui_journals
 
                 for ui_journal_filename in ui_journals_to_check:
@@ -2922,92 +2920,59 @@ class TransactionAnalysisRequest(BaseModel):
 async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_id: str = Query(default=None)):
     """
     FUNCTION:
-        generate_consolidated_flow
+        analyze_transaction_llm
 
     DESCRIPTION:
-        Generates a consolidated UI flow visualization for **all transactions**
-        of a specific transaction type originating from a given source file.
-        The function processes transaction data, matches the correct UI journal,
-        extracts screen flows for each transaction, and returns aggregated
-        results including screens, transitions, and per-transaction flows.
+        Analyzes a single ATM transaction using the LLM. Validates the session
+        and transaction data, then delegates the full EJ/JRN pipeline, prompt
+        construction, Ollama call, and metadata storage to llm_service.analyze_transaction().
 
     USAGE:
-        result = generate_consolidated_flow(
-            source_file="ATM1",
-            transaction_type="Cash Withdrawal",
-            session_id="12345"
-        )
+        result = await analyze_transaction_llm(request, session_id="current_session")
 
     PARAMETERS:
-        source_file (str):
-            Name of the source UI journal file (without extension).
-            Used to match UI logs against transaction data.
-
-        transaction_type (str):
-            Transaction type to filter on (e.g., "Cash Withdrawal",
-            "Balance Inquiry", etc.).
-
-        session_id (str):
-            Session identifier used to retrieve processed ZIP data from
-            session storage. Defaults to the current session.
+        request (TransactionAnalysisRequest) :
+            Contains transaction_id and employee_code.
+        session_id (str) :
+            Session ID containing processed transaction data.
+            Defaults to CURRENT_SESSION_ID.
 
     RETURNS:
-        dict:
-            A dictionary containing the consolidated UI flow analysis:
-                {
-                    "source_file": str,
+        dict :
+            {
+                "summary": str,
+                "analysis": str,
+                "timestamp": str,
+                "metadata": {
+                    "transaction_id": str,
+                    "model": str,
+                    "log_length": int,
+                    "response_length": int,
+                    "analysis_type": str,
                     "transaction_type": str,
-                    "total_transactions": int,
-                    "transactions_with_flow": int,
-                    "successful_count": int,
-                    "unsuccessful_count": int,
-                    "screens": list[str],                     # unique screens
-                    "transitions": [
-                        {
-                            "from": str,
-                            "to": str,
-                            "count": int
-                        }
-                    ],
-                    "screen_transactions": {
-                        "ScreenName": [
-                            {
-                                "txn_id": str,
-                                "start_time": str,
-                                "state": str
-                            }
-                        ]
-                    },
-                    "transaction_flows": {
-                        "txn_id": {
-                            "screens": list[str],
-                            "start_time": str,
-                            "end_time": str,
-                            "state": str
-                        }
-                    }
+                    "transaction_state": str,
+                    "start_time": str,
+                    "end_time": str,
+                    "source_file": str,
+                    "jrn_data_available": bool,
+                    "analysis_time_seconds": float
                 }
+            }
 
     RAISES:
-        HTTPException 404:
-            - Session not found
-            - No matching transactions found
-            - No matching UI journal found
-
-        HTTPException 400:
-            - Missing or empty UI journal
-            - Missing transaction data in session
-
-        HTTPException 500:
-            - Unexpected errors during flow extraction or processing
+        HTTPException :
+            - 404 if session or transaction not found
+            - 400 if no transaction log available
+            - 422 if log could not be parsed or has insufficient data
+            - 500 if Ollama is not installed or LLM call fails
     """
     session_id = _resolve_session_id(session_id)
     try:
         transaction_id = request.transaction_id
         logger.info(f" Analyzing transaction with LLM: {transaction_id}")
         logger.debug(f"Request data: {request.dict()}")
-        
-        # Check session
+
+        # ── Session check ─────────────────────────────────────────────────
         if not session_service.session_exists(session_id):
             logger.error(f"No session found for session_id: {session_id}")
             raise HTTPException(status_code=404, detail="No session found")
@@ -3022,126 +2987,59 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
             raise HTTPException(status_code=400, detail="No transaction data available")
 
         df = pd.DataFrame(transaction_data)
-        
-        # Find the transaction
+
         if transaction_id not in df['Transaction ID'].values:
             logger.error(f"Transaction {transaction_id} not found in session {session_id}")
             raise HTTPException(status_code=404, detail=f"Transaction {transaction_id} not found")
 
         txn_data        = df[df['Transaction ID'] == transaction_id].iloc[0].to_dict()
         transaction_log = str(txn_data.get('Transaction Log', ''))
-        
         if not transaction_log:
             logger.error(f"No transaction log available for transaction {transaction_id}")
             raise HTTPException(status_code=400, detail="No transaction log available for this transaction")
 
         logger.info(f" Found transaction log ({len(transaction_log)} characters)")
 
-        # Call LLM for analysis
-        try:
-            import ollama
-            
-            messages = [
-                {
-                    "role": "system", 
-                    "content": "You are a log analysis expert specializing in ATM transaction diagnostics. Analyze the provided transaction log for anomalies, errors, and potential issues. Provide a clear, concise analysis in plain text format - do not use JSON in your response. Focus on: 1) What happened, 2) Why it might have happened, 3) Potential root causes."
-                },
-                {
-                    "role": "user", 
-                    "content": f"Analyze this ATM transaction log for anomalies and issues:\n\n{transaction_log}"
-                }
-            ]
-            
-            logger.info(" Calling Ollama model...")
-            analysis_start_time = time.perf_counter()
-            logger.debug(f"LLM messages payload: {messages}")
-            
-            response = ollama.chat(model="llama3_log_analyzer", messages=messages)\
-            
-            analysis_end_time = time.perf_counter()
-            analysis_duration = round(analysis_end_time - analysis_start_time, 3)
+        # ── Filter UI journals (JOURNAL/ top-level only, exclude VCP-PRO) ─
+        file_categories = session_data.get('file_categories', {})
+        all_ui_journals = file_categories.get('ui_journals', [])
+        llm_ui_journals = [
+            f for f in all_ui_journals
+            if 'vcp-pro' not in str(f).replace('\\', '/').lower()
+        ]
 
-            raw_response = response['message']['content'].strip()
-            #logger.info(f"Type of raw_response: {type(raw_response)}")
-            #logger.debug(raw_response)
-            logger.info(
-                f"Transaction LLM analysis completed | "
-                f"txn_id={transaction_id} | "
-                f"model=llama3_log_analyzer | "
-                f"analysis_time={analysis_duration}s"
-            )
+        # ── Delegate full LLM pipeline to llm_service ─────────────────────
+        return analyze_transaction(
+            transaction_id=transaction_id,
+            transaction_log=transaction_log,
+            txn_data=txn_data,
+            ui_journal_files=llm_ui_journals,
+            employee_code=request.employee_code,
+        )
 
-            logger.info(f" LLM analysis complete ({len(raw_response)} characters)")
-            
-            # Structure the response
-            structured_response = {
-                "summary": "Transaction log analysis completed",
-                "analysis": raw_response,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "metadata": {
-                    "transaction_id": transaction_id,
-                    "model": "llama3_log_analyzer",
-                    "log_length": len(transaction_log),
-                    "response_length": len(raw_response),
-                    "analysis_type": "anomaly_detection",
-                    "transaction_type": str(txn_data.get('Transaction Type', 'Unknown')),
-                    "transaction_state": str(txn_data.get('End State', 'Unknown')),
-                    "start_time": str(txn_data.get('Start Time', '')),
-                    "end_time": str(txn_data.get('End Time', '')),
-                    "source_file": str(txn_data.get('Source File', 'Unknown')),
-                    "analysis_time_seconds": analysis_duration,
-                    "llm_raw_response": raw_response  #  store raw response here
-                }
-            }
-            
-            logger.debug(f"Structured response prepared for transaction {transaction_id}")
-            # -------------------------------------------------------
-            # STORE OLLAMA METADATA INTO userresponse DB
-            # -------------------------------------------------------
-            store_metadata(
-                transaction_id        = transaction_id,
-                employee_code  = request.employee_code, 
-                model                 = "llama3_log_analyzer",
-                transaction_type      = str(txn_data.get('Transaction Type', 'Unknown')),
-                transaction_state     = str(txn_data.get('End State', 'Unknown')),
-                source_file           = str(txn_data.get('Source File', 'Unknown')),
-                start_time            = str(txn_data.get('Start Time', '')),
-                end_time              = str(txn_data.get('End Time', '')),
-                log_length            = len(transaction_log),
-                response_length       = len(raw_response),
-                analysis_time_seconds = analysis_duration,
-                llm_analysis          = raw_response
-            )
-            logger.info(f"Ollama metadata stored for txn: {transaction_id}")
-            # -------------------------------------------------------
-            return structured_response
-            
-        except ImportError:
-            logger.error("Ollama is not installed")
-            raise HTTPException(
-                status_code=500,
-                detail="Ollama is not installed. Please install it with: pip install ollama"
-            )
-        except Exception as e:
-            logger.exception(f"LLM analysis error for transaction {transaction_id}: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"LLM analysis failed: {str(e)}"
-            )
-        
     except HTTPException:
         raise
+    except ValueError as ve:
+        logger.error(f"Validation error for transaction {request.transaction_id}: {ve}")
+        raise HTTPException(status_code=422, detail=str(ve))
+    except ImportError:
+        logger.error("Ollama is not installed")
+        raise HTTPException(
+            status_code=500,
+            detail="Ollama is not installed. Please install it with: pip install ollama"
+        )
     except Exception as e:
-        logger.exception(f"Analysis failed for transaction {transaction_id}: {str(e)}")
+        logger.exception(f"Analysis failed for transaction {request.transaction_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Analysis failed: {str(e)}"
         )
-    
+
+
 # Add this Pydantic model near the top with other models
 class FeedbackSubmission(BaseModel):
     model_config = {'protected_namespaces': ()}
-    
+
     transaction_id: str
     rating: int
     alternative_cause: str

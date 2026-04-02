@@ -206,8 +206,10 @@ class CategorizationService:
             return 'unidentified'
 
         # === CUSTOMER JOURNALS ===
+        # Folder is named "CUSTOMER" (normalized to lowercase = "customer")
+        # Files inside are .ej (Electronic Journal) or .jrn
         has_customer_folder = any(
-            'customer' in parent and ('journal' in parent or parent == 'customer')
+            parent == 'customer' or 'customer' in parent
             for parent in all_parents
         )
 
@@ -216,10 +218,15 @@ class CategorizationService:
             return 'customer_journals'
 
         # === UI JOURNALS ===
-        has_ui_folder = any('ui' in parent and 'journal' in parent for parent in all_parents)
+        # Folder is named "JOURNAL" (normalized to lowercase = "journal")
+        # Files inside are .jrn
+        has_ui_folder = any(
+            parent == 'journal' or ('ui' in parent and 'journal' in parent)
+            for parent in all_parents
+        )
 
         if has_ui_folder and file_name_lower.endswith('.jrn'):
-            logger.debug("MATCH: Found in UI JOURNAL folder -> ui_journals")
+            logger.debug("MATCH: Found in JOURNAL folder -> ui_journals")
             return 'ui_journals'
 
         # === TRC TRACE FILES ===

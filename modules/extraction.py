@@ -41,6 +41,7 @@ class ZipExtractionService:
     BRANCH_REGISTRY = "REGISTRY"
     BRANCH_CUSTOMER = "CUSTOMER"
     BRANCH_UI       = "UI"
+    BRANCH_JOURNAL  = "JOURNAL"   # .jrn UI files from JOURNAL folder (not UI-path)
     BRANCH_EXTRA    = "EXTRA"
 
     def __init__(self):
@@ -150,9 +151,15 @@ class ZipExtractionService:
         # Must be a .jrn inside a path that has a 'ui'or 'journal' folder (e.g. VCP_PRO/JOURNALS/UI or JOURNAL)
         if ext == '.jrn':
             has_ui_folder = any('ui' in p for p in parents)
-            has_journal_folder = any(p.upper() == 'JOURNAL' for p in parents)
-            if has_ui_folder or has_journal_folder:
+            if has_ui_folder:
                 return self.BRANCH_UI
+
+        # --- JOURNAL-folder UI journals ---
+        # .jrn files whose path contains a folder named exactly 'JOURNAL' and kept separate so the UI-flow feature never sees them, regardless of whether their filenames duplicate UI files.
+        if ext == '.jrn':
+            has_journal_folder = any(p.upper() == 'JOURNAL' for p in parents)
+            if has_journal_folder:
+                return self.BRANCH_JOURNAL
 
         # --- CUSTOMER journals ---
         if ext == '.jrn':
@@ -364,7 +371,7 @@ class ZipExtractionService:
         branch_dirs: Dict[str, Path] = {}
         for branch in (
             self.BRANCH_ACU, self.BRANCH_TRC, self.BRANCH_REGISTRY,
-            self.BRANCH_CUSTOMER, self.BRANCH_UI, self.BRANCH_EXTRA,
+            self.BRANCH_CUSTOMER, self.BRANCH_UI, self.BRANCH_JOURNAL, self.BRANCH_EXTRA,
         ):
             branch_dir = dn_folder / branch
             branch_dir.mkdir(exist_ok=True)

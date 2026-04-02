@@ -14,12 +14,14 @@ from fastapi.logger import logger
 from modules.analysis import create_analysis_table, create_feedback_table, create_userresponse_database
 from modules.streamlit_logger import logger as frontend_logger
 import time
-from modules.login import create_reset_tokens_table, is_valid_password, is_same_as_old_password
-import re as _re; from datetime import datetime as _dt
+from modules.login import create_reset_tokens_table, register_user, is_valid_password, is_same_as_old_password
+import re as _re
+from datetime import datetime as _dt
+
 
 
 # Import authentication functions
-from admin_setup import create_dn_diagnostics_database, initialize_admin_table
+from admin_setup import create_dn_diagnostics_database, initialize_admin_table, validate_env
 from modules.login import (
     create_login_history_table,
     initialize_session,
@@ -29,6 +31,9 @@ from modules.login import (
 )
 # IMPORTANT 
 initialize_session()
+# def init_app():
+#     validate_env()
+#     create_dn_diagnostics_database()
 
 frontend_logger.info("Streamlit app loaded")
 
@@ -862,6 +867,110 @@ def render_themed_table(df, height=320):
 
 
 # ============================================
+# THEMED TABLE HELPER
+# ============================================
+def render_log_block(text, max_height=400):
+    """
+    Renders transaction log / pre-formatted text in a theme-aware scrollable box.
+    Replaces st.code() which always uses a dark canvas in light mode.
+    """
+    dark     = is_dark()
+    bg       = "#1e1e1e"   if dark else "#f6f8fa"
+    text_col = "#d4d4d4"   if dark else "#1e2a35"
+    border   = "#3a3a3a"   if dark else "#d1d9e0"
+    ln_col   = "#606060"   if dark else "#9ca3af"
+    scroll_thumb = "#505050" if dark else "#b0bec5"
+    scroll_track = "#1e1e1e" if dark else "#f0f2f6"
+
+    lines = str(text).splitlines()
+    rows  = "".join(
+        f"<tr>"
+        f"<td style='padding:1px 12px 1px 8px; color:{ln_col}; text-align:right; "
+        f"user-select:none; font-size:12px; white-space:nowrap; min-width:36px;'>{i+1}</td>"
+        f"<td style='padding:1px 8px; color:{text_col}; font-size:13px; white-space:pre;'>{line}</td>"
+        f"</tr>"
+        for i, line in enumerate(lines)
+    )
+
+    st.markdown(
+        f"<div style='background:{bg}; border:1px solid {border}; border-radius:8px; "
+        f"max-height:{max_height}px; overflow:auto; "
+        f"scrollbar-width:thin; scrollbar-color:{scroll_thumb} {scroll_track};'>"
+        f"<table style='border-collapse:collapse; width:100%; "
+        f"font-family:\"Courier New\",Consolas,monospace;'>"
+        f"<tbody>{rows}</tbody></table></div>",
+        unsafe_allow_html=True
+    )
+
+
+def render_themed_table(df, height=320):
+    """
+    Renders a pandas DataFrame as a fully theme-aware HTML table.
+    Uses the same colour tokens as inject_theme_css() so dark/light
+    mode is always consistent.  Replaces st.dataframe() which draws
+    on an HTML <canvas> and therefore ignores all CSS overrides.
+    Default height=320px shows ~8 rows; anything beyond scrolls.
+    Pass height=None to show all rows without a scrollbar.
+    """
+    dark = is_dark()
+
+    # ── colour tokens (mirrors inject_theme_css) ──────────────────
+    bg_header    = "#1a1a1a" if dark else "#f0f2f6"
+    bg_row       = "#0f0f0f" if dark else "#ffffff"
+    bg_row_alt   = "#141414" if dark else "#f8fafc"
+    bg_hover     = "#1f1f1f" if dark else "#f0f4f8"
+    text_header  = "#ffffff" if dark else "#0d1117"
+    text_cell    = "#e0e0e0" if dark else "#1e2a35"
+    border_inner = "#2a2a2a" if dark else "#d1d9e0"
+    border_outer = "#2a2a2a" if dark else "#b0bec5"
+    header_sep   = "#404040" if dark else "#b0bec5"
+    scrollbar_thumb = "#404040" if dark else "#b0bec5"
+    scrollbar_track = "#1a1a1a" if dark else "#f0f2f6"
+
+    # Sticky header + scrollable body
+    body_scroll = f"max-height:{height}px; overflow-y:auto;" if height else ""
+
+    # Build header row (sticky so it stays visible while scrolling)
+    headers_html = "".join(
+        f"<th style='padding:10px 14px; text-align:left; font-weight:600; "
+        f"font-size:0.78rem; color:{text_header}; background:{bg_header}; "
+        f"border-bottom:2px solid {header_sep}; white-space:nowrap; "
+        f"letter-spacing:0.3px; position:sticky; top:0; z-index:1;'>{col}</th>"
+        for col in df.columns
+    )
+
+    # Build body rows
+    rows_html = ""
+    for i, (_, row) in enumerate(df.iterrows()):
+        row_bg = bg_row if i % 2 == 0 else bg_row_alt
+        cells = "".join(
+            f"<td style='padding:10px 14px; color:{text_cell}; "
+            f"border-bottom:1px solid {border_inner}; font-size:0.875rem; "
+            f"white-space:nowrap;'>{val}</td>"
+            for val in row
+        )
+        rows_html += (
+            f"<tr style='background:{row_bg};' "
+            f"onmouseover=\"this.style.background='{bg_hover}'\" "
+            f"onmouseout=\"this.style.background='{row_bg}'\">"
+            f"{cells}</tr>"
+        )
+
+    html = (
+        f"<div style='border:1px solid {border_outer}; border-radius:8px; "
+        f"overflow:hidden; width:100%;'>"
+        f"<div style='{body_scroll} overflow-x:auto; "
+        f"scrollbar-width:thin; scrollbar-color:{scrollbar_thumb} {scrollbar_track};'>"
+        f"<table style='width:100%; border-collapse:collapse; "
+        f"font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;'>"
+        f"<thead><tr>{headers_html}</tr></thead>"
+        f"<tbody>{rows_html}</tbody>"
+        f"</table></div></div>"
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
+# ============================================
 # LOGIN PAGE UI
 # ============================================
 
@@ -907,7 +1016,9 @@ def show_login_page():
                 placeholder="Enter your password",
                 key="login_password"
             )
-            submit = st.form_submit_button("Login", use_container_width=True)
+            # Button label reflects dev mode state
+            btn_label = "Enter Dev Mode" if st.session_state.get("dev_mode", False) else "Login"
+            submit = st.form_submit_button(btn_label, use_container_width=True)
 
         # Handle login
         if submit:
@@ -1214,7 +1325,7 @@ def show_forgot_password_page():
                     )
                     _base_url = f"{_proto}://{_host}"
                 except Exception:
-                    _base_url = "http://localhost:8501"
+                    _base_url = "http://backend:8501"
 
                 # ── POST /forgot-password ──────────────────────────
                 # API handles: identity check + token + email in one call.
@@ -2393,7 +2504,7 @@ RAISES:
     Exception                           : For any unexpected errors during execution
 """
 
-    st.markdown("####  Registry File Viewer")
+    st.markdown("#### Registry File Viewer")
 
     # Get registry contents from session via API
     try:
@@ -2407,7 +2518,7 @@ RAISES:
             st.error(" Access Denied — your role does not have permission to use this feature.")
             return None
         if response.status_code != 200:
-            st.error("  Failed to load registry files from session")
+            st.error("Failed to load registry files from session")
             logger.error(f"API call failed with status: {response.status_code}")
             return
             
@@ -2415,7 +2526,7 @@ RAISES:
         registry_contents = registry_data.get('registry_contents', {})
         
         if not registry_contents:
-            st.warning("  No registry files found in the uploaded package.")
+            st.warning("No registry files found in the uploaded package.")
             return
 
         # Create file selection dropdown
@@ -2522,18 +2633,18 @@ def render_registry_compare():
             st.error(" Access Denied — your role does not have permission to use this feature.")
             return None
         if response.status_code != 200:
-            st.error("  Failed to load registry files from first package")
+            st.error("Failed to load registry files from first package")
             return
             
         registry_data = response.json()
         registry_contents_a = registry_data.get('registry_contents', {})
         
         if not registry_contents_a:
-            st.warning("  No registry files found in the first uploaded package.")
+            st.warning("No registry files found in the first uploaded package.")
             return
         
         st.markdown("#### Step 1: First Package (Already Loaded)")
-        st.success(f"  Loaded {len(registry_contents_a)} registry file(s) from main package")
+        st.success(f"Loaded {len(registry_contents_a)} registry file(s) from main package")
         
         # Show available files from first package
         with st.expander("View files in first package"):
@@ -4375,7 +4486,7 @@ def render_consolidated_flow():
                         st.error(f"  {error_detail}")
                         
                 except requests.exceptions.Timeout:
-                    st.error("⏱  Request timeout. Please try again.")
+                    st.error("Request timeout. Please try again.")
                 except requests.exceptions.ConnectionError:
                     st.error("  Connection error. Ensure the API server is running.")
                 except Exception as e:
@@ -5176,12 +5287,12 @@ RAISES:
         source_transactions = txn_df[txn_df['Source File'] == selected_source]
         
         if len(source_transactions) == 0:
-            st.warning(f"  No transactions found in source '{selected_source}'")
+            st.warning(f"No transactions found in source '{selected_source}'")
             return
         
         # Transaction selection
         st.markdown("---")
-        st.markdown("####   Select Transaction")
+        st.markdown("#### Select Transaction")
 
         # Filter to only transactions from this specific source file
         source_only_transactions = txn_df[txn_df['Source File'] == selected_source].copy()
@@ -5320,7 +5431,7 @@ RAISES:
                     
                     st.markdown("---")
                     
-                    st.markdown("####   Counter per Transaction")
+                    st.markdown("#### Counter per Transaction")
 
                     if 'counter_per_transaction' in counter_data and counter_data['counter_per_transaction']:
                         txn_table_data = []

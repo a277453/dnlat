@@ -1339,6 +1339,13 @@ def initialize_session():
     if "dev_mode" not in st.session_state:
         st.session_state.dev_mode = False
 
+    # ── Developer mode bypass ──────────────────────────────────────
+    # When True, any username/password combination grants access.
+    # This flag is toggled from the login page UI and should NEVER
+    # be enabled in a production deployment.
+    if "dev_mode" not in st.session_state:
+        st.session_state.dev_mode = False
+
 
 def is_logged_in() -> bool:
     """

@@ -300,36 +300,36 @@ def set_processed_files_dir(directory: str):
 def get_processed_files_dir() -> str:
     return PROCESSED_FILES_DIR
 
-def organize_files_into_subdirectories(extract_path: Path, file_categories: Dict[str, List[str]]) -> Dict[str, List[str]]:
-    """
-    Physically move categorized files into subdirectories
-    Returns updated file paths
-    """
-    organized_categories = {}
+# def organize_files_into_subdirectories(extract_path: Path, file_categories: Dict[str, List[str]]) -> Dict[str, List[str]]:
+#     """
+#     Physically move categorized files into subdirectories
+#     Returns updated file paths
+#     """
+#     organized_categories = {}
     
-    for category, files in file_categories.items():
-        # Create category subdirectory
-        category_dir = extract_path / category
-        category_dir.mkdir(exist_ok=True)
+#     for category, files in file_categories.items():
+#         # Create category subdirectory
+#         category_dir = extract_path / category
+#         category_dir.mkdir(exist_ok=True)
         
-        organized_files = []
+#         organized_files = []
         
-        for file_path_str in files:
-            source = Path(file_path_str)
-            if source.exists() and source.is_file():
-                # Move to category subdirectory
-                dest = category_dir / source.name
-                try:
-                    shutil.copy2(source, dest)
-                    organized_files.append(str(dest))
-                    logger.info(f"   Moved {source.name} to {category}/")
-                except Exception as e:
-                    logger.info(f"  Failed to move {source.name}: {e}")
-                    continue
+#         for file_path_str in files:
+#             source = Path(file_path_str)
+#             if source.exists() and source.is_file():
+#                 # Move to category subdirectory
+#                 dest = category_dir / source.name
+#                 try:
+#                     shutil.copy2(source, dest)
+#                     organized_files.append(str(dest))
+#                     logger.info(f"   Moved {source.name} to {category}/")
+#                 except Exception as e:
+#                     logger.info(f"  Failed to move {source.name}: {e}")
+#                     continue
         
-        organized_categories[category] = organized_files
+#         organized_categories[category] = organized_files
     
-    return organized_categories
+#     return organized_categories
 
 
 @router.post("/process-zip", response_model=FileCategorizationResponse)

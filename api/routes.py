@@ -1,4 +1,5 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from uuid import uuid4
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, status, Depends
 from modules.extraction import ZipExtractionService
 from modules.categorization import CategorizationService
 from modules.processing import ProcessingService
@@ -8,7 +9,7 @@ from modules.schemas import (
     FileCategorizationResponse,
     AvailableFileTypesResponse,
     FileTypeSelectionRequest,
-    CategoryCount, # Import FileCategorizationResponse explicitly
+    CategoryCount, 
     TransactionVisualizationRequest
 	
 )
@@ -22,7 +23,7 @@ import shutil
 from fastapi import Body
 import os
 import pandas as pd
-from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal
+from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal, parse_ui_journal_from_string
 from datetime import datetime
 from collections import defaultdict
 import re
@@ -201,7 +202,26 @@ async def debug_zip_members(file: UploadFile = File(...)):
         }
 
 # Simple session ID for now (use UUID in production)
-CURRENT_SESSION_ID = "current_session"
+global CURRENT_SESSION_ID
+CURRENT_SESSION_ID =str(uuid4())
+
+# ── Session-ID resolver ───────────────────────────────────────
+# so that session is not passed as a string like it previously was.
+_SESSION_SENTINELS = {"current_session", "CURRENT_SESSION_ID", "", None}
+
+def _resolve_session_id(session_id) -> str:
+    """
+    Resolve a client-supplied session_id to the real UUID.
+
+    Accepts:
+        - None / empty string  → returns CURRENT_SESSION_ID
+        - "current_session"    → returns CURRENT_SESSION_ID  (frontend sentinel)
+        - any other string     → returned as-is
+    """
+    if session_id in _SESSION_SENTINELS:
+        return CURRENT_SESSION_ID
+    return session_id
+# ──────────────────────────────────────────────────────────────────────────────
 
 # Global variable to track processed files directory (for registry endpoints)
 PROCESSED_FILES_DIR = None
@@ -212,36 +232,9 @@ def set_processed_files_dir(directory: str):
     PROCESSED_FILES_DIR = directory
     logger.info(f"Processed files directory set to: {directory}")  
 
-def organize_files_into_subdirectories(extract_path: Path, file_categories: Dict[str, List[str]]) -> Dict[str, List[str]]:
-    """
-    Physically move categorized files into subdirectories
-    Returns updated file paths
-    """
-    organized_categories = {}
-    
-    for category, files in file_categories.items():
-        # Create category subdirectory
-        category_dir = extract_path / category
-        category_dir.mkdir(exist_ok=True)
-        
-        organized_files = []
-        
-        for file_path_str in files:
-            source = Path(file_path_str)
-            if source.exists() and source.is_file():
-                # Move to category subdirectory
-                dest = category_dir / source.name
-                try:
-                    shutil.copy2(source, dest)
-                    organized_files.append(str(dest))
-                    logger.info(f"   Moved {source.name} to {category}/")
-                except Exception as e:
-                    logger.info(f"  Failed to move {source.name}: {e}")
-                    continue
-        
-        organized_categories[category] = organized_files
-    
-    return organized_categories
+def get_processed_files_dir() -> str:
+    return PROCESSED_FILES_DIR
+
 
 @router.post("/process-zip", response_model=FileCategorizationResponse)
 async def process_zip_file(file: UploadFile = File(..., description="ZIP file to process"),mode: Optional[str] = Query(None, description="Processing mode (e.g., 'registry' to optimize for registry files)")):
@@ -293,29 +286,29 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         start_time = time.perf_counter()
         # -----------------------------------------------------------
 
+        ZipExtractionService().cleanup_old_extracts(max_age_hours=0.5)
+
         # ------------------ FILE READ TIMER ------------------
         t_file_start = time.perf_counter()
-        logger.debug(" Reading uploaded file ")
+        logger.debug("Reading uploaded file ")
 
         zip_content = await file.read()  # read only once
         t_file_end = time.perf_counter()
         logger.info(f" File read completed. Size: {len(zip_content)} bytes")
-        with zipfile.ZipFile(io.BytesIO(zip_content)) as zf:
-            total_files_in_zip = len([f for f in zf.namelist() if not f.endswith('/')])
-        logger.info(f"Total files in original ZIP (memory count): {total_files_in_zip}")
 
         logger.debug(f"FILE READ TIME: {t_file_end - t_file_start:.4f} s")
 
         # ------------------ ZIP EXTRACTION TIMER ------------------
-        logger.info("  Extracting ZIP ...")
+        logger.info("Extracting ZIP ...")
         t_zip_start = time.perf_counter()
 
         try:
             extraction_service = ZipExtractionService()
-            extract_path = extraction_service.extract_zip(zip_content)
+            extract_path, total_files_in_zip, acu_zip_bytes = extraction_service.extract_zip(zip_content)
             all_files_on_disk = [p for p in Path(extract_path).rglob('*') if p.is_file()]
             total_files_on_disk = len(all_files_on_disk)
-            logger.info(f"Total files in extracted directory (including nested ZIPs if extracted later): {total_files_on_disk}")
+            logger.info(f"Total files in original ZIP: {total_files_in_zip}")
+            logger.info(f"Total files in extracted directory: {total_files_on_disk}")
         except TypeError as te:
             logger.error(f"TypeError calling extract_zip: {te}")
             raise
@@ -328,29 +321,12 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         logger.debug(f"Extracted directory: {extract_path}")
 
         # ------------------ NESTED ZIP EXTRACTION ------------------
-        logger.info(" STEP 3: Checking for nested ZIP files.")
+		# now this works directly from the ZipExtractionService.extract_zip(). function so that all the files are stored in their respective folder in Temp -> dn_extracts
+        logger.info("STEP 3: Nested ZIP files from ZipExtractionService.")
         t_nested_zip_start = time.perf_counter()
 
         nested_zip_files = [p for p in Path(extract_path).rglob('*.zip')]
-        logger.info(f"Found nested ZIPs: {len(nested_zip_files)}")
-
-
-        for nested_zip_path in nested_zip_files:
-                logger.info(f" Handling nested ZIP: {nested_zip_path.relative_to(extract_path)}")
-            
-                try:
-                    with open(nested_zip_path, 'rb') as f:
-                        nested_content = f.read()
-                    # Extract nested zip into a directory with the same name
-                    
-                    nested_extract_path = extraction_service.extract_zip(nested_content)
-                    all_files_after_nested = [p for p in Path(extract_path).rglob('*') if p.is_file()]
-                    logger.info(f"   Nested ZIP extracted to {nested_extract_path}")
-                    logger.info(f"Grand total files after nested ZIP extraction: {len(all_files_after_nested)}")
-                except Exception as e:
-                    logger.error(f"  Failed to extract nested ZIP {nested_zip_path.name}: {e}", exc_info=True)
-                    
-                
+        logger.info(f"Nested ZIPs present in EXTRA branch (kept for reference): {len(nested_zip_files)}")
         t_nested_zip_end = time.perf_counter()
         logger.info(f"NESTED ZIP EXTRACTION TIME: {t_nested_zip_end - t_nested_zip_start:.4f} s")
 
@@ -360,9 +336,15 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         acu_logs = []
         t_cat_start = time.perf_counter()
         
-        #  Extract ACU files from memory first to get their names
+        #  Extract ACU files directly from the already-decompressed acu.zip bytes that
+        #  extract_zip() captured and returned. This avoids re-opening the main ZIP and
+        #  re-decompressing acu.zip a second time.
         try:
-            acu_files = extract_from_zip_bytes(zip_content, acu_logs, target_prefixes=('jdd', 'x3'))
+            if acu_zip_bytes:
+                acu_files = extract_from_zip_bytes(acu_zip_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
+            else:
+                logger.info(" No acu.zip found in uploaded package — skipping ACU extraction.")
+                acu_files = {}
             xml_count = sum(1 for k in acu_files if not k.startswith('__xsd__'))
             xsd_count = sum(1 for k in acu_files if k.startswith('__xsd__'))
             logger.info(f" ACU extraction: {xml_count} XML, {xsd_count} XSD files")
@@ -376,48 +358,151 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
             acu_filenames_to_exclude = set()
             acu_logs.append(f"Error: {str(e)}")
         
-        # Step 2: Categorize files from the extracted directory, excluding ACU files
-        # Initialize the categories dictionary here
+        # Step 2: Categorize files from the extracted directory.
+        # Values are full disk paths at this stage — used only during the loading
+        # phase below, then replaced by filename-only lists before session storage.
         file_categories = {
             'customer_journals': [], 'ui_journals': [], 'trc_trace': [],
             'trc_error': [], 'registry_files': [], 'acu_files': [], 'unidentified': []
         }
         
         # Step 3: Add the correctly identified ACU files to the categories FIRST
-        if acu_files:
-            file_categories['acu_files'] = list(acu_files.keys())
-            logger.info(f" Added {len(acu_files)} ACU files to final categories.")
+        # if acu_files:
+        #     file_categories['acu_files'] = list(acu_files.keys())
+        #     logger.info(f" Added {len(acu_files)} ACU files to final categories.")
         
         # Step 4: Run on-disk categorization, which will populate the SAME dictionary
         logger.info("Running on-disk categorization ...")
         categorization_service = CategorizationService()
-        categorization_service.categorize_files(extract_path, file_categories, acu_filenames_to_exclude, mode=mode)
-        
+        categorization_service.categorize_files(extract_path, file_categories, set(), mode=mode)
+        logger.info(f" ACU files from disk (ACU/ branch): {len(file_categories['acu_files'])}")
+
         t_cat_end = time.perf_counter()
         logger.debug(f"CATEGORIZATION + ACU EXTRACTION TIME: {t_cat_end - t_cat_start:.4f} s")
 
-        #--------------------------------------------
-        registry_contents = {}
-        for reg_file in file_categories.get('registry_files', []):
-            try:
-                if Path(reg_file).exists():
-                    with open(reg_file, 'rb') as f:
-                        registry_contents[Path(reg_file).name] = f.read()
-                        logger.info(f" Loaded registry file into memory: {Path(reg_file).name}")
-            except Exception as e:
-                logger.error(f"Failed to read registry file {reg_file}: {e}")
-                #---------------------------------------------------------------
-        
-        # ------------------ SESSION CREATION TIMER ------------------
-        logger.info("Creating/updating session")
+        # ------------------ IN-MEMORY FILE LOAD ------------------
+        # Read every relevant branch's file contents from Temp into session memory.
+        # After this block succeeds the run folder is deleted.
+        #
+        # Branches loaded: REGISTRY, CUSTOMER, UI, TRC (ACU already in acu_files).
+        # EXTRA branch: no content is read — each file is registered as an empty dict
+        # TO-DO in case of any future feature require.
+
         t_sess_start = time.perf_counter()
-        set_processed_files_dir(str(extract_path))
-        session_service.create_session(CURRENT_SESSION_ID, file_categories, extract_path)
-        session_service.update_session(CURRENT_SESSION_ID, 'acu_extracted_files', acu_files)
-        session_service.update_session(CURRENT_SESSION_ID, 'acu_extraction_logs', acu_logs)
-        session_service.update_session(CURRENT_SESSION_ID, 'registry_contents', registry_contents)
+
+        def _read_text(p: Path) -> str:
+            """Read a file trying common encodings, falling back to latin1."""
+            for enc in ('utf-8', 'latin1', 'windows-1252', 'utf-16'):
+                try:
+                    return p.read_text(encoding=enc, errors='strict')
+                except Exception:
+                    continue
+            return p.read_text(encoding='latin1', errors='replace')
+
+        # --- REGISTRY ---
+        # Base64-encode bytes before storing so the session remains JSON-serialisable.
+        import base64 as _b64
+        registry_contents: dict = {}
+        for path_str in file_categories.get('registry_files', []):
+            p = Path(path_str)
+            try:
+                registry_contents[p.name] = _b64.b64encode(p.read_bytes()).decode('utf-8')
+                logger.debug(f"[REGISTRY] Mapped and base64-encoded content for: {p.name}")
+            except Exception as e:
+                logger.error(f"[REGISTRY] failed to load {p.name}: {e}")
+
+        # --- CUSTOMER JOURNALS ---
+        customer_journal_contents: dict = {}
+        for path_str in file_categories.get('customer_journals', []):
+            p = Path(path_str)
+            try:
+                customer_journal_contents[p.name] = _read_text(p)
+                logger.debug(f"[CUSTOMER] Mapped content to filename: {p.name}")
+            except Exception as e:
+                logger.error(f"[CUSTOMER] failed to load {p.name}: {e}")
+
+        # --- UI JOURNALS ---
+        ui_journal_contents: dict = {}
+        for path_str in file_categories.get('ui_journals', []):
+            p = Path(path_str)
+            try:
+                ui_journal_contents[p.name] = _read_text(p)
+                logger.debug(f"[UI] Mapped content to filename: {p.name}")
+            except Exception as e:
+                logger.error(f"[UI] failed to load {p.name}: {e}")
+
+        # --- TRC TRACE ---
+        trc_trace_contents: dict = {}
+        for path_str in file_categories.get('trc_trace', []):
+            p = Path(path_str)
+            try:
+                trc_trace_contents[p.name] = _read_text(p)
+                logger.debug(f"[TRC_TRACE] Mapped content to filename: {p.name}")
+            except Exception as e:
+                logger.error(f"[TRC_TRACE] failed to load {p.name}: {e}")
+
+        # --- TRC ERROR ---
+        trc_error_contents: dict = {}
+        for path_str in file_categories.get('trc_error', []):
+            p = Path(path_str)
+            try:
+                trc_error_contents[p.name] = _read_text(p)
+                logger.debug(f"[TRC_ERROR] Mapped content to filename {p.name}")
+            except Exception as e:
+                logger.error(f"[TRC_ERROR] failed to load {p.name}: {e}")
+
+        # --- EXTRA ---
+        # No content is read. Each file in the EXTRA branch is registered as an empty dict placeholder keyed by filename. 
+        extra_contents: dict = {}
+        for path_str in file_categories.get('unidentified', []):
+            p = Path(path_str)
+            extra_contents[p.name] = {}
+            logger.debug(f"[EXTRA] File loaded into empty object: {p.name}")
+
+        logger.info(
+            f"In-memory load complete:"
+            f"registry:{len(registry_contents)} "
+            f"customer:{len(customer_journal_contents)} "
+            f"ui:{len(ui_journal_contents)} "
+            f"trc_trace:{len(trc_trace_contents)} "
+            f"trc_error:{len(trc_error_contents)} "
+            f"extra:{len(extra_contents)}"
+        )
+
+        # Convert file_categories from full disk paths to filenames only.
+        for branch in ('customer_journals', 'ui_journals', 'trc_trace', 'trc_error',
+                        'registry_files', 'acu_files', 'unidentified'):
+            file_categories[branch] = [Path(p).name for p in file_categories[branch]]
+
+        
+        # ------------------ SESSION CREATION------------------
+        logger.info("Creating/updating session")
+
+        set_processed_files_dir(None)
+        session_service.create_session(CURRENT_SESSION_ID, file_categories, None)
+
+        # Confirm new session after creation
+        new_sess = session_service.get_session(CURRENT_SESSION_ID)
+        
+        session_service.update_session(CURRENT_SESSION_ID, 'acu_extracted_files',acu_files)
+        session_service.update_session(CURRENT_SESSION_ID, 'acu_extraction_logs',acu_logs)
+        session_service.update_session(CURRENT_SESSION_ID, 'registry_contents',registry_contents)
+        session_service.update_session(CURRENT_SESSION_ID, 'customer_journal_contents',customer_journal_contents)
+        session_service.update_session(CURRENT_SESSION_ID, 'ui_journal_contents',ui_journal_contents)
+        session_service.update_session(CURRENT_SESSION_ID, 'trc_trace_contents',trc_trace_contents)
+        session_service.update_session(CURRENT_SESSION_ID, 'trc_error_contents',trc_error_contents)
+        session_service.update_session(CURRENT_SESSION_ID, 'extra_contents', extra_contents)
+
         t_sess_end = time.perf_counter()
         logger.debug(f"SESSION SAVE TIME: {t_sess_end - t_sess_start:.4f} s")
+
+        # Delete the run folder from Temp so all content is now in memory.
+        try:
+            shutil.rmtree(extract_path, ignore_errors=False)
+            logger.info(f"Temp run folder deleted: {extract_path}")
+        except Exception as e:
+            logger.error(f"Failed to delete Temp run folder {extract_path}: {e}")
+
 
         # ------------------ PROCESSING TIMER ------------------
         logger.info(" prepare response")
@@ -430,7 +515,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
 
         # -----------------------------------------------------------
-        # ⏱️ END TOTAL TIME MEASUREMENT
+        #  END TOTAL TIME MEASUREMENT
         # -----------------------------------------------------------
         end_time = time.perf_counter()
         total_time = round(end_time - start_time, 2)
@@ -440,6 +525,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         # Attach processing time to response dict so frontend can display it
         result_dict = result.dict() if hasattr(result, "dict") else dict(result)
         result_dict["processing_time_seconds"] = total_time
+        result_dict["session_id"] = CURRENT_SESSION_ID   
         return result_dict
     except HTTPException:
         raise   
@@ -496,11 +582,36 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
             )
 
         zip_content = await file.read()
-        logger.debug(f"Read {len(zip_content)} bytes from uploaded file: {file.filename}")  
+        logger.debug(f"Read {len(zip_content)} bytes from uploaded file: {file.filename}")
 
         acu_logs = []
-        acu_files = extract_from_zip_bytes(zip_content, acu_logs, target_prefixes=('jdd', 'x3'))
-        logger.debug(f"ACU extraction logs: {acu_logs}")  
+
+        # --- Drill into nested acu.zip (mirrors /process-zip logic) ---
+        # The uploaded package wraps ACU files inside an inner acu.zip.
+        # extract_from_zip_bytes only scans the top level of whatever bytes
+        # you hand it, so passing the outer ZIP would never find jdd*/x3* files.
+        # We locate acu.zip inside the outer archive first, then pass its bytes.
+        acu_zip_bytes = None
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_content)) as outer_zf:
+                acu_candidates = [
+                    name for name in outer_zf.namelist()
+                    if os.path.basename(name).lower() == 'acu.zip'
+                ]
+                if acu_candidates:
+                    acu_zip_bytes = outer_zf.read(acu_candidates[0])
+                    logger.info(f"Found nested acu.zip at: {acu_candidates[0]}")
+                else:
+                    logger.info("No nested acu.zip found — treating uploaded ZIP as the ACU archive directly")
+        except zipfile.BadZipFile as e:
+            logger.error(f"BadZipFile when scanning for nested acu.zip in {file.filename}: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid ZIP file: {e}")
+
+        # Use inner acu.zip bytes when found; fall back to the outer ZIP for
+        # flat packages that already contain jdd*/x3* files at the top level.
+        target_bytes = acu_zip_bytes if acu_zip_bytes else zip_content
+        acu_files = extract_from_zip_bytes(target_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
+        logger.debug(f"ACU extraction logs: {acu_logs}")
 
         if not acu_files:
             logger.info(f"No ACU files found in uploaded ZIP: {file.filename}")  
@@ -519,6 +630,8 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
             "message": f"Successfully extracted {len(acu_files)} file(s)"
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         logger.error(f"Unexpected error during ACU extraction for file {file.filename}: {e}")  
@@ -554,7 +667,8 @@ async def extract_registry_from_zip(file: UploadFile = File(...)):
         result = await extract_registry_from_zip(file=some_zip_file)
 
     PARAMETERS:
-        file (UploadFile) : The ZIP file uploaded via multipart/form-data.
+        file (UploadFile) : The ZIP file uploaded via mu
+        ltipart/form-data.
 
     RETURNS:
         dict :
@@ -685,7 +799,7 @@ async def extract_registry_from_zip(file: UploadFile = File(...)):
         )
 
 @router.get("/get-registry-contents")
-async def get_registry_contents(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_registry_contents(session_id: Optional[str] = Query(default=None)):
     """
 FUNCTION: get_registry_contents
 
@@ -711,25 +825,28 @@ RAISES:
         - 404 : If the session with the given ID does not exist
         - 500 : For any other unexpected server error during retrieval
 """
+    # Resolve values ("current_session", None, "") → real UUID
+    session_id = _resolve_session_id(session_id)
 
     try:
         if not session_service.session_exists(session_id):
             raise HTTPException(status_code=404, detail="No session found")
         
         session_data = session_service.get_session(session_id)
-        registry_contents = session_data.get('registry_contents', {})
+
         
         # Convert bytes to base64 for JSON serialization
         import base64
+        raw_contents = session_data.get('registry_contents', {})
         encoded_contents = {}
-        for filename, content_bytes in registry_contents.items():
-            if isinstance(content_bytes, bytes):
-                encoded_contents[filename] = base64.b64encode(content_bytes).decode('utf-8')
+        for filename, content in raw_contents.items():
+            if isinstance(content, bytes):
+                encoded_contents[filename] = base64.b64encode(content).decode('utf-8')
             else:
-                encoded_contents[filename] = content_bytes
-        
-        logger.info(f"Serving {len(encoded_contents)} registry files from session")
-        
+                encoded_contents[filename] = content   # already a base64 string
+
+        logger.info(f"Serving {len(encoded_contents)} registry files from session '{session_id}'")
+
         return {
             "registry_contents": encoded_contents,
             "count": len(encoded_contents)
@@ -746,7 +863,7 @@ RAISES:
 # ============================================
 
 @router.get("/get-acu-files")
-async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_acu_files(session_id: str = Query(default=None)):
     """
     FUNCTION:
         get_acu_files
@@ -777,6 +894,7 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
             - 404 if session does not exist
             - 500 if unexpected errors occur during retrieval
     """
+    session_id = _resolve_session_id(session_id)
     try:
         if not session_service.session_exists(session_id):
             logger.warning(f"No session found for session_id: {session_id}")
@@ -844,7 +962,7 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
         )
 
 @router.post("/parse-acu-files")
-async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str = Query(default=None)):
     """
     FUNCTION:
         parse_acu_files
@@ -882,6 +1000,7 @@ async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str
             - 400 if no ACU files are found in the session
             - 500 if any unexpected error occurs during parsing
     """
+    session_id = _resolve_session_id(session_id)
     try:
         if not session_service.session_exists(session_id):
             logger.warning(f"No session found for session_id: {session_id}")
@@ -986,7 +1105,7 @@ async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str
 
 
 @router.get("/available-file-types", response_model=AvailableFileTypesResponse)
-async def get_available_file_types(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_available_file_types(session_id: str = Query(default=None)):
     """
     FUNCTION:
         get_available_file_types
@@ -1023,6 +1142,7 @@ async def get_available_file_types(session_id: str = Query(default=CURRENT_SESSI
             - 404 if the session does not exist
             - 404 if no file categories are found in the session
     """
+    session_id = _resolve_session_id(session_id)
     logger.info(f" Received request: /available-file-types for session_id: {session_id}") 
 
     # Check if session exists
@@ -1065,7 +1185,7 @@ async def get_available_file_types(session_id: str = Query(default=CURRENT_SESSI
     )
 
 @router.post("/select-file-type")
-async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Query(default=None)):
     """
     FUNCTION:
         get_available_file_types
@@ -1102,6 +1222,7 @@ async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Q
             - 404 if the session does not exist
             - 404 if no file categories are found in the session
     """
+    session_id = _resolve_session_id(session_id)
     logger.info(f" Received request: /select-file-type for session_id: {session_id}")  
 
     # Check if session exists
@@ -1124,6 +1245,7 @@ async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Q
         )
 
     # Get selected file types - convert enum to string
+    session_id = _resolve_session_id(session_id)
     try:
         selected_types = [ft.value if hasattr(ft, 'value') else str(ft) for ft in request.file_types]
         logger.debug(f"Selected file types for session_id {session_id}: {selected_types}")  
@@ -1195,7 +1317,7 @@ async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Q
     }
 
 @router.post("/analyze-customer-journals")
-async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def analyze_customer_journals(session_id: str = Query(default=None)):
     """
     FUNCTION:
         analyze_customer_journals
@@ -1230,6 +1352,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             - 400 if no transactions could be extracted
             - 500 for unexpected errors during processing
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Starting customer journal analysis for session: {session_id}")
         
@@ -1244,7 +1367,8 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
         # Get file categories from session
         file_categories = session_service.get_file_categories(session_id)
         journal_files = file_categories.get('customer_journals', [])
-        
+        journal_contents = session_service.get_session_data(session_id, 'customer_journal_contents') or {}
+
         if not journal_files:
             logger.error("No customer journal files found")
             raise HTTPException(
@@ -1261,17 +1385,18 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
         source_files = []
         source_file_map = {}
         
-        for journal_file in journal_files:
-            logger.info(f"   Processing: {journal_file}")
-            logger.info(f"   Path object: {Path(journal_file)}")
-            logger.info(f"   Filename (name): {Path(journal_file).name}")
-            logger.info(f"   Filename (stem): {Path(journal_file).stem}")
-            
-            source_filename = Path(journal_file).stem
+        for journal_filename in journal_files:
+            logger.info(f"   Processing: {journal_filename}")
+            source_filename = Path(journal_filename).stem
             source_files.append(source_filename)
+
+            content = journal_contents.get(journal_filename)
+            if content is None:
+                logger.error(f"Content not found in session for {journal_filename}")
+                continue
             
             try:
-                df = analyzer.parse_customer_journal(journal_file)
+                df = analyzer.parse_customer_journal_from_string(content, journal_filename)
                 
                 if df is None or df.empty:
                     logger.debug(f"No transactions found in {source_filename}")
@@ -1286,7 +1411,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
                     source_file_map[source_filename] = file_transactions_ids
                 
             except Exception as e:
-                logger.error(f"Error processing {journal_file}: {str(e)}")
+                logger.error(f"Error processing {journal_filename}: {str(e)}")
                 import traceback
                 traceback.print_exc()
                 continue
@@ -1328,17 +1453,16 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             logger.info(f"   Sample 'Source File' value: '{sample.get('Source File', 'KEY NOT FOUND')}'")
         
         # Store in session (remove duplicates from source_files)
-        unique_source_files = list(set(source_files))
-        unique_source_files.sort()
+        unique_source_files = sorted(set(source_files))
 
-        # DEBUG: Print what we're about to store
         logger.info(f" Unique source files being stored: {unique_source_files}")
         logger.info(f" Total source files count: {len(unique_source_files)}")
 
         session_service.update_session(session_id, 'transaction_data', transaction_records)
         session_service.update_session(session_id, 'source_files', unique_source_files)
         session_service.update_session(session_id, 'source_file_map', source_file_map)
-        
+
+        # ── Statistics ────────────────────────────────────────────────────────
         stats = []
         for txn_type in combined_df['Transaction Type'].unique():
             type_df = combined_df[combined_df['Transaction Type'] == txn_type]
@@ -1348,10 +1472,10 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             
             stats.append({
                 'Transaction Type': txn_type,
-                'Total': total,
-                'Successful': successful,
-                'Unsuccessful': unsuccessful,
-                'Success Rate': f"{(successful/total*100):.1f}%" if total > 0 else "0%"
+                'Total':            total,
+                'Successful':       successful,
+                'Unsuccessful':     unsuccessful,
+                'Success Rate':     f"{(successful / total * 100):.1f}%" if total > 0 else "0%"
             })
         
         logger.info("Customer journal analysis completed successfully")
@@ -1375,7 +1499,7 @@ async def analyze_customer_journals(session_id: str = Query(default=CURRENT_SESS
             detail=f"Analysis failed: {str(e)}"
         )
 @router.get("/get-transactions-with-sources")
-async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_transactions_with_sources(session_id: str = Query(default=None)):
     """
     FUNCTION:
         get_transactions_with_sources
@@ -1406,6 +1530,7 @@ async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_
             - 404 if the session does not exist
             - 500 for unexpected errors while retrieving data
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f"Fetching transactions with source mapping for session: {session_id}")
         logger.debug("Entered /get-transactions-with-sources route")
@@ -1462,7 +1587,7 @@ async def get_transactions_with_sources(session_id: str = Query(default=CURRENT_
 
 
 @router.post("/filter-transactions-by-sources")
-async def filter_transactions_by_sources(source_files: List[str] = Body(..., embed=True),session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def filter_transactions_by_sources(source_files: List[str] = Body(..., embed=True),session_id: str = Query(default=None)):
     """
     FUNCTION:
         filter_transactions_by_sources
@@ -1497,6 +1622,7 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
             - 400 if transaction data is missing in the session
             - 500 for unexpected errors during filtering
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Filtering transactions by {len(source_files)} source file(s)")
         logger.info(f" Requested source files: {source_files}")
@@ -1564,7 +1690,7 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
         )
 
 @router.get("/transaction-statistics")
-async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_transaction_statistics(session_id: str = Query(default=None)):
     """
     FUNCTION:
         get_transaction_statistics
@@ -1603,6 +1729,7 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
             - 500 for unexpected errors during statistics generation
     """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f"Request received: Get transaction statistics for session {session_id}")
         if not session_service.session_exists(session_id):
@@ -1671,7 +1798,7 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
         )
 
 @router.post("/compare-transactions-flow")
-async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body(...),session_id: str = Query(default=None)):
     """
     FUNCTION:
         compare_transactions_flow
@@ -1729,6 +1856,7 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
         - Provides timing/duration analysis if start and end times are available.
         - Handles missing or empty UI journals gracefully.
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Comparing transactions: {txn1_id} vs {txn2_id}")
 
@@ -1769,9 +1897,10 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
 
         logger.info(f" Found both transactions: {txn1_id}, {txn2_id}")
 
-        # Get file categories from session
+        # Get file categories and UI journal contents from session
         file_categories = session_data.get('file_categories', {})
         ui_journals = file_categories.get('ui_journals', [])
+        ui_journal_contents = session_data.get('ui_journal_contents', {})
 
         logger.info(f" Found {len(ui_journals)} UI journal file(s)")
 
@@ -1802,15 +1931,17 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
                     # If no exact match, try all UI journals
                     ui_journals_to_check = [matching_ui_journal] if matching_ui_journal else ui_journals
 
-                    for ui_journal_path in ui_journals_to_check:
-                        logger.info(f" Parsing UI journal for {txn_label}: {ui_journal_path}")
+                    for ui_journal_filename in ui_journals_to_check:
+                        logger.info(f" Parsing UI journal for {txn_label}: {ui_journal_filename}")
 
-                        ui_df = parse_ui_journal(ui_journal_path)
+                        content = ui_journal_contents.get(ui_journal_filename, '')
+                        ui_df = parse_ui_journal_from_string(content, ui_journal_filename)
 
                         if not ui_df.empty:
                             logger.info(f" Parsed {len(ui_df)} UI events for {txn_label}")
 
-                            processor = UIJournalProcessor(ui_journal_path)
+                            processor = UIJournalProcessor.__new__(UIJournalProcessor)
+                            processor.file_path = Path(ui_journal_filename)
                             processor.df = ui_df
 
                             def parse_time_local(time_str):
@@ -2029,7 +2160,7 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
 
 
 @router.get("/current-selection")
-async def get_current_selection(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_current_selection(session_id: str = Query(default=None)):
     """
     Retrieve the currently selected file type(s) for a given session.
 
@@ -2061,6 +2192,7 @@ async def get_current_selection(session_id: str = Query(default=CURRENT_SESSION_
           will contain an empty list and an informational message.
         - Useful for UI components to display or maintain the user's current selection.
     """
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Getting current selection for session: {session_id}")
 
@@ -2090,7 +2222,7 @@ async def get_current_selection(session_id: str = Query(default=CURRENT_SESSION_
 
 
 @router.get("/debug-session")
-async def debug_session(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def debug_session(session_id: str = Query(default=None)):
     """
     FUNCTION:
         debug_session
@@ -2130,6 +2262,7 @@ async def debug_session(session_id: str = Query(default=CURRENT_SESSION_ID)):
             - 500 : On unexpected internal errors
     """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Debugging session: {session_id}")
 
@@ -2175,7 +2308,7 @@ async def debug_session(session_id: str = Query(default=CURRENT_SESSION_ID)):
 
 
 @router.post("/visualize-individual-transaction-flow")
-async def visualize_individual_transaction_flow(request: TransactionVisualizationRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def visualize_individual_transaction_flow(request: TransactionVisualizationRequest,session_id: str = Query(default=None)):
     """
     FUNCTION:
         visualize_individual_transaction_flow
@@ -2224,6 +2357,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
             - If unexpected errors occur while parsing UI journals or
               generating the flow
     """
+    session_id = _resolve_session_id(session_id)
     try:
         transaction_id = request.transaction_id
         logger.info(f"Visualizing flow for transaction: {transaction_id}")
@@ -2267,9 +2401,10 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
         ui_flow_screens = ["No flow data"]
         has_flow = False
 
-        # Get file categories
+        # Get file categories and UI journal contents from session
         file_categories = session_data.get('file_categories', {})
         ui_journals = file_categories.get('ui_journals', [])
+        ui_journal_contents = session_data.get('ui_journal_contents', {})
         logger.info(f" Found {len(ui_journals)} UI journal file(s)")
 
         if ui_journals:
@@ -2287,13 +2422,15 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
 
                 ui_journals_to_check = [matching_ui_journal] if matching_ui_journal else ui_journals
 
-                for ui_journal_path in ui_journals_to_check:
-                    logger.debug(f" Parsing UI journal: {ui_journal_path}")
-                    ui_df = parse_ui_journal(ui_journal_path)
+                for ui_journal_filename in ui_journals_to_check:
+                    logger.debug(f" Parsing UI journal: {ui_journal_filename}")
+                    content = ui_journal_contents.get(ui_journal_filename, '')
+                    ui_df = parse_ui_journal_from_string(content, ui_journal_filename)
 
                     if not ui_df.empty:
                         logger.info(f" Parsed {len(ui_df)} UI events")
-                        processor = UIJournalProcessor(ui_journal_path)
+                        processor = UIJournalProcessor.__new__(UIJournalProcessor)
+                        processor.file_path = Path(ui_journal_filename)
                         processor.df = ui_df
 
                         def parse_time(time_str):
@@ -2494,7 +2631,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
         )
 
 @router.post("/generate-consolidated-flow")
-async def generate_consolidated_flow(source_file: str = Body(...),transaction_type: str = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def generate_consolidated_flow(source_file: str = Body(...),transaction_type: str = Body(...),session_id: str = Query(default=None)):
     """
 FUNCTION:
     generate_consolidated_flow
@@ -2582,6 +2719,7 @@ RAISES:
         - Unexpected internal errors during UI flow extraction or processing
 """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Starting consolidated flow generation for type '{transaction_type}' from source '{source_file}'")
         logger.debug(f"Session ID received: {session_id}")
@@ -2628,42 +2766,45 @@ RAISES:
         
         logger.info(f" Found {len(filtered_df)} transactions")
         
-        # Get UI journals
+        # Get UI journals and contents from session
         file_categories = session_data.get('file_categories', {})
         ui_journals = file_categories.get('ui_journals', [])
-        
+        ui_journal_contents = session_data.get('ui_journal_contents', {})
+
         logger.debug("Searching for matching UI journal")
         matching_ui_journal = None
         for ui_journal in ui_journals:
             if Path(ui_journal).stem == source_file:
                 matching_ui_journal = ui_journal
                 break
-        
+
         if not matching_ui_journal:
             logger.error("No matching UI journal found for this source")
             raise HTTPException(
                 status_code=404,
                 detail=f"No matching UI journal found for source '{source_file}'"
             )
-        
+
         logger.info(f"Matched UI journal: {matching_ui_journal}")
-        
-        # Parse UI journal
-        logger.info("Parsing UI journal file")
-        ui_df = parse_ui_journal(matching_ui_journal)
-        
+
+        # Parse UI journal from session memory
+        logger.info("Parsing UI journal from session memory")
+        content = ui_journal_contents.get(matching_ui_journal, '')
+        ui_df = parse_ui_journal_from_string(content, matching_ui_journal)
+
         if ui_df.empty:
             logger.error("Parsed UI journal is empty")
             raise HTTPException(
                 status_code=400,
                 detail="UI journal is empty or could not be parsed"
             )
-        
+
         logger.info(f"UI journal parsed successfully with {len(ui_df)} events")
-        
-        # Create processor
+
+        # Create processor from pre-parsed df (no disk read needed)
         logger.debug("Creating UIJournalProcessor instance")
-        processor = UIJournalProcessor(matching_ui_journal)
+        processor = UIJournalProcessor.__new__(UIJournalProcessor)
+        processor.file_path = Path(matching_ui_journal)
         processor.df = ui_df
         
         # Extract flows
@@ -2778,7 +2919,7 @@ class TransactionAnalysisRequest(BaseModel):
 
 
 @router.post("/analyze-transaction-llm")
-async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_id: str = Query(default=None)):
     """
     FUNCTION:
         generate_consolidated_flow
@@ -2860,6 +3001,7 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
         HTTPException 500:
             - Unexpected errors during flow extraction or processing
     """
+    session_id = _resolve_session_id(session_id)
     try:
         transaction_id = request.transaction_id
         logger.info(f" Analyzing transaction with LLM: {transaction_id}")
@@ -2868,44 +3010,31 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest,session_id
         # Check session
         if not session_service.session_exists(session_id):
             logger.error(f"No session found for session_id: {session_id}")
-            raise HTTPException(
-                status_code=404,
-                detail="No session found"
-            )
-        
+            raise HTTPException(status_code=404, detail="No session found")
+
         session_data = session_service.get_session(session_id)
-        logger.debug(f"Session data retrieved for session_id {session_id}")
-        
-        # Get transaction data
+        logger.info(f"Session data retrieved for session_id {session_id}")
+
+        # ── Transaction data ──────────────────────────────────────────────
         transaction_data = session_data.get('transaction_data')
         if not transaction_data:
             logger.error(f"No transaction data available for session_id: {session_id}")
-            raise HTTPException(
-                status_code=400,
-                detail="No transaction data available"
-            )
-        
-        # Convert to DataFrame
+            raise HTTPException(status_code=400, detail="No transaction data available")
+
         df = pd.DataFrame(transaction_data)
         
         # Find the transaction
         if transaction_id not in df['Transaction ID'].values:
             logger.error(f"Transaction {transaction_id} not found in session {session_id}")
-            raise HTTPException(
-                status_code=404,
-                detail=f"Transaction {transaction_id} not found"
-            )
-        
-        txn_data = df[df['Transaction ID'] == transaction_id].iloc[0]
+            raise HTTPException(status_code=404, detail=f"Transaction {transaction_id} not found")
+
+        txn_data        = df[df['Transaction ID'] == transaction_id].iloc[0].to_dict()
         transaction_log = str(txn_data.get('Transaction Log', ''))
         
         if not transaction_log:
             logger.error(f"No transaction log available for transaction {transaction_id}")
-            raise HTTPException(
-                status_code=400,
-                detail="No transaction log available for this transaction"
-            )
-        
+            raise HTTPException(status_code=400, detail="No transaction log available for this transaction")
+
         logger.info(f" Found transaction log ({len(transaction_log)} characters)")
 
         # Call LLM for analysis
@@ -3023,7 +3152,7 @@ class FeedbackSubmission(BaseModel):
     original_llm_response: str
 
 @router.post("/submit-llm-feedback")
-async def submit_llm_feedback(feedback: FeedbackSubmission,session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def submit_llm_feedback(feedback: FeedbackSubmission,session_id: str = Query(default=None)):
     """
 FUNCTION:
     submit_llm_feedback
@@ -3073,6 +3202,7 @@ RAISES:
           the feedback (e.g., file write errors, session update failures).
 """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Submitting feedback for transaction: {feedback.transaction_id}")
         logger.debug(f"Feedback payload: {feedback.dict()}")
@@ -3128,9 +3258,9 @@ RAISES:
             )
 
         # Also store in session for immediate retrieval
-        if not session_service.session_exists(session_id):
-            session_service.create_session(session_id)
-            logger.debug(f"Created new session: {session_id}")
+        # if not session_service.session_exists(session_id):
+        #     session_service.create_session(session_id)
+        #     logger.debug(f"Created new session: {session_id}")
         
         session_data = session_service.get_session(session_id)
         
@@ -3157,7 +3287,7 @@ RAISES:
 
 
 @router.get("/get-feedback/{transaction_id}")
-async def get_feedback(transaction_id: str,session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_feedback(transaction_id: str,session_id: str = Query(default=None)):
     """
 FUNCTION:
     get_feedback
@@ -3218,6 +3348,7 @@ RAISES:
           parsing JSON, or retrieving session information.
 """
 
+    session_id = _resolve_session_id(session_id)
     try:
         logger.info(f" Retrieving feedback for transaction: {transaction_id}")
         
@@ -3570,9 +3701,70 @@ def extract_counter_blocks(trc_file_path: str) -> list:
         traceback.print_exc()
     
     return all_counter_blocks
-    
+
+
+def extract_counter_blocks_from_string(content: str) -> list:
+    """
+    FUNCTION: extract_counter_blocks_from_string
+
+    DESCRIPTION:
+        Identical to extract_counter_blocks() but accepts file content as a string
+        instead of a file path. Used when TRC file content has been loaded into
+        session memory and Temp has been deleted.
+
+    PARAMETERS:
+        content (str) : Full text content of the TRC trace file.
+
+    RETURNS:
+        list : Same structure as extract_counter_blocks() — list of counter block dicts.
+
+    RAISES:
+        None : All errors are caught and logged.
+    """
+    all_counter_blocks = []
+    try:
+        lines = content.split('\n')
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if 'CCdmCashUnitInfoDataEx' in line:
+                timestamp_str = None
+                block_time = None
+                ts_match = re.search(r'(\d+)\s+(\d{6})\s+(\d{2}:\d{2}:\d{2}\.\d{2})', line)
+                if not ts_match and i > 0:
+                    ts_match = re.search(r'(\d+)\s+(\d{6})\s+(\d{2}:\d{2}:\d{2}\.\d{2})', lines[i-1])
+                if ts_match:
+                    timestamp_str = ts_match.group(3)
+                    try:
+                        block_time = datetime.strptime(timestamp_str, '%H:%M:%S.%f').time()
+                    except Exception:
+                        pass
+                block_lines = []
+                i += 1
+                while i < len(lines):
+                    current_line = lines[i]
+                    if 'CCdmCashUnitInfoDataEx' in current_line:
+                        i -= 1
+                        break
+                    if re.search(r'^\d+\s+\d{6}\s+\d{2}:\d{2}:\d{2}\.\d{2}', current_line):
+                        break
+                    block_lines.append(current_line)
+                    i += 1
+                counter_data = parse_counter_data_from_trc(block_lines)
+                if counter_data and timestamp_str:
+                    all_counter_blocks.append({
+                        'time': block_time,
+                        'timestamp': timestamp_str,
+                        'data': counter_data
+                    })
+            i += 1
+    except Exception as e:
+        logger.error(f"Error extracting counter blocks from string: {e}")
+    return all_counter_blocks
+
 @router.get("/get-matching-sources-for-trc")
-async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_SESSION_ID)):
+
+async def get_matching_sources_for_trc(session_id: str = Query(default=None)):
     """
         FUNCTION: get_matching_sources_for_trc
 
@@ -3597,6 +3789,7 @@ async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_S
                 - 500 : For any unexpected server error during processing
 """
 
+    session_id = _resolve_session_id(session_id)
     try:
         if not session_service.session_exists(session_id):
             raise HTTPException(status_code=404, detail="No session found")
@@ -3605,45 +3798,42 @@ async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_S
         
         # Get all source files
         all_sources = session_data.get('source_files', [])
-        
-        # Get TRC trace files
+
+        # Get TRC trace filenames and contents from session
         file_categories = session_data.get('file_categories', {})
         trc_trace_files = file_categories.get('trc_trace', [])
-        
+        trc_trace_contents = session_data.get('trc_trace_contents', {})
+
         if not trc_trace_files:
             return {"matching_sources": []}
-        
+
         matching_sources = []
-        
+
         for source in all_sources:
-            # Convert YYYYMMDD to YYMMDD
             source_date_short = source[2:] if len(source) == 8 else source
-            
-            # Check if any TRC file contains this date
-            for trc_file in trc_trace_files:
+            for trc_filename in trc_trace_files:
                 try:
-                    with open(trc_file, 'r', encoding='utf-8', errors='ignore') as f:
-                        first_lines = ''.join([f.readline() for _ in range(100)])
-                    
-                    if source_date_short in first_lines:
+                    content = trc_trace_contents.get(trc_filename, '')
+                    if source_date_short in content:
                         matching_sources.append(source)
+                        logger.info(f"[TRC-MATCH] {source} ({source_date_short}) -> {trc_filename}")
                         break
-                except:
+                except Exception:
                     continue
-        
-        logger.info(f" Found {len(matching_sources)} sources with matching TRC trace files")
-        
+
+        logger.info(f"[TRC-MATCH] matching_sources: {matching_sources}")
         return {"matching_sources": matching_sources}
         
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"[TRC-MATCH] error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 @router.post("/get-counter-data")
 async def get_counter_data(
     request: CounterDataRequest,
-    session_id: str = Query(default=CURRENT_SESSION_ID)
+    session_id: str = Query(default=None)
 ):
     """
         FUNCTION: get_counter_data
@@ -3735,58 +3925,48 @@ async def get_counter_data(
         
         txn_data = source_transactions[source_transactions['Transaction ID'] == request.transaction_id].iloc[0]
         
-        # Get TRC trace files
+        # Get TRC trace filenames and contents from session
         file_categories = session_data.get('file_categories', {})
         trc_trace_files = file_categories.get('trc_trace', [])
-        
+        trc_trace_contents = session_data.get('trc_trace_contents', {})
+
         if not trc_trace_files:
             raise HTTPException(
                 status_code=400,
                 detail="No TRC trace files available"
             )
-        
-        # print(f" Found {len(trc_trace_files)} TRC trace file(s)")
-        
+
         # Parse transaction date from source file (format: YYYYMMDD -> YYMMDD)
         txn_date_full = request.source_file  # e.g., "20250404"
         txn_date_short = txn_date_full[2:] if len(txn_date_full) == 8 else txn_date_full  # "250404"
-        
-        # print(f" Transaction date: {txn_date_full} (searching for {txn_date_short})")
-        
-        # Find matching TRC trace file by parsing its content for the date
+
+        # Find matching TRC trace file by scanning session content for the date
         matching_trc = None
-        
-        for trc_file in trc_trace_files:
+        matching_trc_content = None
+
+        for trc_filename in trc_trace_files:
             try:
-                # Read first few lines to check date
-                with open(trc_file, 'r', encoding='utf-8', errors='ignore') as f:
-                    first_lines = ''.join([f.readline() for _ in range(100)])
-                    
-                # Check if this TRC file contains the transaction date (YYMMDD format)
+                content = trc_trace_contents.get(trc_filename, '')
+                first_lines = '\n'.join(content.splitlines()[:100])
                 if txn_date_short in first_lines:
-                    matching_trc = trc_file
-                    # print(f" Found matching TRC trace: {Path(trc_file).name}")
+                    matching_trc = trc_filename
+                    matching_trc_content = content
                     break
-            except Exception as e:
-                # print(f" Error reading {trc_file}: {e}")
+            except Exception:
                 continue
-        
+
         if not matching_trc:
             raise HTTPException(
                 status_code=404,
                 detail=f"No matching TRC trace file found for date '{txn_date_full}' (searched for '{txn_date_short}')"
             )
-        
-        # print(f" Found matching TRC trace: {matching_trc}")
-        
-        # Extract counter blocks from TRC trace file
+
+        # Extract counter blocks from TRC content in session memory
         txn_start_time = str(txn_data.get('Start Time', ''))
         txn_end_time = str(txn_data.get('End Time', ''))
 
-        # print(f"Transaction times: {txn_start_time} to {txn_end_time}")
-
-        # OPTIMIZATION: Extract ALL counter blocks from TRC file ONCE
-        all_counter_blocks = extract_counter_blocks(matching_trc)
+        # OPTIMIZATION: Extract ALL counter blocks from TRC content ONCE
+        all_counter_blocks = extract_counter_blocks_from_string(matching_trc_content)
 
         if not all_counter_blocks:
             print(" No counter blocks found")

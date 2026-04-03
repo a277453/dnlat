@@ -400,20 +400,39 @@ def extract_diagnostic_context(
 
     result = {k: ([] if isinstance(v, list) else v) for k, v in empty.items()}
 
-    re_line     = re.compile(r'^\s*(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(.*)')
+    # Handles both plain and date-prefixed JRN lines:
+    #   "23:14:22 3214 ..."
+    #   "03/04/2025 23:14:22 3214 ..."
+    re_line     = re.compile(
+        r'^\s*(?:\d{2}/\d{2}/\d{4}\s+)?(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(.*)'
+    )
     re_errornr  = re.compile(r'ErrorNr:\s*(\d+)\s*\(Class:\s*(\S+)\s+Code:\s*(\S+)')
     re_devstate = re.compile(r'State of .* device (\S+).*changed to:\s*(\S+(?:\s+\(\d+\))?)')
-    re_tdr      = re.compile(r'(TDR_\w+\(\w+\)|TA_EVENT\(\w+\))\s*[-\u2192>]+\s*(\w+)')
-    re_tdr_ret  = re.compile(r'(TDR_\w+|TA_EVENT)\s*\((\w+)\).*returned\s+(\w+)\s*\(\d+\)')
+
+    # ── Protocol step patterns (CCProtFW1 format) ──────────────────────────
+    # 1043 return line: "CCProtFW1 returned PROCEED_NEXT (0) for request TDR_CV (CV)"
+    re_tdr_ret  = re.compile(
+        r'returned\s+(\w+)\s*\(\d+\)\s+for\s+request\s+(TDR_\w+|TA_EVENT)\s*\((\w+)\)'
+    )
+    # 1042 request line: "Request TDR_CV (CV) sent to CCProtFW1"
+    re_tdr_req  = re.compile(
+        r'[Rr]equest\s+(TDR_\w+|TA_EVENT)\s*\((\w+)\)\s+sent'
+    )
+    # Legacy format: "TDR_CV(CV) → PROCEED_NEXT"
+    re_tdr_legacy = re.compile(
+        r'(TDR_\w+\(\w+\)|TA_EVENT\(\w+\))\s*(?:->|\u2192|>)\s*(\w+)'
+    )
+
     re_appstate = re.compile(r'Application state is:\s*(\w+\s*\(\d+\))')
     re_uuid     = re.compile(r'TRANSACTION UUID:\s*<([^>]*)>')
     re_ci       = re.compile(r'CI\s*=\s*([0-9A-Fa-f]{2})')
     re_tvr      = re.compile(r'TVR\s*=\s*(\S+).*TSI\s*=\s*(\S+)')
 
-    CARD_IDS     = {'3205', '3245', '3973', '5135'}
+    CARD_IDS     = {'3205', '3245', '3973', '5135', '3209'}  # 3209 = card ejected
     EMV_IDS      = {'3951', '3952', '3953', '3954', '3214'}
     CHIP_DEC_IDS = {'3960', '3961', '3275'}
     CRYPT_IDS    = {'3955', '3956'}
+    CUSTOMER_ACTION_IDS = {'3219', '3246', '3259', '3260'}
 
     last_app_before: Optional[str] = None
     first_app_after: Optional[str] = None
@@ -464,14 +483,27 @@ def extract_diagnostic_context(
                 if not in_window:
                     continue
 
-                # Protocol steps — prefer 1043 return lines for accuracy
-                mt_ret = re_tdr_ret.search(rest)
-                if mt_ret:
-                    step = f"{mt_ret.group(1)}({mt_ret.group(2)})\u2192{mt_ret.group(3)}"
-                    if step not in result['protocol_steps']:
-                        result['protocol_steps'].append(step)
+                # ── Protocol steps ─────────────────────────────────────────
+                if msg_id == '1043':
+                    mt_ret = re_tdr_ret.search(rest)
+                    if mt_ret:
+                        result_code = mt_ret.group(1)
+                        tdr_name    = mt_ret.group(2)
+                        tdr_param   = mt_ret.group(3)
+                        step = f"{tdr_name}({tdr_param})\u2192{result_code}"
+                        if step not in result['protocol_steps']:
+                            result['protocol_steps'].append(step)
+                elif msg_id == '1042':
+                    mt_req = re_tdr_req.search(rest)
+                    if mt_req:
+                        tdr_name  = mt_req.group(1)
+                        tdr_param = mt_req.group(2)
+                        step = f"{tdr_name}({tdr_param})\u2192sent"
+                        existing = [s for s in result['protocol_steps'] if s.startswith(f"{tdr_name}({tdr_param})")]
+                        if not existing:
+                            result['protocol_steps'].append(step)
                 else:
-                    for mt in re_tdr.finditer(rest):
+                    for mt in re_tdr_legacy.finditer(rest):
                         step = f"{mt.group(1)}\u2192{mt.group(2)}"
                         if step not in result['protocol_steps']:
                             result['protocol_steps'].append(step)
@@ -485,12 +517,24 @@ def extract_diagnostic_context(
                         f"KEY:{km.group(1).strip() if km else ''}"
                     )
 
-                # Host reply (6304)
+                # Host reply (6304) — mask sensitive data, extract outcome
                 if msg_id == '6304':
-                    _cleaned_rest = re.sub(r'\s+', ' ', rest).strip()
-                    result['host_replies'].append(
-                        f"{ts_str} {_cleaned_rest}"
-                    )
+                    _masked_rest = _mask_line(re.sub(r'\s+', ' ', rest).strip())
+                    result['host_replies'].append(f"{ts_str} {_masked_rest}")
+                    # Extract host outcome from 6304 if not yet set
+                    if not result['host_outcome']:
+                        if re.search(r'APPROVED|APPROVAL', _masked_rest, re.IGNORECASE):
+                            result['host_outcome'] = 'TRANSACTION APPROVED'
+                        elif re.search(r'DECLINED|DECLINE', _masked_rest, re.IGNORECASE):
+                            result['host_outcome'] = 'TRANSACTION DECLINED'
+                        elif re.search(r'UNABLE TO PERFORM|UNABLE_TO_PERFORM', _masked_rest, re.IGNORECASE):
+                            result['host_outcome'] = 'UNABLE TO PERFORM REQUEST'
+                        elif re.search(r'INSUFFICIENT', _masked_rest, re.IGNORECASE):
+                            result['host_outcome'] = 'INSUFFICIENT FUNDS'
+                    # Extract response code from 6304 if not yet captured
+                    rc_m = re.search(r'RC\s*[=:]\s*(\d{2,3})', _masked_rest)
+                    if rc_m and rc_m.group(1) not in result['response_codes']:
+                        result['response_codes'].append(rc_m.group(1))
 
                 # Transaction UUID (6306)
                 if msg_id == '6306':
@@ -554,10 +598,11 @@ def extract_diagnostic_context(
                         f"{lbl} CI={mc.group(1) if mc else 'unknown'}"
                     )
 
-                # Customer action (3259)
-                if msg_id == '3259':
+                # Customer actions — all customer-visible events
+                # 3259 = button press, 3219 = cancel, 3246 = timeout screen, 3260 = account selected
+                if msg_id in CUSTOMER_ACTION_IDS:
                     result['customer_actions'].append(
-                        f"{ts_str} {re.sub(r'  +', ' ', rest).strip()}"
+                        f"{ts_str} [{msg_id}] {re.sub(r'  +', ' ', rest).strip()}"
                     )
 
                 # Device state changes (5011)
@@ -665,20 +710,40 @@ def extract_diagnostic_context_from_content(
 
     result = {k: ([] if isinstance(v, list) else v) for k, v in empty.items()}
 
-    re_line     = re.compile(r'^\s*(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(.*)')
+    # Handles both plain and date-prefixed JRN lines:
+    #   "23:14:22 3214 ..."
+    #   "03/04/2025 23:14:22 3214 ..."
+    re_line     = re.compile(
+        r'^\s*(?:\d{2}/\d{2}/\d{4}\s+)?(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(.*)'
+    )
     re_errornr  = re.compile(r'ErrorNr:\s*(\d+)\s*\(Class:\s*(\S+)\s+Code:\s*(\S+)')
     re_devstate = re.compile(r'State of .* device (\S+).*changed to:\s*(\S+(?:\s+\(\d+\))?)')
-    re_tdr      = re.compile(r'(TDR_\w+\(\w+\)|TA_EVENT\(\w+\))\s*[-\u2192>]+\s*(\w+)')
-    re_tdr_ret  = re.compile(r'(TDR_\w+|TA_EVENT)\s*\((\w+)\).*returned\s+(\w+)\s*\(\d+\)')
+
+    # ── Protocol step patterns (CCProtFW1 format) ──────────────────────────
+    # 1043 return line: "CCProtFW1 returned PROCEED_NEXT (0) for request TDR_CV (CV)"
+    re_tdr_ret  = re.compile(
+        r'returned\s+(\w+)\s*\(\d+\)\s+for\s+request\s+(TDR_\w+|TA_EVENT)\s*\((\w+)\)'
+    )
+    # 1042 request line: "Request TDR_CV (CV) sent to CCProtFW1"
+    re_tdr_req  = re.compile(
+        r'[Rr]equest\s+(TDR_\w+|TA_EVENT)\s*\((\w+)\)\s+sent'
+    )
+    # Legacy format: "TDR_CV(CV) → PROCEED_NEXT"
+    re_tdr_legacy = re.compile(
+        r'(TDR_\w+\(\w+\)|TA_EVENT\(\w+\))\s*(?:->|\u2192|>)\s*(\w+)'
+    )
+
     re_appstate = re.compile(r'Application state is:\s*(\w+\s*\(\d+\))')
     re_uuid     = re.compile(r'TRANSACTION UUID:\s*<([^>]*)>')
     re_ci       = re.compile(r'CI\s*=\s*([0-9A-Fa-f]{2})')
     re_tvr      = re.compile(r'TVR\s*=\s*(\S+).*TSI\s*=\s*(\S+)')
 
-    CARD_IDS     = {'3205', '3245', '3973', '5135'}
+    CARD_IDS     = {'3205', '3245', '3973', '5135', '3209'}  # 3209 = card ejected
     EMV_IDS      = {'3951', '3952', '3953', '3954', '3214'}
     CHIP_DEC_IDS = {'3960', '3961', '3275'}
     CRYPT_IDS    = {'3955', '3956'}
+    # Customer-visible events to capture as customer_actions
+    CUSTOMER_ACTION_IDS = {'3219', '3246', '3259', '3260'}
 
     last_app_before: Optional[str] = None
     first_app_after: Optional[str] = None
@@ -728,14 +793,31 @@ def extract_diagnostic_context_from_content(
             if not in_window:
                 continue
 
-            # Protocol steps
-            mt_ret = re_tdr_ret.search(rest)
-            if mt_ret:
-                step = f"{mt_ret.group(1)}({mt_ret.group(2)})\u2192{mt_ret.group(3)}"
-                if step not in result['protocol_steps']:
-                    result['protocol_steps'].append(step)
+            # ── Protocol steps ─────────────────────────────────────────────
+            # Prefer 1043 return lines (have result code) over 1042 request lines
+            if msg_id == '1043':
+                mt_ret = re_tdr_ret.search(rest)
+                if mt_ret:
+                    result_code = mt_ret.group(1)
+                    tdr_name    = mt_ret.group(2)
+                    tdr_param   = mt_ret.group(3)
+                    step = f"{tdr_name}({tdr_param})\u2192{result_code}"
+                    if step not in result['protocol_steps']:
+                        result['protocol_steps'].append(step)
+            elif msg_id == '1042':
+                # Only add request if no matching return step captured yet
+                mt_req = re_tdr_req.search(rest)
+                if mt_req:
+                    tdr_name  = mt_req.group(1)
+                    tdr_param = mt_req.group(2)
+                    step = f"{tdr_name}({tdr_param})\u2192sent"
+                    # Only keep if 1043 hasn't already added a result for this step
+                    existing = [s for s in result['protocol_steps'] if s.startswith(f"{tdr_name}({tdr_param})")]
+                    if not existing:
+                        result['protocol_steps'].append(step)
             else:
-                for mt in re_tdr.finditer(rest):
+                # Legacy format fallback
+                for mt in re_tdr_legacy.finditer(rest):
                     step = f"{mt.group(1)}\u2192{mt.group(2)}"
                     if step not in result['protocol_steps']:
                         result['protocol_steps'].append(step)
@@ -749,12 +831,24 @@ def extract_diagnostic_context_from_content(
                     f"KEY:{km.group(1).strip() if km else ''}"
                 )
 
-            # Host reply (6304)
+            # Host reply (6304) — mask sensitive data, extract outcome
             if msg_id == '6304':
-                _cleaned_rest = re.sub(r'\s+', ' ', rest).strip()
-                result['host_replies'].append(
-                    f"{ts_str} {_cleaned_rest}"
-                )
+                _masked_rest = _mask_line(re.sub(r'\s+', ' ', rest).strip())
+                result['host_replies'].append(f"{ts_str} {_masked_rest}")
+                # Extract host outcome from 6304 if not yet set
+                if not result['host_outcome']:
+                    if re.search(r'APPROVED|APPROVAL', _masked_rest, re.IGNORECASE):
+                        result['host_outcome'] = 'TRANSACTION APPROVED'
+                    elif re.search(r'DECLINED|DECLINE', _masked_rest, re.IGNORECASE):
+                        result['host_outcome'] = 'TRANSACTION DECLINED'
+                    elif re.search(r'UNABLE TO PERFORM|UNABLE_TO_PERFORM', _masked_rest, re.IGNORECASE):
+                        result['host_outcome'] = 'UNABLE TO PERFORM REQUEST'
+                    elif re.search(r'INSUFFICIENT', _masked_rest, re.IGNORECASE):
+                        result['host_outcome'] = 'INSUFFICIENT FUNDS'
+                # Extract response code from 6304 if not yet captured
+                rc_m = re.search(r'RC\s*[=:]\s*(\d{2,3})', _masked_rest)
+                if rc_m and rc_m.group(1) not in result['response_codes']:
+                    result['response_codes'].append(rc_m.group(1))
 
             # Transaction UUID (6306)
             if msg_id == '6306':
@@ -818,10 +912,11 @@ def extract_diagnostic_context_from_content(
                     f"{lbl} CI={mc.group(1) if mc else 'unknown'}"
                 )
 
-            # Customer action (3259)
-            if msg_id == '3259':
+            # Customer actions — all customer-visible events
+            # 3259 = button press, 3219 = cancel, 3246 = timeout screen, 3260 = account selected
+            if msg_id in CUSTOMER_ACTION_IDS:
                 result['customer_actions'].append(
-                    f"{ts_str} {re.sub(r'  +', ' ', rest).strip()}"
+                    f"{ts_str} [{msg_id}] {re.sub(r'  +', ' ', rest).strip()}"
                 )
 
             # Device state changes (5011)

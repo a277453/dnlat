@@ -16,6 +16,7 @@ from modules.streamlit_logger import logger as frontend_logger
 import time
 from modules.login import create_reset_tokens_table, is_valid_password, is_same_as_old_password
 import re as _re; from datetime import datetime as _dt
+import html
 
 
 # Import authentication functions
@@ -4689,11 +4690,26 @@ RAISES:
             _a_bg     = "#1e1e1e" if is_dark() else "#f6f8fa"
             _a_border = "#4CAF50"
             _a_text   = "#ffffff" if is_dark() else "#1e2a35"
+            cleaned = analysis_text.strip()
+            if cleaned.startswith('---'):
+                cleaned = cleaned[3:].lstrip('\n')
+            if cleaned.endswith('---'):
+                cleaned = cleaned[:-3].rstrip('\n')
+
+            escaped = html.escape(cleaned)
+            escaped = escaped.replace('\n', '<br>')
+            escaped = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', escaped)
+            escaped = re.sub(r'<br>- ', '<br>• ', escaped)
+            escaped = re.sub(r'^- ', '• ', escaped)
+            escaped = re.sub(r'<br>(\d+)\. ', r'<br>\1. ', escaped)
+            # Internal --- becomes a styled divider
+            escaped = escaped.replace('---', '<hr style="border-color:#333; margin:10px 0;">')
+
             st.markdown(
                 f"<div style='background-color:{_a_bg}; padding:20px; border-radius:10px; "
-                f"border-left:5px solid {_a_border};'>"
-                f"<pre style='color:{_a_text}; white-space:pre-wrap; word-wrap:break-word; "
-                f"font-family:monospace; font-size:14px; margin:0;'>{analysis_text}</pre>"
+                f"border-left:5px solid {_a_border}; color:{_a_text}; "
+                f"font-family:sans-serif; font-size:14px; line-height:1.8;'>"
+                f"{escaped}"
                 f"</div>",
                 unsafe_allow_html=True
             )

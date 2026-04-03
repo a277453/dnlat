@@ -15,7 +15,7 @@ from modules.schemas import (
 	
 )
 
-
+from modules.login import ENABLE_DEV_MODE, UAT_CREDENTIALS
 from modules.extraction import extract_from_directory, extract_from_zip_bytes
 from modules.xml_parser_logic import parse_xml_to_dataframe
 from pathlib import Path
@@ -4753,8 +4753,45 @@ async def auth_login(request: LoginRequest):
     Returns user info + signed JWT session_token on success (200).
     Returns 401 for wrong credentials.
     Returns 403 if account exists but is pending admin approval.
+
+    Dev Mode:
+    ---------
+    When ENABLE_DEV_MODE=true in .env, login is handled entirely in-memory
+    using DN_UAT_USERNAME / DN_UAT_PASSWORD — no DB required.
+    The issued JWT carries role=DEV_MODE which satisfies all RBAC checks.
     """
     logger.info("POST /auth/login: user: %s", request.username)
+
+    # ── Dev mode bypass ────────────────────────────────────────────────────────
+    if ENABLE_DEV_MODE:
+        if (
+            request.username.strip() == UAT_CREDENTIALS["username"]
+            and request.password == UAT_CREDENTIALS["password"]
+        ):
+            logger.warning(
+                "DEV MODE login: bypassing DB auth for user: %s", request.username
+            )
+            token = create_access_token(
+                username=request.username.strip(),
+                role="DEV_MODE",
+                employee_code="DEV-000",
+            )
+            return LoginResponse(
+                username=request.username.strip(),
+                name="Dev User",
+                employee_code="DEV-000",
+                role="DEV_MODE",
+                session_token=token,
+            )
+        else:
+            logger.warning(
+                "DEV MODE login: invalid credentials for user: %s", request.username
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid dev mode credentials.",
+            )
+    # ──────────────────────────────────────────────────────────────────────────
 
     user = authenticate_user_backend(request.username.strip(), request.password)
 

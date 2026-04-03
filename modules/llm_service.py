@@ -25,8 +25,10 @@ MIN_PROMPT_CHARS = 150
 # Lines matching these are redundant — they duplicate what _build_ej_record
 # and extract_diagnostic_context already put into the JSON record.
 _EJ_REDUNDANT_CODES = {
-    '3207', '3239', '3202',       # txn open/close (ts_start/ts_end/status)
-    '3201',                        # txn number line
+    '3239', '3202',            # txn open/close (ts_start/ts_end/status)
+    '3201',                    # txn number line
+    # NOTE: 3207 (card retract) intentionally kept — contains retract reason
+    # details (e.g. card not taken, card jammed) not always in ordered_events
 }
 _EJ_REDUNDANT_PATTERNS = _re.compile(
     r"(?i)"
@@ -38,7 +40,7 @@ _EJ_REDUNDANT_PATTERNS = _re.compile(
     r"Identified notes:|"           # notes — stripped by _compact
     r"state\s+'[^']+',\s+end-|"   # end-state — in status
     r"Pin entered|"                 # pin — not diagnostic
-    r"Card successfully pres|"     # card returned — in card_ejected / events
+    r"Card successfully pres|"     # card presented — generic, not diagnostic
     r"Customer cancels|"            # cancel — in events/status
     r"Transaction cancelled|"       # cancel — in events/status
     r"Customer timeout|"            # timeout — in events/status

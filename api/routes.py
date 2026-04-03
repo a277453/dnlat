@@ -3468,7 +3468,6 @@ def parse_counter_data_from_trc(log_lines: list) -> list:
             None : Function handles parsing errors internally and skips invalid lines.
 """
 
-    session_id = _resolve_session_id(session_id)
     counter_rows = []
     
     # Find header line
@@ -3759,7 +3758,7 @@ def extract_counter_blocks_from_string(content: str) -> list:
                     if 'CCdmCashUnitInfoDataEx' in current_line:
                         i -= 1
                         break
-                    if re.search(r'^\d+\s+\d{6}\s+\d{2}:\d{2}:\d{2}\.\d{2}', current_line):
+                    if re.search(r'^\d{4,}\s+\d{6}\s+\d{2}:\d{2}:\d{2}\.\d{2}', current_line):
                         break
                     block_lines.append(current_line)
                     i += 1

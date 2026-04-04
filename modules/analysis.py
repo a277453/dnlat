@@ -45,6 +45,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(BASE_DIR, ".env")
 if os.path.exists(env_path):
     load_dotenv(env_path)
+
 # ============================================
 # CONNECT TO DEFAULT POSTGRES DB
 # ============================================
@@ -52,9 +53,9 @@ if os.path.exists(env_path):
 ADMIN_DB_CONFIG = {
     "host": os.getenv("DB_HOST", "localhost"),
     "database": "postgres",
-    "user": os.getenv("Admin_DB_USER"),
-    "password": os.getenv("Admin_DB_PASSWORD"),
-    "port": int(os.getenv("Admin_DB_PORT", 5432))
+    "user": os.getenv("DB_USER", "postgres"),
+    "password": os.getenv("DB_PASSWORD", ""),
+    "port": int(os.getenv("DB_PORT", 5432))
 }
 
 # ============================================
@@ -62,12 +63,13 @@ ADMIN_DB_CONFIG = {
 # ============================================
 
 USERRESPONSE_DB_CONFIG = {
-    "host": os.getenv("userresponse_db_host"),
-    "database": os.getenv("userresponse_db_name"),
-    "user": os.getenv("userresponse_db_user"),
-    "password": os.getenv("userresponse_db_password"),
-    "port": int(os.getenv("userresponse_db_port", 5432))
+    "host": os.getenv("DB_HOST", "localhost"),
+    "database": os.getenv("DB_NAME", "dn_diagnostics"),
+    "user": os.getenv("DB_USER", "postgres"),
+    "password": os.getenv("DB_PASSWORD", ""),
+    "port": int(os.getenv("DB_PORT", 5432))
 }
+
 # CREATE userresponse DATABASE
 # ============================================
 
@@ -273,12 +275,13 @@ def store_metadata(
 # ============================================
 
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST"),
-    "database": os.getenv("DB_NAME"),
-    "user": os.getenv("DB_USER"),
-    "password": os.getenv("DB_PASSWORD"),
-    "port": os.getenv("DB_PORT")
+    "host": os.getenv("DB_HOST", "localhost"),
+    "database": os.getenv("DB_NAME", "dn_diagnostics"),
+    "user": os.getenv("DB_USER", "postgres"),
+    "password": os.getenv("DB_PASSWORD", ""),
+    "port": int(os.getenv("DB_PORT", 5432))
 }
+
 # ============================================
 # STEP 1: CHECK LOGIN
 # Verifies username + password against dn_diagnostics.Users

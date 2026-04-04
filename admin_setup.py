@@ -67,21 +67,21 @@ validate_env()
 # ============================================
 ADMIN_DB_CONFIG = {
     "host": os.getenv("DB_HOST", "localhost"),
-    "database": "postgres",
-    "user": os.getenv("Admin_DB_USER"),
-    "password": os.getenv("Admin_DB_PASSWORD"),
-    "port": int(os.getenv("Admin_DB_PORT", 5432))
+    "database": os.getenv("DB_NAME", "dn_diagnostics"),
+    "user": os.getenv("DB_USER", "dn_user"),
+    "password": os.getenv("DB_PASSWORD", "12345"),
+    "port": os.getenv("DB_PORT", "5432")
 }
 
 # ============================================
 # APP DB CONFIG
 # ============================================
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST"),
-    "database": os.getenv("DB_NAME"),
-    "user": os.getenv("DB_USER"),
-    "password": os.getenv("DB_PASSWORD"),
-    "port": int(os.getenv("DB_PORT", 5432))
+    "host": os.getenv("DB_HOST", "localhost"),
+    "database": os.getenv("DB_NAME", "dn_diagnostics"),
+    "user": os.getenv("DB_USER", "dn_user"),
+    "password": os.getenv("DB_PASSWORD", "12345"),
+    "port": os.getenv("DB_PORT", "5432")
 }
 
 # ============================================

@@ -33,10 +33,12 @@ services:
     command: uvicorn main:app --host 0.0.0.0 --port 8000
     environment:
       DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: dn_logs
-      DB_USER: dn_user
-      DB_PASSWORD: dn_pass
+      DB_PORT: "5432"
+      DB_NAME: dndb
+      DB_USER: dnuser
+      DB_PASSWORD: dnpass
+      DB_USER_BACKEND: dnuser
+      DB_PASSWORD_BACKEND: dnpass
       OLLAMA_HOST: http://host.docker.internal:11434
       OLLAMA_MODEL: llama3.2
     ports:
@@ -60,6 +62,12 @@ services:
       DB_NAME: dndb
       DB_USER: dnuser
       DB_PASSWORD: dnpass
+      ADMIN_USERNAME: admin
+      ADMIN_NAME: Admin User
+      ADMIN_PASSWORD: dnadmin
+      ADMIN_EMPLOYEE_CODE: ADM00001
+      ADMIN_ROLE: ADMIN
+      ADMIN_IS_ACTIVE: "True"
       API_BASE_URL: http://backend:8000/api/v1
       OLLAMA_BASE_URL: http://ollama:11434
     ports:

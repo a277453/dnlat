@@ -2,7 +2,7 @@ fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
 pydantic
-streamlit
+streamlit==1.52.1
 pandas
 plotly
 requests
@@ -12,7 +12,7 @@ ollama
 pandas
 xmldict
 psycopg2-binary
-bycrypt
+bcrypt
 load-dotenv
 python-dotenv
 python-jose

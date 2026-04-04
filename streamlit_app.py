@@ -14,15 +14,13 @@ from fastapi.logger import logger
 from modules.analysis import create_analysis_table, create_feedback_table, create_userresponse_database
 from modules.streamlit_logger import logger as frontend_logger
 import time
-from modules.login import create_reset_tokens_table, register_user, is_valid_password, is_same_as_old_password
-import re as _re
-from datetime import datetime as _dt
-
-
+from modules.login import create_reset_tokens_table, is_valid_password, is_same_as_old_password
+import re as _re; from datetime import datetime as _dt
+import html
 
 
 # Import authentication functions
-from admin_setup import create_dn_diagnostics_database, initialize_admin_table, validate_env
+from admin_setup import create_dn_diagnostics_database, initialize_admin_table
 from modules.login import (
     create_login_history_table,
     initialize_session,
@@ -32,9 +30,6 @@ from modules.login import (
 )
 # IMPORTANT 
 initialize_session()
-# def init_app():
-#     validate_env()
-#     create_dn_diagnostics_database()
 
 frontend_logger.info("Streamlit app loaded")
 
@@ -868,110 +863,6 @@ def render_themed_table(df, height=320):
 
 
 # ============================================
-# THEMED TABLE HELPER
-# ============================================
-def render_log_block(text, max_height=400):
-    """
-    Renders transaction log / pre-formatted text in a theme-aware scrollable box.
-    Replaces st.code() which always uses a dark canvas in light mode.
-    """
-    dark     = is_dark()
-    bg       = "#1e1e1e"   if dark else "#f6f8fa"
-    text_col = "#d4d4d4"   if dark else "#1e2a35"
-    border   = "#3a3a3a"   if dark else "#d1d9e0"
-    ln_col   = "#606060"   if dark else "#9ca3af"
-    scroll_thumb = "#505050" if dark else "#b0bec5"
-    scroll_track = "#1e1e1e" if dark else "#f0f2f6"
-
-    lines = str(text).splitlines()
-    rows  = "".join(
-        f"<tr>"
-        f"<td style='padding:1px 12px 1px 8px; color:{ln_col}; text-align:right; "
-        f"user-select:none; font-size:12px; white-space:nowrap; min-width:36px;'>{i+1}</td>"
-        f"<td style='padding:1px 8px; color:{text_col}; font-size:13px; white-space:pre;'>{line}</td>"
-        f"</tr>"
-        for i, line in enumerate(lines)
-    )
-
-    st.markdown(
-        f"<div style='background:{bg}; border:1px solid {border}; border-radius:8px; "
-        f"max-height:{max_height}px; overflow:auto; "
-        f"scrollbar-width:thin; scrollbar-color:{scroll_thumb} {scroll_track};'>"
-        f"<table style='border-collapse:collapse; width:100%; "
-        f"font-family:\"Courier New\",Consolas,monospace;'>"
-        f"<tbody>{rows}</tbody></table></div>",
-        unsafe_allow_html=True
-    )
-
-
-def render_themed_table(df, height=320):
-    """
-    Renders a pandas DataFrame as a fully theme-aware HTML table.
-    Uses the same colour tokens as inject_theme_css() so dark/light
-    mode is always consistent.  Replaces st.dataframe() which draws
-    on an HTML <canvas> and therefore ignores all CSS overrides.
-    Default height=320px shows ~8 rows; anything beyond scrolls.
-    Pass height=None to show all rows without a scrollbar.
-    """
-    dark = is_dark()
-
-    # ── colour tokens (mirrors inject_theme_css) ──────────────────
-    bg_header    = "#1a1a1a" if dark else "#f0f2f6"
-    bg_row       = "#0f0f0f" if dark else "#ffffff"
-    bg_row_alt   = "#141414" if dark else "#f8fafc"
-    bg_hover     = "#1f1f1f" if dark else "#f0f4f8"
-    text_header  = "#ffffff" if dark else "#0d1117"
-    text_cell    = "#e0e0e0" if dark else "#1e2a35"
-    border_inner = "#2a2a2a" if dark else "#d1d9e0"
-    border_outer = "#2a2a2a" if dark else "#b0bec5"
-    header_sep   = "#404040" if dark else "#b0bec5"
-    scrollbar_thumb = "#404040" if dark else "#b0bec5"
-    scrollbar_track = "#1a1a1a" if dark else "#f0f2f6"
-
-    # Sticky header + scrollable body
-    body_scroll = f"max-height:{height}px; overflow-y:auto;" if height else ""
-
-    # Build header row (sticky so it stays visible while scrolling)
-    headers_html = "".join(
-        f"<th style='padding:10px 14px; text-align:left; font-weight:600; "
-        f"font-size:0.78rem; color:{text_header}; background:{bg_header}; "
-        f"border-bottom:2px solid {header_sep}; white-space:nowrap; "
-        f"letter-spacing:0.3px; position:sticky; top:0; z-index:1;'>{col}</th>"
-        for col in df.columns
-    )
-
-    # Build body rows
-    rows_html = ""
-    for i, (_, row) in enumerate(df.iterrows()):
-        row_bg = bg_row if i % 2 == 0 else bg_row_alt
-        cells = "".join(
-            f"<td style='padding:10px 14px; color:{text_cell}; "
-            f"border-bottom:1px solid {border_inner}; font-size:0.875rem; "
-            f"white-space:nowrap;'>{val}</td>"
-            for val in row
-        )
-        rows_html += (
-            f"<tr style='background:{row_bg};' "
-            f"onmouseover=\"this.style.background='{bg_hover}'\" "
-            f"onmouseout=\"this.style.background='{row_bg}'\">"
-            f"{cells}</tr>"
-        )
-
-    html = (
-        f"<div style='border:1px solid {border_outer}; border-radius:8px; "
-        f"overflow:hidden; width:100%;'>"
-        f"<div style='{body_scroll} overflow-x:auto; "
-        f"scrollbar-width:thin; scrollbar-color:{scrollbar_thumb} {scrollbar_track};'>"
-        f"<table style='width:100%; border-collapse:collapse; "
-        f"font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;'>"
-        f"<thead><tr>{headers_html}</tr></thead>"
-        f"<tbody>{rows_html}</tbody>"
-        f"</table></div></div>"
-    )
-    st.markdown(html, unsafe_allow_html=True)
-
-
-# ============================================
 # LOGIN PAGE UI
 # ============================================
 
@@ -1021,6 +912,7 @@ def show_login_page():
             btn_label = "Enter Dev Mode" if st.session_state.get("dev_mode", False) else "Login"
             submit = st.form_submit_button(btn_label, use_container_width=True)
 
+
         # Handle login
         if submit:
             if not username:
@@ -1059,20 +951,17 @@ def show_login_page():
 
 
         # ---------------------------
-        # REGISTER BUTTON (NEW)
+        # REGISTER + FORGOT PASSWORD BUTTONS (side by side, equal size)
         # ---------------------------
         st.markdown("<br>", unsafe_allow_html=True)
+        col_reg, col_forgot = st.columns(2)
 
-        if st.button(" Register New User", use_container_width=True):
-            st.session_state.page = "register"
-            st.rerun()
+        with col_reg:
+            if st.button(" Register New User", use_container_width=True, key="register_btn"):
+                st.session_state.page = "register"
+                st.rerun()
 
-        # ---------------------------
-        # FORGOT PASSWORD BUTTON
-        # ---------------------------
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_left, col_center, col_right = st.columns([1, 2, 1])
-        with col_center:
+        with col_forgot:
             if st.button(
                 "Forgot Password?",
                 use_container_width=True,
@@ -1181,24 +1070,24 @@ def show_register_page():
 
             email = email.strip().lower()
             name = name.strip().title()
-            #CAtharv_0702:Changed the spacing in logging.
+            
             if not all([email, name, password, confirm_password, employee_code]):
-                st.error("All fields are required")
+                st.error("  All fields are required")
 
             elif not re.match(email_pattern, email):
                 st.error("Please use your official Diebold Nixdorf email ID")
 
             elif not re.match(name_pattern, name):
-                st.error("Name must contain only letters and spaces")    
+                st.error("  Name must contain only letters and spaces")    
             
             elif not is_valid_password(password):
                 st.error("Password must be at least 8 characters long and include uppercase, lowercase, Min 2 digits, and special character.")
 
             elif password != confirm_password:
-                st.error("Passwords do not match with confirm password")
+                st.error("  Passwords do not match with confirm password")
 
             elif is_invalid_emp_code(employee_code):
-                st.error("Please enter a valid 8-digit employee code")
+                st.error("  Please enter a valid 8-digit employee code")
 
 
             else:
@@ -1326,7 +1215,7 @@ def show_forgot_password_page():
                     )
                     _base_url = f"{_proto}://{_host}"
                 except Exception:
-                    _base_url = "http://backend:8501"
+                    _base_url = "http://localhost:8501"
 
                 # ── POST /forgot-password ──────────────────────────
                 # API handles: identity check + token + email in one call.
@@ -2475,10 +2364,6 @@ def render_transaction_stats():
 
 
 def render_registry_single():
-    # RBAC guard — USER role is not permitted to access this feature
-    if st.session_state.get("role") == "USER":
-        st.error(" Access Denied — your role does not have permission to use this feature.")
-        return
     """
 FUNCTION: render_registry_single
 
@@ -2504,8 +2389,12 @@ RAISES:
     requests.exceptions.ConnectionError : If API server is not reachable
     Exception                           : For any unexpected errors during execution
 """
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
 
-    st.markdown("#### Registry File Viewer")
+    st.markdown("####  Registry File Viewer")
 
     # Get registry contents from session via API
     try:
@@ -2519,7 +2408,7 @@ RAISES:
             st.error(" Access Denied — your role does not have permission to use this feature.")
             return None
         if response.status_code != 200:
-            st.error("Failed to load registry files from session")
+            st.error("  Failed to load registry files from session")
             logger.error(f"API call failed with status: {response.status_code}")
             return
             
@@ -2527,7 +2416,7 @@ RAISES:
         registry_contents = registry_data.get('registry_contents', {})
         
         if not registry_contents:
-            st.warning("No registry files found in the uploaded package.")
+            st.warning("  No registry files found in the uploaded package.")
             return
 
         # Create file selection dropdown
@@ -2613,13 +2502,13 @@ RAISES:
             st.code(traceback.format_exc())
 
 def render_registry_compare():
+    """
+    Render registry file comparison interface with in-memory content loading
+    """
     # RBAC guard — USER role is not permitted to access this feature
     if st.session_state.get("role") == "USER":
         st.error(" Access Denied — your role does not have permission to use this feature.")
         return
-    """
-    Render registry file comparison interface with in-memory content loading
-    """
     st.markdown("#### Registry File Comparison")
     
     # Get registry contents from Package A (main session)
@@ -2634,18 +2523,18 @@ def render_registry_compare():
             st.error(" Access Denied — your role does not have permission to use this feature.")
             return None
         if response.status_code != 200:
-            st.error("Failed to load registry files from first package")
+            st.error("  Failed to load registry files from first package")
             return
             
         registry_data = response.json()
         registry_contents_a = registry_data.get('registry_contents', {})
         
         if not registry_contents_a:
-            st.warning("No registry files found in the first uploaded package.")
+            st.warning("  No registry files found in the first uploaded package.")
             return
         
         st.markdown("#### Step 1: First Package (Already Loaded)")
-        st.success(f"Loaded {len(registry_contents_a)} registry file(s) from main package")
+        st.success(f"  Loaded {len(registry_contents_a)} registry file(s) from main package")
         
         # Show available files from first package
         with st.expander("View files in first package"):
@@ -2776,15 +2665,15 @@ def render_registry_compare():
                             text_a = safe_decode(content_a)
                             text_b = safe_decode(content_b)
                             
-                            # Check if files are identical
-                            if text_a == text_b:
-                                st.success("No changes in Registry - Files are identical")
-                                st.info(f"**{selected_filename}** has no differences between Package 1 and Package 2")
-                            else:
-                                # Render side-by-side comparison
-                                fname_a = f"Package 1: {selected_filename}"
-                                fname_b = f"Package 2: {selected_filename}"
-                                render_side_by_side_diff(text_a, text_b, fname_a, fname_b)
+                            # Store in session state so it persists across checkbox reruns
+                            st.session_state.registry_comparison = {
+                                'text_a': text_a,
+                                'text_b': text_b,
+                                'fname_a': f"Package 1: {selected_filename}",
+                                'fname_b': f"Package 2: {selected_filename}",
+                                'selected_file': selected_filename
+                            }
+                            # st.rerun()
 
                         except Exception as e:
                             st.error(f"Error comparing files: {str(e)}")
@@ -2816,10 +2705,6 @@ def render_registry_compare():
             st.code(traceback.format_exc())
 
 def render_transaction_comparison():
-    # RBAC guard — USER role is not permitted to access this feature
-    if st.session_state.get("role") == "USER":
-        st.error("Access Denied — your role does not have permission to use this feature.")
-        return
     """
     FUNCTION:
         render_transaction_comparison
@@ -2853,6 +2738,10 @@ def render_transaction_comparison():
             Any unexpected error during API calls, analysis, or comparison is
             caught and displayed via Streamlit.
     """
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error("Access Denied — your role does not have permission to use this feature.")
+        return
     st.markdown("####   Transaction Comparison Analysis")
     
     need_analysis = False
@@ -3447,10 +3336,6 @@ def render_transaction_comparison():
             st.code(traceback.format_exc())
 
 def render_ui_flow_individual():
-    # RBAC guard — USER role is not permitted to access this feature
-    if st.session_state.get("role") == "USER":
-        st.error(" Access Denied — your role does not have permission to use this feature.")
-        return
     """
     FUNCTION:
         render_ui_flow_individual
@@ -3483,7 +3368,11 @@ def render_ui_flow_individual():
             Any unexpected errors during API calls, analysis, filtering, or visualization
             are caught and displayed via Streamlit.
     """
-    st.markdown("#### UI Flow of Individual Transaction")
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
+    st.markdown("####   UI Flow of Individual Transaction")
     
     need_analysis = False
     
@@ -3736,7 +3625,7 @@ def render_ui_flow_individual():
                     
                     # Display UI flow
                     st.markdown("---")
-                    st.markdown("#### UI Flow Visualization")
+                    st.markdown("####   UI Flow Visualization")
                     
                     ui_flow = viz_data.get('ui_flow', [])
                     has_flow = viz_data.get('has_flow', False)
@@ -4284,10 +4173,6 @@ def create_consolidated_flow_plotly(flow_data):
     return fig
 
 def render_consolidated_flow():
-    # RBAC guard — USER role is not permitted to access this feature
-    if st.session_state.get("role") == "USER":
-        st.error(" Access Denied — your role does not have permission to use this feature.")
-        return
     """
     FUNCTION:
         render_consolidated_flow
@@ -4320,6 +4205,10 @@ def render_consolidated_flow():
         - Includes metrics for total, successful, and unsuccessful transactions.
         - Detailed transaction flows can be expanded to review each transaction's UI path.
     """
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
 
     st.markdown("####  Consolidated Transaction UI Flow and Analysis")
     
@@ -4487,7 +4376,7 @@ def render_consolidated_flow():
                         st.error(f"  {error_detail}")
                         
                 except requests.exceptions.Timeout:
-                    st.error("Request timeout. Please try again.")
+                    st.error("⏱  Request timeout. Please try again.")
                 except requests.exceptions.ConnectionError:
                     st.error("  Connection error. Ensure the API server is running.")
                 except Exception as e:
@@ -4795,18 +4684,32 @@ RAISES:
             st.markdown("---")
             st.markdown("####   AI Analysis")
             
-            logger.info(f"Ollama output was:- {result}")
             analysis_text = result.get('analysis', 'No analysis available')
             
             # Display in a theme-aware box
             _a_bg     = "#1e1e1e" if is_dark() else "#f6f8fa"
             _a_border = "#4CAF50"
             _a_text   = "#ffffff" if is_dark() else "#1e2a35"
+            cleaned = analysis_text.strip()
+            if cleaned.startswith('---'):
+                cleaned = cleaned[3:].lstrip('\n')
+            if cleaned.endswith('---'):
+                cleaned = cleaned[:-3].rstrip('\n')
+
+            escaped = html.escape(cleaned)
+            escaped = escaped.replace('\n', '<br>')
+            escaped = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', escaped)
+            escaped = re.sub(r'<br>- ', '<br>• ', escaped)
+            escaped = re.sub(r'^- ', '• ', escaped)
+            escaped = re.sub(r'<br>(\d+)\. ', r'<br>\1. ', escaped)
+            # Internal --- becomes a styled divider
+            escaped = escaped.replace('---', '<hr style="border-color:#333; margin:10px 0;">')
+
             st.markdown(
                 f"<div style='background-color:{_a_bg}; padding:20px; border-radius:10px; "
-                f"border-left:5px solid {_a_border};'>"
-                f"<pre style='color:{_a_text}; white-space:pre-wrap; word-wrap:break-word; "
-                f"font-family:monospace; font-size:14px; margin:0;'>{analysis_text}</pre>"
+                f"border-left:5px solid {_a_border}; color:{_a_text}; "
+                f"font-family:sans-serif; font-size:14px; line-height:1.8;'>"
+                f"{escaped}"
                 f"</div>",
                 unsafe_allow_html=True
             )
@@ -4827,13 +4730,14 @@ RAISES:
                 feedback_key_prefix = f"feedback_{selected_txn_id}"
                 
                 # User authentication data
-                users = {
-                    "Select User": {"email": "", "passcode": ""},
-                    "Ashish Trivedi (ashish.trivedi@dieboldnixdorf.com)": {"email": "ashish.trivedi@dieboldnixdorf.com", "passcode": "1234"},
-                    "Atharv Deshpande (atharv.deshpande@dieboldnixdorf.com)": {"email": "atharv.deshpande@dieboldnixdorf.com", "passcode": "5678"},
-                    "Prasad Avasare (prasad.avasare@dieboldnixdorf.com)": {"email": "prasad.avasare@dieboldnixdorf.com", "passcode": "9012"},
-                    "Saniya Payal(saniya.payal@dieboldnixdorf.com)": {"email": "saniya.payal@dieboldnixdorf.com", "passcode": "3456"}
-                }
+                # NOTE: Dropdown removed — feedback is now submitted under the logged-in user automatically.
+                # users = {
+                #     "Select User": {"email": "", "passcode": ""},
+                #     "Ashish Trivedi (ashish.trivedi@dieboldnixdorf.com)": {"email": "ashish.trivedi@dieboldnixdorf.com", "passcode": "1234"},
+                #     "Atharv Deshpande (atharv.deshpande@dieboldnixdorf.com)": {"email": "atharv.deshpande@dieboldnixdorf.com", "passcode": "5678"},
+                #     "Prasad Avasare (prasad.avasare@dieboldnixdorf.com)": {"email": "prasad.avasare@dieboldnixdorf.com", "passcode": "9012"},
+                #     "Saniya Payal(saniya.payal@dieboldnixdorf.com)": {"email": "saniya.payal@dieboldnixdorf.com", "passcode": "3456"}
+                # }
                 
                 # Question 1: Rating
                 st.markdown("#### 1️  Rate the Analysis Quality")
@@ -4889,27 +4793,33 @@ RAISES:
                 questions_answered = sum([rating_answered, alternative_answered, comment_answered])
                 
                 # User Authentication (only if questions answered)
-                user_name = ""
-                user_email = ""
+                # NOTE: Dropdown removed — using logged-in user automatically.
+                # user_name = ""
+                # user_email = ""
 
-                if questions_answered > 0:
-                    st.markdown("---")
-                    st.markdown("####   User Selection Required")
-                    st.info("Please select your name to submit feedback.")
-                    
-                    selected_user = st.selectbox(
-                        "Select your name and email:",
-                        list(users.keys()),
-                        key=f"{feedback_key_prefix}_user_select"
-                    )
-                    
-                    if selected_user != "Select User":
-                        user_name = selected_user.split(" (")[0]
-                        user_email = users[selected_user]["email"]
-                        st.success(f"  Selected: {user_name}")
-                    
-                    if selected_user == "Select User":
-                        st.warning("  Please select your name and email to continue.")
+                # if questions_answered > 0:
+                #     st.markdown("---")
+                #     st.markdown("####   User Selection Required")
+                #     st.info("Please select your name to submit feedback.")
+                #
+                #     selected_user = st.selectbox(
+                #         "Select your name and email:",
+                #         list(users.keys()),
+                #         key=f"{feedback_key_prefix}_user_select"
+                #     )
+                #
+                #     if selected_user != "Select User":
+                #         user_name = selected_user.split(" (")[0]
+                #         user_email = users[selected_user]["email"]
+                #         st.success(f"  Selected: {user_name}")
+                #
+                #     if selected_user == "Select User":
+                #         st.warning("  Please select your name and email to continue.")
+
+                # Use the logged-in user's credentials directly
+                user_name = st.session_state.get("username", "")
+                user_email = st.session_state.get("email", "")
+                selected_user = user_name  # keeps existing submit-button logic compatible
                 
                 # Submit Feedback
                 st.markdown("---")
@@ -4918,7 +4828,7 @@ RAISES:
                 with col1:
                     _role = st.session_state.get("role", "USER")
                     _admin_blocked = _role == "ADMIN"
-                    can_submit = questions_answered > 0 and selected_user != "Select User"
+                    can_submit = questions_answered > 0
 
                     if _admin_blocked:
                         st.info(" ADMIN role cannot submit feedback.")
@@ -4931,8 +4841,6 @@ RAISES:
                         
                         if questions_answered == 0:
                             st.error("Please answer at least one question before submitting.")
-                        elif selected_user == "Select User":
-                            st.error("Please select your name and email.")
                         else:
                             # Submit feedback to API
                             with st.spinner("Submitting feedback..."):
@@ -4961,47 +4869,25 @@ RAISES:
                                         result_data = response.json()
                                         st.success(result_data['message'])
                                         
-                                        feedback_data = {
-                                            "transaction_id": selected_txn_id,
-                                            "rating": st.session_state.get(f"{feedback_key_prefix}_rating", 3),
-                                            "alternative_cause": st.session_state.get(f"{feedback_key_prefix}_alternative", anomaly_categories[0]),
-                                            "comment": st.session_state.get(f"{feedback_key_prefix}_comment", ""),
-                                            "user_name": st.session_state.get("username"),
-                                            "user_email": user_email,
-                                            "model_version": result.get("metadata", {}).get("model", "unknown"),
-                                            "original_llm_response": result.get('analysis', '')
-                                        }
+                                        # Clear form
+                                        keys_to_clear = [
+                                            f"{feedback_key_prefix}_rating",
+                                            f"{feedback_key_prefix}_alternative",
+                                            f"{feedback_key_prefix}_comment",
+                                        ]
+                                        for key in keys_to_clear:
+                                            if key in st.session_state:
+                                                del st.session_state[key]
                                         
-                                        response = requests.post(
-                                            f"{API_BASE_URL}/submit-llm-feedback",
-                                            json=feedback_data,
-                                            timeout=30
-                                        )
+                                        import time
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        error_detail = response.json().get('detail', 'Failed to submit')
+                                        st.error(f"  {error_detail}")
                                         
-                                        if response.status_code == 200:
-                                            result_data = response.json()
-                                            st.success(result_data['message'])
-                                            
-                                            # Clear form
-                                            keys_to_clear = [
-                                                f"{feedback_key_prefix}_rating",
-                                                f"{feedback_key_prefix}_alternative",
-                                                f"{feedback_key_prefix}_comment",
-                                                f"{feedback_key_prefix}_user_select"
-                                            ]
-                                            for key in keys_to_clear:
-                                                if key in st.session_state:
-                                                    del st.session_state[key]
-                                            
-                                            import time
-                                            time.sleep(1)
-                                            st.rerun()
-                                        else:
-                                            error_detail = response.json().get('detail', 'Failed to submit')
-                                            st.error(f"  {error_detail}")
-                                            
-                                    except Exception as e:
-                                        st.error(f"  Error submitting feedback: {str(e)}")
+                                except Exception as e:
+                                    st.error(f"  Error submitting feedback: {str(e)}")
 
                 with col2:
                     if st.button("Clear Form", 
@@ -5011,8 +4897,6 @@ RAISES:
                             f"{feedback_key_prefix}_rating",
                             f"{feedback_key_prefix}_alternative",
                             f"{feedback_key_prefix}_comment",
-                            f"{feedback_key_prefix}_user_select",
-                            f"{feedback_key_prefix}_passcode"
                         ]
                         for key in keys_to_clear:
                             if key in st.session_state:
@@ -5113,10 +4997,6 @@ RAISES:
                     st.error(f"Failed to connect to API: {str(e)}")
 
 def render_counters_analysis():
-    # RBAC guard — USER role is not permitted to access this feature
-    if st.session_state.get("role") == "USER":
-        st.error(" Access Denied — your role does not have permission to use this feature.")
-        return
     """
 FUNCTION: render_counters_analysis
 
@@ -5144,6 +5024,10 @@ RAISES:
     requests.exceptions.ConnectionError : If API server is not reachable
     Exception                           : For any unexpected errors during execution
 """
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
 
     st.markdown("####   Counters Analysis ")
     
@@ -5288,12 +5172,12 @@ RAISES:
         source_transactions = txn_df[txn_df['Source File'] == selected_source]
         
         if len(source_transactions) == 0:
-            st.warning(f"No transactions found in source '{selected_source}'")
+            st.warning(f"  No transactions found in source '{selected_source}'")
             return
         
         # Transaction selection
         st.markdown("---")
-        st.markdown("#### Select Transaction")
+        st.markdown("####   Select Transaction")
 
         # Filter to only transactions from this specific source file
         source_only_transactions = txn_df[txn_df['Source File'] == selected_source].copy()
@@ -5432,7 +5316,7 @@ RAISES:
                     
                     st.markdown("---")
                     
-                    st.markdown("#### Counter per Transaction")
+                    st.markdown("####   Counter per Transaction")
 
                     if 'counter_per_transaction' in counter_data and counter_data['counter_per_transaction']:
                         txn_table_data = []
@@ -5717,10 +5601,6 @@ RAISES:
             st.code(traceback.format_exc())
 
 def render_acu_single_parse(): # MODIFIED
-    # RBAC guard — USER role is not permitted to access this feature
-    if st.session_state.get("role") == "USER":
-        st.error(" Access Denied — your role does not have permission to use this feature.")
-        return
     """
     FUNCTION:
         render_acu_single_parse
@@ -5751,6 +5631,10 @@ def render_acu_single_parse(): # MODIFIED
                        are caught and shown via Streamlit error boxes.
     """
     #st.write("SESSION STATE DEBUG:", st.session_state)   # debug Added
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
 
     st.markdown("####   ACU Configuration Parser")
     
@@ -5914,10 +5798,6 @@ def render_acu_single_parse(): # MODIFIED
 
 
 def render_acu_compare(): # MODIFIED
-    # RBAC guard — USER role is not permitted to access this feature
-    if st.session_state.get("role") == "USER":
-        st.error(" Access Denied — your role does not have permission to use this feature.")
-        return
     """
 FUNCTION: render_acu_compare
 
@@ -5940,6 +5820,10 @@ RAISES:
     requests.exceptions.ConnectionError: If the API server is unreachable.
     Exception                         : For general errors during file loading, extraction, or comparison.
 """
+    # RBAC guard — USER role is not permitted to access this feature
+    if st.session_state.get("role") == "USER":
+        st.error(" Access Denied — your role does not have permission to use this feature.")
+        return
     st.markdown("####   ACU Configuration Comparison")
     st.info("Compare ACU configuration files from two different ZIP archives.")
     
@@ -5984,7 +5868,7 @@ RAISES:
             except Exception as e:
                 st.error(f"Error loading Source A: {e}")
     else:
-        st.success(f"**Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
+        st.success(f"✓ **Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
     
     st.markdown("---")
     

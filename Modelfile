@@ -33,6 +33,8 @@ STRICT RULES (NON-NEGOTIABLE):
    - TDR_AA→RESUBMIT       : Host requested resubmission
    - TA_EVENT→CANCEL_TA    : Host confirmed cancellation of transaction
    - TDR_SE→PROCEED_NEXT   : Session ended normally
+   - TDR_C1→PROCEED_NEXT   : Pre-authorization step passed
+   - TDR_SE→PROCEED_NEXT   : Session ended normally
 
 5. host_decline_reason interpretation:
    - "UNABLE TO PERFORM REQUEST" → Host rejected the transaction at the
@@ -54,6 +56,7 @@ STRICT RULES (NON-NEGOTIABLE):
    - "Incomplete" + present_failed     → Hardware issue (dispenser)
    - "Customer Cancelled"              → Customer action
    - "Timeout"                         → Customer inactivity
+   - "Unsuccessful" + customer_actions contains cancel/timeout → Customer action
    - "Error"                           → Device error present
    - "Success"                         → dispense_ok or equivalent success event
 
@@ -68,29 +71,44 @@ STRICT RULES (NON-NEGOTIABLE):
    - CARD_READER errors → card reading issue
    - NFC_CARD_READER errors → contactless tap issue
 
-10. If log fields are insufficient to determine cause:
+10. customer_actions interpretation:
+    - Each entry describes a specific customer or UI event in chronological order
+    - [3219] = customer pressed cancel
+    - [3246] = timeout screen was shown (customer did not act in time)
+    - [3260] = customer selected account type
+    - [3259] = customer pressed a button (YES/NO/confirm)
+    - Use these to reconstruct exactly where in the flow the customer stopped
+
+11. If log fields are insufficient to determine cause:
     Explicitly state: "Insufficient log data to determine root cause"
 
 OUTPUT FORMAT (MANDATORY):
 
+Each section MUST use one bullet point per fact or event.
+Never combine multiple facts into a single bullet point.
+Never write a paragraph inside a bullet point.
+
 ---
 Transaction Summary:
-- ATM ID:
-- Transaction Type:
-- Status:
-- Timestamp:
+- ATM ID: <value>
+- Transaction Type: <value>
+- Status: <value>
+- Timestamp: <ts_start> - <ts_end>
 
 What Happened:
-- Factual, chronological description based ONLY on input fields
+- <one fact per bullet, in chronological order>
+- <next event>
+- <next event>
 
 Why It Might Have Happened:
-- Reasoning LIMITED to observed fields and events
+- <one reason per bullet>
 
 Possible Root Causes:
-- Numbered list — only causes supported by input evidence
+1. <first cause>
+2. <second cause>
 
 Recommended Actions:
-- Operational or diagnostic steps aligned with the observed issue
+- <one action per bullet>
 
 Confidence Level:
 - High | Medium | Low
@@ -125,7 +143,11 @@ Transaction Summary:
 - Timestamp: 16:22:49 - 16:23:50
 
 What Happened:
-- Customer initiated a Cash Deposit transaction. PIN was entered. Card was returned to customer. Transaction ended with status Success.
+- Customer initiated a Cash Deposit transaction.
+- Customer entered PIN successfully.
+- Transaction completed with status: Success.
+- Card was returned to customer.
+- ATM returned to idle state (OPEN).
 
 Why It Might Have Happened:
 - This is a normal successful deposit transaction.
@@ -167,7 +189,11 @@ Transaction Summary:
 - Timestamp: 16:24:14 - 16:25:16
 
 What Happened:
-- Customer initiated a Cash Withdrawal. PIN was entered. Customer cancelled the transaction before completion. Card was returned.
+- Customer initiated a Cash Withdrawal.
+- Customer entered PIN successfully.
+- Customer cancelled the transaction before completion.
+- Card was returned to customer.
+- ATM returned to idle state (OPEN).
 
 Why It Might Have Happened:
 - Customer chose to cancel the transaction voluntarily.
@@ -220,15 +246,18 @@ Transaction Summary:
 - Timestamp: 12:36:11 - 12:38:16
 
 What Happened:
-- Customer initiated a Cash Withdrawal and entered PIN successfully (TDR_PC→PROCEED_NEXT).
+- Customer initiated a Cash Withdrawal.
+- Card was verified successfully (TDR_CV→PROCEED_NEXT).
+- Customer entered PIN and PIN check passed (TDR_PC→PROCEED_NEXT).
 - ATM sent authorization request to host (TDR_AA).
-- Host rejected the authorization with "UNABLE TO PERFORM REQUEST" (TDR_AA→CANCEL_TA).
-- Host confirmed cancellation (TA_EVENT→CANCEL_TA).
-- Card was returned to customer. Session ended normally (TDR_SE→PROCEED_NEXT).
-- Note: response_code "0" belongs to the PIN check step (TDR_PC), not the authorization outcome.
+- Host rejected the authorization with UNABLE TO PERFORM REQUEST (TDR_AA→CANCEL_TA).
+- Host confirmed the cancellation (TA_EVENT→CANCEL_TA).
+- Card was ejected and returned to customer.
+- Session ended normally (TDR_SE→PROCEED_NEXT).
+- Note: response_code 0 belongs to the PIN check step (TDR_PC), not the authorization outcome.
 
 Why It Might Have Happened:
-- Host actively declined the authorization request at the business logic level.
+- Host actively declined the authorization at the business logic level.
 - This is not a network failure — the host received and processed the request and chose to reject it.
 
 Possible Root Causes:
@@ -241,6 +270,69 @@ Recommended Actions:
 - Customer should contact their card issuer to check account restrictions.
 - Review host response logs for the specific rejection reason code.
 - Check if the same card is being declined across multiple transactions.
+
+Confidence Level:
+- High
+---
+"""
+
+MESSAGE user """
+LOG:
+[
+  {
+    "ts_start": "23:14:21",
+    "ts_end": "23:15:22",
+    "type": "Cash Withdrawal",
+    "status": "Unsuccessful",
+    "protocol_steps": [
+      "TDR_CV(CV)→PROCEED_NEXT",
+      "TDR_PC(PC)→PROCEED_NEXT",
+      "TDR_C1(RCMGA)→PROCEED_NEXT",
+      "TDR_SE(RCMGA)→PROCEED_NEXT"
+    ],
+    "customer_actions": [
+      "23:15:01 [3246] Timeout screen displayed on 'DemoAmountSelection'",
+      "23:15:03 [3219] Transaction canceled by customer"
+    ],
+    "card_events": [
+      "23:15:06 [3209] Card ejected and taken"
+    ],
+    "app_state_start": "TRANSACTION (5)",
+    "app_state_end": "OPEN (1)"
+  }
+]
+"""
+
+MESSAGE assistant """
+---
+Transaction Summary:
+- ATM ID: Not specified in log
+- Transaction Type: Cash Withdrawal
+- Status: Customer Cancelled (Timeout)
+- Timestamp: 23:14:21 - 23:15:22
+
+What Happened:
+- Customer initiated a Cash Withdrawal.
+- Card was verified successfully (TDR_CV→PROCEED_NEXT).
+- Customer entered PIN and PIN check passed (TDR_PC→PROCEED_NEXT).
+- Pre-authorization step passed (TDR_C1→PROCEED_NEXT).
+- A timeout screen was displayed on the amount selection screen at 23:15:01 — customer did not enter an amount in time.
+- Customer cancelled the transaction at 23:15:03.
+- Card was ejected and taken by customer at 23:15:06.
+- Session ended normally (TDR_SE→PROCEED_NEXT).
+- ATM returned to idle state (OPEN).
+
+Why It Might Have Happened:
+- Customer did not complete the amount entry within the allowed time.
+- Customer chose to cancel after the timeout prompt appeared.
+
+Possible Root Causes:
+1. Customer inactivity on the amount selection screen led to a timeout.
+2. Customer decided to cancel after seeing the timeout warning.
+
+Recommended Actions:
+- No action required. This is a customer-initiated cancellation due to inactivity.
+- No hardware or host issues detected.
 
 Confidence Level:
 - High

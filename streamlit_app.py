@@ -908,7 +908,10 @@ def show_login_page():
                 placeholder="Enter your password",
                 key="login_password"
             )
-            submit = st.form_submit_button("Login", use_container_width=True)
+            # Button label reflects dev mode state
+            btn_label = "Enter Dev Mode" if st.session_state.get("dev_mode", False) else "Login"
+            submit = st.form_submit_button(btn_label, use_container_width=True)
+
 
         # Handle login
         if submit:
@@ -948,20 +951,17 @@ def show_login_page():
 
 
         # ---------------------------
-        # REGISTER BUTTON (NEW)
+        # REGISTER + FORGOT PASSWORD BUTTONS (side by side, equal size)
         # ---------------------------
         st.markdown("<br>", unsafe_allow_html=True)
+        col_reg, col_forgot = st.columns(2)
 
-        if st.button(" Register New User", use_container_width=True):
-            st.session_state.page = "register"
-            st.rerun()
+        with col_reg:
+            if st.button(" Register New User", use_container_width=True, key="register_btn"):
+                st.session_state.page = "register"
+                st.rerun()
 
-        # ---------------------------
-        # FORGOT PASSWORD BUTTON
-        # ---------------------------
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_left, col_center, col_right = st.columns([1, 2, 1])
-        with col_center:
+        with col_forgot:
             if st.button(
                 "Forgot Password?",
                 use_container_width=True,
@@ -2673,7 +2673,7 @@ def render_registry_compare():
                                 'fname_b': f"Package 2: {selected_filename}",
                                 'selected_file': selected_filename
                             }
-                            st.rerun()
+                            # st.rerun()
 
                         except Exception as e:
                             st.error(f"Error comparing files: {str(e)}")
@@ -4730,13 +4730,14 @@ RAISES:
                 feedback_key_prefix = f"feedback_{selected_txn_id}"
                 
                 # User authentication data
-                users = {
-                    "Select User": {"email": "", "passcode": ""},
-                    "Ashish Trivedi (ashish.trivedi@dieboldnixdorf.com)": {"email": "ashish.trivedi@dieboldnixdorf.com", "passcode": "1234"},
-                    "Atharv Deshpande (atharv.deshpande@dieboldnixdorf.com)": {"email": "atharv.deshpande@dieboldnixdorf.com", "passcode": "5678"},
-                    "Prasad Avasare (prasad.avasare@dieboldnixdorf.com)": {"email": "prasad.avasare@dieboldnixdorf.com", "passcode": "9012"},
-                    "Saniya Payal(saniya.payal@dieboldnixdorf.com)": {"email": "saniya.payal@dieboldnixdorf.com", "passcode": "3456"}
-                }
+                # NOTE: Dropdown removed — feedback is now submitted under the logged-in user automatically.
+                # users = {
+                #     "Select User": {"email": "", "passcode": ""},
+                #     "Ashish Trivedi (ashish.trivedi@dieboldnixdorf.com)": {"email": "ashish.trivedi@dieboldnixdorf.com", "passcode": "1234"},
+                #     "Atharv Deshpande (atharv.deshpande@dieboldnixdorf.com)": {"email": "atharv.deshpande@dieboldnixdorf.com", "passcode": "5678"},
+                #     "Prasad Avasare (prasad.avasare@dieboldnixdorf.com)": {"email": "prasad.avasare@dieboldnixdorf.com", "passcode": "9012"},
+                #     "Saniya Payal(saniya.payal@dieboldnixdorf.com)": {"email": "saniya.payal@dieboldnixdorf.com", "passcode": "3456"}
+                # }
                 
                 # Question 1: Rating
                 st.markdown("#### 1️  Rate the Analysis Quality")
@@ -4792,27 +4793,33 @@ RAISES:
                 questions_answered = sum([rating_answered, alternative_answered, comment_answered])
                 
                 # User Authentication (only if questions answered)
-                user_name = ""
-                user_email = ""
+                # NOTE: Dropdown removed — using logged-in user automatically.
+                # user_name = ""
+                # user_email = ""
 
-                if questions_answered > 0:
-                    st.markdown("---")
-                    st.markdown("####   User Selection Required")
-                    st.info("Please select your name to submit feedback.")
-                    
-                    selected_user = st.selectbox(
-                        "Select your name and email:",
-                        list(users.keys()),
-                        key=f"{feedback_key_prefix}_user_select"
-                    )
-                    
-                    if selected_user != "Select User":
-                        user_name = selected_user.split(" (")[0]
-                        user_email = users[selected_user]["email"]
-                        st.success(f"  Selected: {user_name}")
-                    
-                    if selected_user == "Select User":
-                        st.warning("  Please select your name and email to continue.")
+                # if questions_answered > 0:
+                #     st.markdown("---")
+                #     st.markdown("####   User Selection Required")
+                #     st.info("Please select your name to submit feedback.")
+                #
+                #     selected_user = st.selectbox(
+                #         "Select your name and email:",
+                #         list(users.keys()),
+                #         key=f"{feedback_key_prefix}_user_select"
+                #     )
+                #
+                #     if selected_user != "Select User":
+                #         user_name = selected_user.split(" (")[0]
+                #         user_email = users[selected_user]["email"]
+                #         st.success(f"  Selected: {user_name}")
+                #
+                #     if selected_user == "Select User":
+                #         st.warning("  Please select your name and email to continue.")
+
+                # Use the logged-in user's credentials directly
+                user_name = st.session_state.get("username", "")
+                user_email = st.session_state.get("email", "")
+                selected_user = user_name  # keeps existing submit-button logic compatible
                 
                 # Submit Feedback
                 st.markdown("---")
@@ -4821,7 +4828,7 @@ RAISES:
                 with col1:
                     _role = st.session_state.get("role", "USER")
                     _admin_blocked = _role == "ADMIN"
-                    can_submit = questions_answered > 0 and selected_user != "Select User"
+                    can_submit = questions_answered > 0
 
                     if _admin_blocked:
                         st.info(" ADMIN role cannot submit feedback.")
@@ -4834,8 +4841,6 @@ RAISES:
                         
                         if questions_answered == 0:
                             st.error("Please answer at least one question before submitting.")
-                        elif selected_user == "Select User":
-                            st.error("Please select your name and email.")
                         else:
                             # Submit feedback to API
                             with st.spinner("Submitting feedback..."):
@@ -4869,7 +4874,6 @@ RAISES:
                                             f"{feedback_key_prefix}_rating",
                                             f"{feedback_key_prefix}_alternative",
                                             f"{feedback_key_prefix}_comment",
-                                            f"{feedback_key_prefix}_user_select"
                                         ]
                                         for key in keys_to_clear:
                                             if key in st.session_state:
@@ -4893,8 +4897,6 @@ RAISES:
                             f"{feedback_key_prefix}_rating",
                             f"{feedback_key_prefix}_alternative",
                             f"{feedback_key_prefix}_comment",
-                            f"{feedback_key_prefix}_user_select",
-                            f"{feedback_key_prefix}_passcode"
                         ]
                         for key in keys_to_clear:
                             if key in st.session_state:

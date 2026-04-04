@@ -193,7 +193,7 @@ def get_db_connection():
         logger.debug("Database connection established")
         return conn
     except Exception as e:
-        logger.error("Database connection failed:%s",e)
+        logger.error("Database connection failed")
         return None
 
 # ============================================

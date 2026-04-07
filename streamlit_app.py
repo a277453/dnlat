@@ -1112,7 +1112,11 @@ def show_register_page():
                         st.session_state.page = "login"
                         st.rerun()
                     else:
-                        st.error(response.json().get("detail", "Registration failed."))
+                        try:
+                            error_msg = response.json().get("detail", "Registration failed. Please try again.")
+                        except ValueError:
+                            error_msg = response.text or "Registration failed. Please try again."
+                        st.error(error_msg)
 
                 except requests.exceptions.ConnectionError:
                     st.error("Service temporarily unavailable. Please try again later.")
@@ -4449,7 +4453,7 @@ RAISES:
                     analyze_response = requests.post(
                         f"{API_BASE_URL}/analyze-customer-journals",
                         headers=get_auth_headers(),
-                        timeout=120
+                        timeout=300
                     )
                     
                     if analyze_response.status_code in (401, 403):
@@ -4827,15 +4831,15 @@ RAISES:
                 
                 with col1:
                     _role = st.session_state.get("role", "USER")
-                    _admin_blocked = _role == "ADMIN"
+                    _can_give_feedback = _role in ("USER", "DEV_MODE")
                     can_submit = questions_answered > 0
 
-                    if _admin_blocked:
-                        st.info(" ADMIN role cannot submit feedback.")
+                    if not _can_give_feedback:
+                        st.info(f" {_role} role cannot submit feedback.")
 
                     if st.button("Submit Feedback", 
                             key=f"{feedback_key_prefix}_submit",
-                            disabled=not can_submit or _admin_blocked,
+                            disabled=not can_submit or not _can_give_feedback,
                             type="primary",
                             use_container_width=True):
                         
@@ -4933,7 +4937,11 @@ RAISES:
                 key="db_employee_code"
             )
 
-        if st.button(" Retrieve from DB", key="retrieve_db_btn", use_container_width=True):
+        _col1, _col2 = st.columns([1, 3])
+        with _col1:
+            _retrieve_db_clicked = st.button(" Retrieve from DB", key="retrieve_db_btn", use_container_width=True)
+        if _retrieve_db_clicked:
+
             if not db_txn_id.strip():
                 st.warning("Please enter a Transaction ID.")
             else:
@@ -4971,7 +4979,10 @@ RAISES:
             key="fb_txn_id"
         )
 
-        if st.button(" Retrieve Feedback", key="retrieve_feedback_btn", use_container_width=True):
+        _fb_col1, _fb_col2 = st.columns([1, 3])
+        with _fb_col1:
+            _retrieve_fb_clicked = st.button(" Retrieve Feedback", key="retrieve_feedback_btn", use_container_width=True)
+        if _retrieve_fb_clicked:
             if not fb_txn_id.strip():
                 st.warning("Please enter a Transaction ID.")
             else:

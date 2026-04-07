@@ -15,7 +15,7 @@ from modules.schemas import (
 	
 )
 
-
+from modules.login import decode_access_token
 from modules.extraction import extract_from_directory, extract_from_zip_bytes
 from modules.xml_parser_logic import parse_xml_to_dataframe
 from pathlib import Path
@@ -3154,10 +3154,11 @@ class FeedbackSubmission(BaseModel):
 
 @router.post("/submit-llm-feedback")
 async def submit_llm_feedback(feedback: FeedbackSubmission, session_id: str = Query(default=CURRENT_SESSION_ID), authorization: str = Header(default=None)):
-    from modules.login import decode_access_token
+    _jwt_role = None
     if authorization and authorization.startswith("Bearer "):
         payload = decode_access_token(authorization.split(" ", 1)[1])
-        if payload.get("role") == "ADMIN":
+        _jwt_role = payload.get("role", "")
+        if _jwt_role == "ADMIN":
             logger.warning(
                 "FEEDBACK [403] — user='%s' role='ADMIN' attempted to submit feedback (blocked)",
                 payload.get("sub"),
@@ -3246,12 +3247,12 @@ RAISES:
         except Exception as e:
             logger.error(f" Could not save feedback to file {feedback_file}: {str(e)}")
 
-        # Only USER role can store feedback in database
-        role = get_user_role(feedback.user_name)
-        if role != "USER":
+        # Only USER and DEV_MODE roles can store feedback in database
+        role = (_jwt_role or get_user_role(feedback.user_name) or "").upper()
+        if role not in ("USER", "DEV_MODE"):
             raise HTTPException(
                 status_code=403,
-                detail="Only users with USER role can submit feedback."
+                detail="Only users with USER or DEV_MODE roles can submit feedback."
             )
 
         # Store feedback in database
@@ -3289,6 +3290,8 @@ RAISES:
             "message": f"Thank you {feedback.user_name}! Your feedback has been recorded.",
             "timestamp": feedback_record['timestamp']
         }
+    except HTTPException:
+        raise
         
     except Exception as e:
         logger.exception(f"Failed to submit feedback for transaction {feedback.transaction_id}: {str(e)}")

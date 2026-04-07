@@ -3664,7 +3664,7 @@ def render_ui_flow_individual():
                     st.error(f"  {error_detail}")
                     
             except requests.exceptions.Timeout:
-                st.error("⏱  Request timeout. Please try again.")
+                st.error("Request timeout. Please try again.")
             except requests.exceptions.ConnectionError:
                 st.error("  Connection error. Ensure the API server is running on Backend:8000.")
             except Exception as e:
@@ -3674,7 +3674,7 @@ def render_ui_flow_individual():
                     st.code(traceback.format_exc())
     
     except requests.exceptions.Timeout:
-        st.error("⏱  Request timeout. Please try again.")
+        st.error("Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:

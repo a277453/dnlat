@@ -2597,50 +2597,45 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                     
                                     # print(f" Mapped {len(screen_info)} unique screens to time ranges")
                                     
-                                    # Build detailed flow for unique screens
+                                    # FIX: Build the flow by consecutively deduplicating all_events.
+                                    # This preserves each screen's ACTUAL occurrence timestamp in
+                                    # sequence order, so screens visited multiple times (e.g. back-
+                                    # navigation to DMMainMenu) each get their own correct timestamp
+                                    # rather than always referencing the global first occurrence.
+                                    # This prevents negative durations caused by the old screen_info
+                                    # dict approach which keyed by name and lost positional context.
+                                    from datetime import date
+                                    deduped_events = []
+                                    for (screen, t) in all_events:
+                                        if not deduped_events or deduped_events[-1][0] != screen:
+                                            deduped_events.append((screen, t))
+
                                     ui_flow_details = []
-                                    
-                                    for i, screen_name in enumerate(unique_screens):
-                                        info = screen_info.get(screen_name)
-                                        
-                                        if not info:
-                                            ui_flow_details.append({
-                                                'screen': screen_name,
-                                                'timestamp': '',
-                                                'duration': None
-                                            })
-                                            continue
-                                        
-                                        first_time = info['first_time']
-                                        
-                                        # Calculate duration: from first occurrence of THIS screen
-                                        # to first occurrence of NEXT screen
+                                    for i, (screen_name, time_val) in enumerate(deduped_events):
                                         duration = None
-                                        if i < len(unique_screens) - 1:
-                                            next_screen = unique_screens[i + 1]
-                                            next_info = screen_info.get(next_screen)
-                                            
-                                            if next_info and next_info['first_time']:
+                                        if i < len(deduped_events) - 1:
+                                            next_time = deduped_events[i + 1][1]
+                                            if time_val and next_time:
                                                 try:
-                                                    from datetime import date
-                                                    dt1 = datetime.combine(date.today(), first_time)
-                                                    dt2 = datetime.combine(date.today(), next_info['first_time'])
+                                                    dt1 = datetime.combine(date.today(), time_val)
+                                                    dt2 = datetime.combine(date.today(), next_time)
                                                     duration = (dt2 - dt1).total_seconds()
-                                                except Exception as e:
+                                                except Exception:
                                                     duration = None
-                                        
+
                                         ui_flow_details.append({
                                             'screen': screen_name,
-                                            'timestamp': str(first_time) if first_time else '',
+                                            'timestamp': str(time_val) if time_val else '',
                                             'duration': duration
                                         })
+                                    
                                     
                                     if ui_flow_details and len(ui_flow_details) > 0:
                                         ui_flow_screens = ui_flow_details
                                         has_flow = True
                                         
                                         with_duration = sum(1 for s in ui_flow_details if s['duration'] is not None)
-                                        # print(f" Created detailed flow: {len(ui_flow_details)} unique screens, {with_duration} with durations")
+                                        logger.info(f" Created detailed flow: {len(ui_flow_details)} unique screens, {with_duration} with durations")
                                         
                                         # Debug: print all screens
                                         # for i, screen in enumerate(ui_flow_details):

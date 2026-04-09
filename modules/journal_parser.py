@@ -34,7 +34,7 @@ import json
 import pandas as pd
 from datetime import datetime, time as dtime
 from pathlib import Path
-from typing import Union, List, Optional, Dict
+from typing import Union, List, Optional, Dict, Iterable
 
 from modules.logging_config import logger
 
@@ -154,20 +154,18 @@ def parse_journal(file_path: Union[str, Path]) -> pd.DataFrame:
         logger.error("parse_journal: not found or directory: %s", file_path)
         return pd.DataFrame()
 
+    # Only the no-date pattern is used during file read; lines are stored
+    # with their parsed groups directly to avoid a second regex pass.
     pattern_no_date = re.compile(
         r'^(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(\w+)\s+([<>*])\s+\[(\d+)\]\s+-\s+(\w+)\s+'
         r'(result|action):(.+)$'
-    )
-    pattern_with_date = re.compile(
-        r'^(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(\w+)\s+([<>*])\s+'
-        r'\[(\d+)\]\s+-\s+(\w+)\s+(result|action):(.+)$'
     )
 
     stem = file_path.stem
     dm   = re.search(r'(\d{8})', stem)
     file_date = datetime.strptime(dm.group(1), '%Y%m%d').strftime('%d/%m/%Y') if dm else stem
 
-    cleaned_lines: List[str] = []
+    rows: List[dict] = []
     seen: set = set()
 
     try:
@@ -185,70 +183,46 @@ def parse_journal(file_path: Union[str, Path]) -> pd.DataFrame:
                 if mod == 'GUIDM' and screen != 'DMAuthorization':
                     continue
                 try:
-                    json.loads(edata)
+                    jdata = json.loads(edata)
                 except json.JSONDecodeError:
                     continue
-                clean = f"{file_date} {ts}  {lid} {mod} {direction} [{vid}] - {screen} {etype}:{edata}"
-                if clean not in seen:
-                    seen.add(clean)
-                    cleaned_lines.append(clean)
+
+                # Dedup key uses all parsed fields
+                dedup_key = (ts, lid, mod, direction, vid, screen, etype, edata)
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+
+                row: dict = {
+                    'date': file_date, 'timestamp': ts, 'id': int(lid), 'module': mod,
+                    'direction': direction, 'viewid': int(vid), 'screen': screen,
+                    'event_type': etype, 'raw_json': edata,
+                }
+
+                try:
+                    dobj = datetime.strptime(file_date, '%d/%m/%Y')
+                    row['date_formatted'] = dobj.strftime('%Y-%m-%d')
+                    row['day_of_week']    = dobj.strftime('%A')
+                except ValueError:
+                    row['date_formatted'] = file_date
+                    row['day_of_week']    = None
+
+                for k, v in jdata.items():
+                    if isinstance(v, (int, float)):
+                        row[f'json_{k}'] = v
+                    elif isinstance(v, str):
+                        try:
+                            row[f'json_{k}'] = int(v) if '.' not in v else float(v)
+                        except ValueError:
+                            row[f'json_{k}'] = v
+                    else:
+                        row[f'json_{k}'] = str(v)
+
+                rows.append(row)
+
     except Exception as exc:
         logger.error("parse_journal: read error on %s: %s", file_path, exc)
-        return pd.DataFrame()
-
-    if not cleaned_lines:
-        return pd.DataFrame()
-
-    rows: List[dict] = []
-    for line in cleaned_lines:
-        m = pattern_with_date.match(line)
-        has_date = bool(m)
-        if not m:
-            m = pattern_no_date.match(line)
-        if not m:
-            continue
-
-        if has_date:
-            date, ts, lid, mod, direction, vid, screen, etype, edata = m.groups()
-        else:
-            ts, lid, mod, direction, vid, screen, etype, edata = m.groups()
-            date = None
-
-        try:
-            jdata = json.loads(edata)
-        except json.JSONDecodeError:
-            jdata = {}
-
-        row: dict = {
-            'date': date, 'timestamp': ts, 'id': int(lid), 'module': mod,
-            'direction': direction, 'viewid': int(vid), 'screen': screen,
-            'event_type': etype, 'raw_json': edata,
-        }
-
-        if date:
-            try:
-                dobj = datetime.strptime(date, '%d/%m/%Y')
-                row['date_formatted'] = dobj.strftime('%Y-%m-%d')
-                row['day_of_week']    = dobj.strftime('%A')
-            except ValueError:
-                row['date_formatted'] = date
-                row['day_of_week']    = None
-        else:
-            row['date_formatted'] = None
-            row['day_of_week']    = None
-
-        for k, v in jdata.items():
-            if isinstance(v, (int, float)):
-                row[f'json_{k}'] = v
-            elif isinstance(v, str):
-                try:
-                    row[f'json_{k}'] = int(v) if '.' not in v else float(v)
-                except ValueError:
-                    row[f'json_{k}'] = v
-            else:
-                row[f'json_{k}'] = str(v)
-
-        rows.append(row)
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
 
     df = pd.DataFrame(rows)
     logger.info("parse_journal: %d events from %s", len(df), file_path.name)
@@ -312,7 +286,283 @@ def _decode_receipt_block(raw_msg: str) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION E — DIAGNOSTIC CONTEXT EXTRACTION
+# SECTION E — DIAGNOSTIC CONTEXT EXTRACTION (shared internals)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# --- Module-level regex constants (compiled once) ----------------------------
+
+_RE_LINE      = re.compile(
+    r'^\s*(?:\d{2}/\d{2}/\d{4}\s+)?(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(.*)'
+)
+_RE_ERRORNR   = re.compile(r'ErrorNr:\s*(\d+)\s*\(Class:\s*(\S+)\s+Code:\s*(\S+)')
+_RE_DEVSTATE  = re.compile(r'State of .* device (\S+).*changed to:\s*(\S+(?:\s+\(\d+\))?)')
+_RE_TDR_RET   = re.compile(
+    r'returned\s+(\w+)\s*\(\d+\)\s+for\s+request\s+(TDR_\w+|TA_EVENT)\s*\((\w+)\)'
+)
+_RE_TDR_REQ   = re.compile(
+    r'[Rr]equest\s+(TDR_\w+|TA_EVENT)\s*\((\w+)\)\s+sent'
+)
+_RE_TDR_LEGACY = re.compile(
+    r'(TDR_\w+\(\w+\)|TA_EVENT\(\w+\))\s*(?:->|\u2192|>)\s*(\w+)'
+)
+_RE_APPSTATE  = re.compile(r'Application state is:\s*(\w+\s*\(\d+\))')
+_RE_UUID      = re.compile(r'TRANSACTION UUID:\s*<([^>]*)>')
+_RE_CI        = re.compile(r'CI\s*=\s*([0-9A-Fa-f]{2})')
+_RE_TVR       = re.compile(r'TVR\s*=\s*(\S+).*TSI\s*=\s*(\S+)')
+
+_CARD_IDS            = {'3205', '3245', '3973', '5135', '3209'}
+_EMV_IDS             = {'3951', '3952', '3953', '3954', '3214'}
+_CHIP_DEC_IDS        = {'3960', '3961', '3275'}
+_CRYPT_IDS           = {'3955', '3956'}
+_CUSTOMER_ACTION_IDS = {'3219', '3246', '3259', '3260'}
+
+
+def _empty_result() -> Dict:
+    """Return a fresh empty diagnostic result dict."""
+    return {
+        'protocol_steps': [], 'app_state_start': None, 'app_state_end': None,
+        'host_requests': [], 'host_replies': [], 'host_outcome': None,
+        'host_notes': [], 'trn_numbers': [], 'stan_values': [],
+        'response_codes': [], 'terminal_id': None, 'transaction_types': [],
+        'uuids': [], 'emv_events': [], 'chip_decision': [], 'tvr_tsi': None,
+        'cryptogram_info': [], 'device_errors': [], 'device_states': [],
+        'card_events': [], 'customer_actions': [],
+    }
+
+
+def _to_time(s: str) -> Optional[dtime]:
+    """Parse "HH:MM:SS" string to a datetime.time object."""
+    try:
+        p = s.strip().split(':')
+        return dtime(int(p[0]), int(p[1]), int(p[2]))
+    except Exception:
+        return None
+
+
+def _parse_diagnostic_lines(
+    lines: Iterable[str],
+    t_start: dtime,
+    t_end: dtime,
+) -> Dict:
+    """
+    Core diagnostic extraction loop shared by both public extract functions.
+
+    Iterates over raw JRN text lines, applies windowing, and populates a
+    result dict with all diagnostic signal categories.
+
+    PARAMETERS:
+        lines   : Iterable of raw text lines (from file or splitlines()).
+        t_start : Transaction window start time.
+        t_end   : Transaction window end time.
+
+    RETURNS:
+        dict : Populated diagnostic result dict.
+    """
+    result = _empty_result()
+
+    last_app_before: Optional[str] = None
+    first_app_after: Optional[str] = None
+    pending_err:     bool           = False
+    pending_err_ts:  str            = ''
+
+    for raw in lines:
+        line = raw.strip() if isinstance(raw, str) else raw
+        if not line:
+            pending_err = False
+            continue
+
+        # Multi-line ErrorNr continuation
+        if pending_err:
+            me = _RE_ERRORNR.search(line)
+            if me:
+                result['device_errors'].append(
+                    f"{pending_err_ts} ErrorNr:{me.group(1)} "
+                    f"Class:{me.group(2)} Code:{me.group(3)}"
+                )
+            pending_err = False
+            continue
+
+        m = _RE_LINE.match(line)
+        if not m:
+            continue
+
+        ts_str, msg_id, rest = m.group(1), m.group(2), m.group(3)
+        ts = _to_time(ts_str)
+        if ts is None:
+            continue
+
+        in_window = (t_start <= ts <= t_end)
+
+        # ── App state (tracked outside window too) ──────────────────────────
+        if msg_id == '1015':
+            ma = _RE_APPSTATE.search(rest)
+            if ma:
+                sv = ma.group(1).strip()
+                if ts < t_start:
+                    last_app_before = sv
+                elif in_window and result['app_state_start'] is None:
+                    result['app_state_start'] = sv
+                elif ts > t_end and first_app_after is None:
+                    first_app_after = sv
+
+        if not in_window:
+            continue
+
+        # ── Protocol steps ───────────────────────────────────────────────────
+        # Prefer 1043 return lines (have result code) over 1042 request lines
+        if msg_id == '1043':
+            mt_ret = _RE_TDR_RET.search(rest)
+            if mt_ret:
+                step = f"{mt_ret.group(2)}({mt_ret.group(3)})\u2192{mt_ret.group(1)}"
+                if step not in result['protocol_steps']:
+                    result['protocol_steps'].append(step)
+        elif msg_id == '1042':
+            mt_req = _RE_TDR_REQ.search(rest)
+            if mt_req:
+                tdr_name  = mt_req.group(1)
+                tdr_param = mt_req.group(2)
+                step = f"{tdr_name}({tdr_param})\u2192sent"
+                # Only keep if 1043 hasn't already added a result for this step
+                if not any(s.startswith(f"{tdr_name}({tdr_param})") for s in result['protocol_steps']):
+                    result['protocol_steps'].append(step)
+        else:
+            # Legacy format fallback
+            for mt in _RE_TDR_LEGACY.finditer(rest):
+                step = f"{mt.group(1)}\u2192{mt.group(2)}"
+                if step not in result['protocol_steps']:
+                    result['protocol_steps'].append(step)
+
+        # ── Host request (6303) ──────────────────────────────────────────────
+        if msg_id == '6303':
+            km = re.search(r'\(KEY:\s*([^,)]+)', rest)
+            tm = re.search(r'TRANSACTION REQUEST\s+(\S+)', rest)
+            result['host_requests'].append(
+                f"{ts_str} REQUEST:{tm.group(1).strip() if tm else ''} "
+                f"KEY:{km.group(1).strip() if km else ''}"
+            )
+
+        # ── Host reply (6304) — mask sensitive data, extract outcome ─────────
+        elif msg_id == '6304':
+            _masked_rest = _mask_line(re.sub(r'\s+', ' ', rest).strip())
+            result['host_replies'].append(f"{ts_str} {_masked_rest}")
+            if not result['host_outcome']:
+                if re.search(r'APPROVED|APPROVAL', _masked_rest, re.IGNORECASE):
+                    result['host_outcome'] = 'TRANSACTION APPROVED'
+                elif re.search(r'DECLINED|DECLINE', _masked_rest, re.IGNORECASE):
+                    result['host_outcome'] = 'TRANSACTION DECLINED'
+                elif re.search(r'UNABLE TO PERFORM|UNABLE_TO_PERFORM', _masked_rest, re.IGNORECASE):
+                    result['host_outcome'] = 'UNABLE TO PERFORM REQUEST'
+                elif re.search(r'INSUFFICIENT', _masked_rest, re.IGNORECASE):
+                    result['host_outcome'] = 'INSUFFICIENT FUNDS'
+            rc_m = re.search(r'RC\s*[=:]\s*(\d{2,3})', _masked_rest)
+            if rc_m and rc_m.group(1) not in result['response_codes']:
+                result['response_codes'].append(rc_m.group(1))
+
+        # ── Transaction UUID (6306) ──────────────────────────────────────────
+        elif msg_id == '6306':
+            mu = _RE_UUID.search(rest)
+            if mu:
+                result['uuids'].append(f"{ts_str} UUID:<{mu.group(1)}>")
+
+        # ── 41005 receipt decode ─────────────────────────────────────────────
+        elif msg_id == '41005' and '\\0a' in rest:
+            receipt = _decode_receipt_block(rest)
+            if receipt.get('transaction_type'):
+                tt = receipt['transaction_type']
+                if tt not in result['transaction_types']:
+                    result['transaction_types'].append(tt)
+            if receipt.get('trn_number'):
+                tn = receipt['trn_number']
+                if tn not in result['trn_numbers']:
+                    result['trn_numbers'].append(tn)
+            if receipt.get('stan') and receipt['stan'] != 'N/A':
+                sv = receipt['stan']
+                if sv not in result['stan_values']:
+                    result['stan_values'].append(sv)
+            if receipt.get('response_code') and receipt['response_code'] != 'N/A':
+                rc = receipt['response_code']
+                if rc not in result['response_codes']:
+                    result['response_codes'].append(rc)
+            if receipt.get('terminal_id') and result['terminal_id'] is None:
+                result['terminal_id'] = receipt['terminal_id']
+            if receipt.get('host_outcome'):
+                result['host_outcome'] = receipt['host_outcome']
+            for note in receipt.get('host_notes', []):
+                if note not in result['host_notes']:
+                    result['host_notes'].append(note)
+
+        # ── EMV events (3951-3954, 3214) — strip PAN/crypto ─────────────────
+        if msg_id in _EMV_IDS:
+            if msg_id == '3954':
+                aid_m = re.search(r"AID\s+'([A-Fa-f0-9]+)'", rest)
+                safe  = f"AID:{aid_m.group(1)}" if aid_m else _mask_line(rest)
+            else:
+                safe = _mask_line(rest)
+            result['emv_events'].append(f"{ts_str} [{msg_id}] {safe}")
+
+        # ── Chip decision (3960, 3961, 3275) ────────────────────────────────
+        if msg_id in _CHIP_DEC_IDS:
+            result['chip_decision'].append(
+                f"{ts_str} [{msg_id}] {re.sub(r'  +', ' ', rest).strip()}"
+            )
+
+        # ── TVR/TSI (3959) — flag patterns only ──────────────────────────────
+        if msg_id == '3959':
+            mt = _RE_TVR.search(rest)
+            if mt:
+                result['tvr_tsi'] = f"TVR={mt.group(1)} TSI={mt.group(2)}"
+
+        # ── Cryptogram info (3955, 3956) — CI value only ─────────────────────
+        if msg_id in _CRYPT_IDS:
+            mc  = _RE_CI.search(rest)
+            lbl = 'FirstGenerateAC' if msg_id == '3955' else 'SecondGenerateAC'
+            result['cryptogram_info'].append(
+                f"{lbl} CI={mc.group(1) if mc else 'unknown'}"
+            )
+
+        # ── Customer actions (3259/3219/3246/3260) ───────────────────────────
+        if msg_id in _CUSTOMER_ACTION_IDS:
+            result['customer_actions'].append(
+                f"{ts_str} [{msg_id}] {re.sub(r'  +', ' ', rest).strip()}"
+            )
+
+        # ── Device state changes (5011) ──────────────────────────────────────
+        if msg_id == '5011':
+            md = _RE_DEVSTATE.search(rest)
+            if md:
+                result['device_states'].append(
+                    f"{ts_str} {md.group(1)} \u2192 {md.group(2)}"
+                )
+
+        # ── ErrorNr ──────────────────────────────────────────────────────────
+        if 'ErrorNr:' in rest:
+            me = _RE_ERRORNR.search(rest)
+            if me:
+                result['device_errors'].append(
+                    f"{ts_str} ErrorNr:{me.group(1)} "
+                    f"Class:{me.group(2)} Code:{me.group(3)}"
+                )
+            else:
+                pending_err, pending_err_ts = True, ts_str
+        elif 'Error notified' in rest:
+            pending_err, pending_err_ts = True, ts_str
+
+        # ── Card events ──────────────────────────────────────────────────────
+        if msg_id in _CARD_IDS:
+            clean = _mask_line(re.sub(r'<\w+>', '', rest).strip())
+            result['card_events'].append(f"{ts_str} [{msg_id}] {clean}")
+
+    # Post-loop: fill app_state from context around the window
+    if result['app_state_start'] is None and last_app_before:
+        result['app_state_start'] = last_app_before
+    if first_app_after:
+        result['app_state_end'] = first_app_after
+
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION F — PUBLIC EXTRACT FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def extract_diagnostic_context(
@@ -370,275 +620,28 @@ def extract_diagnostic_context(
     RETURNS:
         dict : All diagnostic fields. Empty-but-valid dict on any error.
     """
-    empty: Dict = {
-        'protocol_steps': [], 'app_state_start': None, 'app_state_end': None,
-        'host_requests': [], 'host_replies': [], 'host_outcome': None,
-        'host_notes': [], 'trn_numbers': [], 'stan_values': [],
-        'response_codes': [], 'terminal_id': None, 'transaction_types': [],
-        'uuids': [], 'emv_events': [], 'chip_decision': [], 'tvr_tsi': None,
-        'cryptogram_info': [], 'device_errors': [], 'device_states': [],
-        'card_events': [], 'customer_actions': [],
-    }
+    empty = _empty_result()
 
     file_path = Path(file_path)
     if not file_path.exists():
         logger.warning("extract_diagnostic_context: not found: %s", file_path)
         return empty
 
-    def _to_time(s: str) -> Optional[dtime]:
-        try:
-            p = s.strip().split(':')
-            return dtime(int(p[0]), int(p[1]), int(p[2]))
-        except Exception:
-            return None
-
     t_start = _to_time(start_time_str)
     t_end   = _to_time(end_time_str)
     if t_start is None or t_end is None:
-        logger.warning("extract_diagnostic_context: invalid times %s/%s", start_time_str, end_time_str)
+        logger.warning(
+            "extract_diagnostic_context: invalid times %s/%s",
+            start_time_str, end_time_str
+        )
         return empty
-
-    result = {k: ([] if isinstance(v, list) else v) for k, v in empty.items()}
-
-    # Handles both plain and date-prefixed JRN lines:
-    #   "23:14:22 3214 ..."
-    #   "03/04/2025 23:14:22 3214 ..."
-    re_line     = re.compile(
-        r'^\s*(?:\d{2}/\d{2}/\d{4}\s+)?(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(.*)'
-    )
-    re_errornr  = re.compile(r'ErrorNr:\s*(\d+)\s*\(Class:\s*(\S+)\s+Code:\s*(\S+)')
-    re_devstate = re.compile(r'State of .* device (\S+).*changed to:\s*(\S+(?:\s+\(\d+\))?)')
-
-    # ── Protocol step patterns (CCProtFW1 format) ──────────────────────────
-    # 1043 return line: "CCProtFW1 returned PROCEED_NEXT (0) for request TDR_CV (CV)"
-    re_tdr_ret  = re.compile(
-        r'returned\s+(\w+)\s*\(\d+\)\s+for\s+request\s+(TDR_\w+|TA_EVENT)\s*\((\w+)\)'
-    )
-    # 1042 request line: "Request TDR_CV (CV) sent to CCProtFW1"
-    re_tdr_req  = re.compile(
-        r'[Rr]equest\s+(TDR_\w+|TA_EVENT)\s*\((\w+)\)\s+sent'
-    )
-    # Legacy format: "TDR_CV(CV) → PROCEED_NEXT"
-    re_tdr_legacy = re.compile(
-        r'(TDR_\w+\(\w+\)|TA_EVENT\(\w+\))\s*(?:->|\u2192|>)\s*(\w+)'
-    )
-
-    re_appstate = re.compile(r'Application state is:\s*(\w+\s*\(\d+\))')
-    re_uuid     = re.compile(r'TRANSACTION UUID:\s*<([^>]*)>')
-    re_ci       = re.compile(r'CI\s*=\s*([0-9A-Fa-f]{2})')
-    re_tvr      = re.compile(r'TVR\s*=\s*(\S+).*TSI\s*=\s*(\S+)')
-
-    CARD_IDS     = {'3205', '3245', '3973', '5135', '3209'}  # 3209 = card ejected
-    EMV_IDS      = {'3951', '3952', '3953', '3954', '3214'}
-    CHIP_DEC_IDS = {'3960', '3961', '3275'}
-    CRYPT_IDS    = {'3955', '3956'}
-    CUSTOMER_ACTION_IDS = {'3219', '3246', '3259', '3260'}
-
-    last_app_before: Optional[str] = None
-    first_app_after: Optional[str] = None
-    pending_err:     bool           = False
-    pending_err_ts:  str            = ''
 
     try:
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as fh:
-            for raw in fh:
-                line = raw.strip()
-                if not line:
-                    pending_err = False
-                    continue
-
-                if pending_err:
-                    me = re_errornr.search(line)
-                    if me:
-                        result['device_errors'].append(
-                            f"{pending_err_ts} ErrorNr:{me.group(1)} "
-                            f"Class:{me.group(2)} Code:{me.group(3)}"
-                        )
-                    pending_err = False
-                    continue
-
-                m = re_line.match(line)
-                if not m:
-                    continue
-
-                ts_str, msg_id, rest = m.group(1), m.group(2), m.group(3)
-                ts = _to_time(ts_str)
-                if ts is None:
-                    continue
-
-                in_window = (t_start <= ts <= t_end)
-
-                # App state (tracked outside window too)
-                if msg_id == '1015':
-                    ma = re_appstate.search(rest)
-                    if ma:
-                        sv = ma.group(1).strip()
-                        if ts < t_start:
-                            last_app_before = sv
-                        elif in_window and result['app_state_start'] is None:
-                            result['app_state_start'] = sv
-                        elif ts > t_end and first_app_after is None:
-                            first_app_after = sv
-
-                if not in_window:
-                    continue
-
-                # ── Protocol steps ─────────────────────────────────────────
-                if msg_id == '1043':
-                    mt_ret = re_tdr_ret.search(rest)
-                    if mt_ret:
-                        result_code = mt_ret.group(1)
-                        tdr_name    = mt_ret.group(2)
-                        tdr_param   = mt_ret.group(3)
-                        step = f"{tdr_name}({tdr_param})\u2192{result_code}"
-                        if step not in result['protocol_steps']:
-                            result['protocol_steps'].append(step)
-                elif msg_id == '1042':
-                    mt_req = re_tdr_req.search(rest)
-                    if mt_req:
-                        tdr_name  = mt_req.group(1)
-                        tdr_param = mt_req.group(2)
-                        step = f"{tdr_name}({tdr_param})\u2192sent"
-                        existing = [s for s in result['protocol_steps'] if s.startswith(f"{tdr_name}({tdr_param})")]
-                        if not existing:
-                            result['protocol_steps'].append(step)
-                else:
-                    for mt in re_tdr_legacy.finditer(rest):
-                        step = f"{mt.group(1)}\u2192{mt.group(2)}"
-                        if step not in result['protocol_steps']:
-                            result['protocol_steps'].append(step)
-
-                # Host request (6303)
-                if msg_id == '6303':
-                    km = re.search(r'\(KEY:\s*([^,)]+)', rest)
-                    tm = re.search(r'TRANSACTION REQUEST\s+(\S+)', rest)
-                    result['host_requests'].append(
-                        f"{ts_str} REQUEST:{tm.group(1).strip() if tm else ''} "
-                        f"KEY:{km.group(1).strip() if km else ''}"
-                    )
-
-                # Host reply (6304) — mask sensitive data, extract outcome
-                if msg_id == '6304':
-                    _masked_rest = _mask_line(re.sub(r'\s+', ' ', rest).strip())
-                    result['host_replies'].append(f"{ts_str} {_masked_rest}")
-                    # Extract host outcome from 6304 if not yet set
-                    if not result['host_outcome']:
-                        if re.search(r'APPROVED|APPROVAL', _masked_rest, re.IGNORECASE):
-                            result['host_outcome'] = 'TRANSACTION APPROVED'
-                        elif re.search(r'DECLINED|DECLINE', _masked_rest, re.IGNORECASE):
-                            result['host_outcome'] = 'TRANSACTION DECLINED'
-                        elif re.search(r'UNABLE TO PERFORM|UNABLE_TO_PERFORM', _masked_rest, re.IGNORECASE):
-                            result['host_outcome'] = 'UNABLE TO PERFORM REQUEST'
-                        elif re.search(r'INSUFFICIENT', _masked_rest, re.IGNORECASE):
-                            result['host_outcome'] = 'INSUFFICIENT FUNDS'
-                    # Extract response code from 6304 if not yet captured
-                    rc_m = re.search(r'RC\s*[=:]\s*(\d{2,3})', _masked_rest)
-                    if rc_m and rc_m.group(1) not in result['response_codes']:
-                        result['response_codes'].append(rc_m.group(1))
-
-                # Transaction UUID (6306)
-                if msg_id == '6306':
-                    mu = re_uuid.search(rest)
-                    if mu:
-                        result['uuids'].append(f"{ts_str} UUID:<{mu.group(1)}>")
-
-                # 41005 receipt decode
-                if msg_id == '41005' and '\\0a' in rest:
-                    receipt = _decode_receipt_block(rest)
-                    if receipt.get('transaction_type'):
-                        tt = receipt['transaction_type']
-                        if tt not in result['transaction_types']:
-                            result['transaction_types'].append(tt)
-                    if receipt.get('trn_number'):
-                        tn = receipt['trn_number']
-                        if tn not in result['trn_numbers']:
-                            result['trn_numbers'].append(tn)
-                    if receipt.get('stan') and receipt['stan'] != 'N/A':
-                        sv = receipt['stan']
-                        if sv not in result['stan_values']:
-                            result['stan_values'].append(sv)
-                    if receipt.get('response_code') and receipt['response_code'] != 'N/A':
-                        rc = receipt['response_code']
-                        if rc not in result['response_codes']:
-                            result['response_codes'].append(rc)
-                    if receipt.get('terminal_id') and result['terminal_id'] is None:
-                        result['terminal_id'] = receipt['terminal_id']
-                    if receipt.get('host_outcome'):
-                        result['host_outcome'] = receipt['host_outcome']
-                    for note in receipt.get('host_notes', []):
-                        if note not in result['host_notes']:
-                            result['host_notes'].append(note)
-
-                # EMV events (3951-3954, 3214) — strip PAN/crypto
-                if msg_id in EMV_IDS:
-                    if msg_id == '3954':
-                        aid_m = re.search(r"AID\s+'([A-Fa-f0-9]+)'", rest)
-                        safe  = f"AID:{aid_m.group(1)}" if aid_m else _mask_line(rest)
-                    else:
-                        safe = _mask_line(rest)
-                    result['emv_events'].append(f"{ts_str} [{msg_id}] {safe}")
-
-                # Chip decision (3960, 3961, 3275)
-                if msg_id in CHIP_DEC_IDS:
-                    result['chip_decision'].append(
-                        f"{ts_str} [{msg_id}] {re.sub(r'  +', ' ', rest).strip()}"
-                    )
-
-                # TVR/TSI (3959) — flag patterns only
-                if msg_id == '3959':
-                    mt = re_tvr.search(rest)
-                    if mt:
-                        result['tvr_tsi'] = f"TVR={mt.group(1)} TSI={mt.group(2)}"
-
-                # Cryptogram info (3955, 3956) — CI value only
-                if msg_id in CRYPT_IDS:
-                    mc   = re_ci.search(rest)
-                    lbl  = 'FirstGenerateAC' if msg_id == '3955' else 'SecondGenerateAC'
-                    result['cryptogram_info'].append(
-                        f"{lbl} CI={mc.group(1) if mc else 'unknown'}"
-                    )
-
-                # Customer actions — all customer-visible events
-                # 3259 = button press, 3219 = cancel, 3246 = timeout screen, 3260 = account selected
-                if msg_id in CUSTOMER_ACTION_IDS:
-                    result['customer_actions'].append(
-                        f"{ts_str} [{msg_id}] {re.sub(r'  +', ' ', rest).strip()}"
-                    )
-
-                # Device state changes (5011)
-                if msg_id == '5011':
-                    md = re_devstate.search(rest)
-                    if md:
-                        result['device_states'].append(
-                            f"{ts_str} {md.group(1)} \u2192 {md.group(2)}"
-                        )
-
-                # ErrorNr
-                if 'ErrorNr:' in rest:
-                    me = re_errornr.search(rest)
-                    if me:
-                        result['device_errors'].append(
-                            f"{ts_str} ErrorNr:{me.group(1)} "
-                            f"Class:{me.group(2)} Code:{me.group(3)}"
-                        )
-                    else:
-                        pending_err, pending_err_ts = True, ts_str
-                elif 'Error notified' in rest:
-                    pending_err, pending_err_ts = True, ts_str
-
-                # Card events
-                if msg_id in CARD_IDS:
-                    clean = _mask_line(re.sub(r'<\w+>', '', rest).strip())
-                    result['card_events'].append(f"{ts_str} [{msg_id}] {clean}")
-
+            result = _parse_diagnostic_lines(fh, t_start, t_end)
     except Exception as exc:
         logger.error("extract_diagnostic_context: error on %s: %s", file_path, exc)
-        return result
-
-    if result['app_state_start'] is None and last_app_before:
-        result['app_state_start'] = last_app_before
-    if first_app_after:
-        result['app_state_end'] = first_app_after
+        return empty
 
     logger.info(
         "extract_diagnostic_context: %s [%s-%s] steps=%d host=%d chip=%d "
@@ -678,26 +681,14 @@ def extract_diagnostic_context_from_content(
     RETURNS:
         dict : All diagnostic fields. Empty-but-valid dict on any error.
     """
-    empty: Dict = {
-        'protocol_steps': [], 'app_state_start': None, 'app_state_end': None,
-        'host_requests': [], 'host_replies': [], 'host_outcome': None,
-        'host_notes': [], 'trn_numbers': [], 'stan_values': [],
-        'response_codes': [], 'terminal_id': None, 'transaction_types': [],
-        'uuids': [], 'emv_events': [], 'chip_decision': [], 'tvr_tsi': None,
-        'cryptogram_info': [], 'device_errors': [], 'device_states': [],
-        'card_events': [], 'customer_actions': [],
-    }
+    empty = _empty_result()
 
     if not jrn_content or not jrn_content.strip():
-        logger.warning("extract_diagnostic_context_from_content: empty content for %s", jrn_filename)
+        logger.warning(
+            "extract_diagnostic_context_from_content: empty content for %s",
+            jrn_filename
+        )
         return empty
-
-    def _to_time(s: str) -> Optional[dtime]:
-        try:
-            p = s.strip().split(':')
-            return dtime(int(p[0]), int(p[1]), int(p[2]))
-        except Exception:
-            return None
 
     t_start = _to_time(start_time_str)
     t_end   = _to_time(end_time_str)
@@ -708,251 +699,14 @@ def extract_diagnostic_context_from_content(
         )
         return empty
 
-    result = {k: ([] if isinstance(v, list) else v) for k, v in empty.items()}
-
-    # Handles both plain and date-prefixed JRN lines:
-    #   "23:14:22 3214 ..."
-    #   "03/04/2025 23:14:22 3214 ..."
-    re_line     = re.compile(
-        r'^\s*(?:\d{2}/\d{2}/\d{4}\s+)?(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(.*)'
-    )
-    re_errornr  = re.compile(r'ErrorNr:\s*(\d+)\s*\(Class:\s*(\S+)\s+Code:\s*(\S+)')
-    re_devstate = re.compile(r'State of .* device (\S+).*changed to:\s*(\S+(?:\s+\(\d+\))?)')
-
-    # ── Protocol step patterns (CCProtFW1 format) ──────────────────────────
-    # 1043 return line: "CCProtFW1 returned PROCEED_NEXT (0) for request TDR_CV (CV)"
-    re_tdr_ret  = re.compile(
-        r'returned\s+(\w+)\s*\(\d+\)\s+for\s+request\s+(TDR_\w+|TA_EVENT)\s*\((\w+)\)'
-    )
-    # 1042 request line: "Request TDR_CV (CV) sent to CCProtFW1"
-    re_tdr_req  = re.compile(
-        r'[Rr]equest\s+(TDR_\w+|TA_EVENT)\s*\((\w+)\)\s+sent'
-    )
-    # Legacy format: "TDR_CV(CV) → PROCEED_NEXT"
-    re_tdr_legacy = re.compile(
-        r'(TDR_\w+\(\w+\)|TA_EVENT\(\w+\))\s*(?:->|\u2192|>)\s*(\w+)'
-    )
-
-    re_appstate = re.compile(r'Application state is:\s*(\w+\s*\(\d+\))')
-    re_uuid     = re.compile(r'TRANSACTION UUID:\s*<([^>]*)>')
-    re_ci       = re.compile(r'CI\s*=\s*([0-9A-Fa-f]{2})')
-    re_tvr      = re.compile(r'TVR\s*=\s*(\S+).*TSI\s*=\s*(\S+)')
-
-    CARD_IDS     = {'3205', '3245', '3973', '5135', '3209'}  # 3209 = card ejected
-    EMV_IDS      = {'3951', '3952', '3953', '3954', '3214'}
-    CHIP_DEC_IDS = {'3960', '3961', '3275'}
-    CRYPT_IDS    = {'3955', '3956'}
-    # Customer-visible events to capture as customer_actions
-    CUSTOMER_ACTION_IDS = {'3219', '3246', '3259', '3260'}
-
-    last_app_before: Optional[str] = None
-    first_app_after: Optional[str] = None
-    pending_err:     bool           = False
-    pending_err_ts:  str            = ''
-
     try:
-        for raw in jrn_content.splitlines():
-            line = raw.strip()
-            if not line:
-                pending_err = False
-                continue
-
-            if pending_err:
-                me = re_errornr.search(line)
-                if me:
-                    result['device_errors'].append(
-                        f"{pending_err_ts} ErrorNr:{me.group(1)} "
-                        f"Class:{me.group(2)} Code:{me.group(3)}"
-                    )
-                pending_err = False
-                continue
-
-            m = re_line.match(line)
-            if not m:
-                continue
-
-            ts_str, msg_id, rest = m.group(1), m.group(2), m.group(3)
-            ts = _to_time(ts_str)
-            if ts is None:
-                continue
-
-            in_window = (t_start <= ts <= t_end)
-
-            # App state (tracked outside window too)
-            if msg_id == '1015':
-                ma = re_appstate.search(rest)
-                if ma:
-                    sv = ma.group(1).strip()
-                    if ts < t_start:
-                        last_app_before = sv
-                    elif in_window and result['app_state_start'] is None:
-                        result['app_state_start'] = sv
-                    elif ts > t_end and first_app_after is None:
-                        first_app_after = sv
-
-            if not in_window:
-                continue
-
-            # ── Protocol steps ─────────────────────────────────────────────
-            # Prefer 1043 return lines (have result code) over 1042 request lines
-            if msg_id == '1043':
-                mt_ret = re_tdr_ret.search(rest)
-                if mt_ret:
-                    result_code = mt_ret.group(1)
-                    tdr_name    = mt_ret.group(2)
-                    tdr_param   = mt_ret.group(3)
-                    step = f"{tdr_name}({tdr_param})\u2192{result_code}"
-                    if step not in result['protocol_steps']:
-                        result['protocol_steps'].append(step)
-            elif msg_id == '1042':
-                # Only add request if no matching return step captured yet
-                mt_req = re_tdr_req.search(rest)
-                if mt_req:
-                    tdr_name  = mt_req.group(1)
-                    tdr_param = mt_req.group(2)
-                    step = f"{tdr_name}({tdr_param})\u2192sent"
-                    # Only keep if 1043 hasn't already added a result for this step
-                    existing = [s for s in result['protocol_steps'] if s.startswith(f"{tdr_name}({tdr_param})")]
-                    if not existing:
-                        result['protocol_steps'].append(step)
-            else:
-                # Legacy format fallback
-                for mt in re_tdr_legacy.finditer(rest):
-                    step = f"{mt.group(1)}\u2192{mt.group(2)}"
-                    if step not in result['protocol_steps']:
-                        result['protocol_steps'].append(step)
-
-            # Host request (6303)
-            if msg_id == '6303':
-                km = re.search(r'\(KEY:\s*([^,)]+)', rest)
-                tm = re.search(r'TRANSACTION REQUEST\s+(\S+)', rest)
-                result['host_requests'].append(
-                    f"{ts_str} REQUEST:{tm.group(1).strip() if tm else ''} "
-                    f"KEY:{km.group(1).strip() if km else ''}"
-                )
-
-            # Host reply (6304) — mask sensitive data, extract outcome
-            if msg_id == '6304':
-                _masked_rest = _mask_line(re.sub(r'\s+', ' ', rest).strip())
-                result['host_replies'].append(f"{ts_str} {_masked_rest}")
-                # Extract host outcome from 6304 if not yet set
-                if not result['host_outcome']:
-                    if re.search(r'APPROVED|APPROVAL', _masked_rest, re.IGNORECASE):
-                        result['host_outcome'] = 'TRANSACTION APPROVED'
-                    elif re.search(r'DECLINED|DECLINE', _masked_rest, re.IGNORECASE):
-                        result['host_outcome'] = 'TRANSACTION DECLINED'
-                    elif re.search(r'UNABLE TO PERFORM|UNABLE_TO_PERFORM', _masked_rest, re.IGNORECASE):
-                        result['host_outcome'] = 'UNABLE TO PERFORM REQUEST'
-                    elif re.search(r'INSUFFICIENT', _masked_rest, re.IGNORECASE):
-                        result['host_outcome'] = 'INSUFFICIENT FUNDS'
-                # Extract response code from 6304 if not yet captured
-                rc_m = re.search(r'RC\s*[=:]\s*(\d{2,3})', _masked_rest)
-                if rc_m and rc_m.group(1) not in result['response_codes']:
-                    result['response_codes'].append(rc_m.group(1))
-
-            # Transaction UUID (6306)
-            if msg_id == '6306':
-                mu = re_uuid.search(rest)
-                if mu:
-                    result['uuids'].append(f"{ts_str} UUID:<{mu.group(1)}>")
-
-            # 41005 receipt decode
-            if msg_id == '41005' and '\\0a' in rest:
-                receipt = _decode_receipt_block(rest)
-                if receipt.get('transaction_type'):
-                    tt = receipt['transaction_type']
-                    if tt not in result['transaction_types']:
-                        result['transaction_types'].append(tt)
-                if receipt.get('trn_number'):
-                    tn = receipt['trn_number']
-                    if tn not in result['trn_numbers']:
-                        result['trn_numbers'].append(tn)
-                if receipt.get('stan') and receipt['stan'] != 'N/A':
-                    sv = receipt['stan']
-                    if sv not in result['stan_values']:
-                        result['stan_values'].append(sv)
-                if receipt.get('response_code') and receipt['response_code'] != 'N/A':
-                    rc = receipt['response_code']
-                    if rc not in result['response_codes']:
-                        result['response_codes'].append(rc)
-                if receipt.get('terminal_id') and result['terminal_id'] is None:
-                    result['terminal_id'] = receipt['terminal_id']
-                if receipt.get('host_outcome'):
-                    result['host_outcome'] = receipt['host_outcome']
-                for note in receipt.get('host_notes', []):
-                    if note not in result['host_notes']:
-                        result['host_notes'].append(note)
-
-            # EMV events (3951-3954, 3214)
-            if msg_id in EMV_IDS:
-                if msg_id == '3954':
-                    aid_m = re.search(r"AID\s+'([A-Fa-f0-9]+)'", rest)
-                    safe  = f"AID:{aid_m.group(1)}" if aid_m else _mask_line(rest)
-                else:
-                    safe = _mask_line(rest)
-                result['emv_events'].append(f"{ts_str} [{msg_id}] {safe}")
-
-            # Chip decision (3960, 3961, 3275)
-            if msg_id in CHIP_DEC_IDS:
-                result['chip_decision'].append(
-                    f"{ts_str} [{msg_id}] {re.sub(r'  +', ' ', rest).strip()}"
-                )
-
-            # TVR/TSI (3959)
-            if msg_id == '3959':
-                mt = re_tvr.search(rest)
-                if mt:
-                    result['tvr_tsi'] = f"TVR={mt.group(1)} TSI={mt.group(2)}"
-
-            # Cryptogram info (3955, 3956)
-            if msg_id in CRYPT_IDS:
-                mc   = re_ci.search(rest)
-                lbl  = 'FirstGenerateAC' if msg_id == '3955' else 'SecondGenerateAC'
-                result['cryptogram_info'].append(
-                    f"{lbl} CI={mc.group(1) if mc else 'unknown'}"
-                )
-
-            # Customer actions — all customer-visible events
-            # 3259 = button press, 3219 = cancel, 3246 = timeout screen, 3260 = account selected
-            if msg_id in CUSTOMER_ACTION_IDS:
-                result['customer_actions'].append(
-                    f"{ts_str} [{msg_id}] {re.sub(r'  +', ' ', rest).strip()}"
-                )
-
-            # Device state changes (5011)
-            if msg_id == '5011':
-                md = re_devstate.search(rest)
-                if md:
-                    result['device_states'].append(
-                        f"{ts_str} {md.group(1)} \u2192 {md.group(2)}"
-                    )
-
-            # ErrorNr
-            if 'ErrorNr:' in rest:
-                me = re_errornr.search(rest)
-                if me:
-                    result['device_errors'].append(
-                        f"{ts_str} ErrorNr:{me.group(1)} "
-                        f"Class:{me.group(2)} Code:{me.group(3)}"
-                    )
-                else:
-                    pending_err, pending_err_ts = True, ts_str
-            elif 'Error notified' in rest:
-                pending_err, pending_err_ts = True, ts_str
-
-            # Card events
-            if msg_id in CARD_IDS:
-                clean = _mask_line(re.sub(r'<\w+>', '', rest).strip())
-                result['card_events'].append(f"{ts_str} [{msg_id}] {clean}")
-
+        result = _parse_diagnostic_lines(jrn_content.splitlines(), t_start, t_end)
     except Exception as exc:
-        logger.error("extract_diagnostic_context_from_content: error on %s: %s", jrn_filename, exc)
-        return result
-
-    if result['app_state_start'] is None and last_app_before:
-        result['app_state_start'] = last_app_before
-    if first_app_after:
-        result['app_state_end'] = first_app_after
+        logger.error(
+            "extract_diagnostic_context_from_content: error on %s: %s",
+            jrn_filename, exc
+        )
+        return empty
 
     logger.info(
         "extract_diagnostic_context_from_content: %s [%s-%s] steps=%d host=%d chip=%d "

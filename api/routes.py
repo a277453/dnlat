@@ -47,6 +47,7 @@ import logging
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from modules.flat_file_generator import FlatFileMerger
 
 logger.info("Logger initialized at startup")
 
@@ -445,6 +446,25 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
         t_cat_end = time.perf_counter()
         logger.debug(f"CATEGORIZATION + ACU EXTRACTION TIME: {t_cat_end - t_cat_start:.4f} s")
+
+        # ── FLAT FILE MERGER ──────────────────────────────────────────────────
+        # Runs after categorization while file_categories still holds full paths.
+        # Normal run (buffer only, inspect via /read-log):
+        FlatFileMerger.run(
+            customer_paths=file_categories.get('customer_journals', []),
+            ui_paths=file_categories.get('ui_journals', []),
+            llm_paths=file_categories.get('journal_llm_files', []),
+        )
+        # With physical file written to disk for verification:
+        # FlatFileMerger.run(
+        #     customer_paths=file_categories.get('customer_journals', []),
+        #     ui_paths=file_categories.get('ui_journals', []),
+        #     llm_paths=file_categories.get('journal_llm_files', []),
+        #     write_to_disk=True,
+        #     output_dir=Path("merged_output"),
+        #  )
+
+        
 
         # ------------------ IN-MEMORY FILE LOAD ------------------
         # Read every relevant branch's file contents from Temp into session memory.

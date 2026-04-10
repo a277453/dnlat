@@ -4428,7 +4428,7 @@ RAISES:
         try:
             sources_response = requests.get(
                 f"{API_BASE_URL}/get-transactions-with-sources",
-                timeout=30,
+                timeout=300,
                 headers=get_auth_headers()
             )
             
@@ -4475,7 +4475,7 @@ RAISES:
         # STEP 3: Get source files and transactions
         sources_response = requests.get(
             f"{API_BASE_URL}/get-transactions-with-sources",
-            timeout=30,
+            timeout=300,
             headers=get_auth_headers()
         )
         
@@ -4650,7 +4650,7 @@ RAISES:
                         f"{API_BASE_URL}/analyze-transaction-llm",
                         cache_enabled=True,
                         json={"transaction_id": selected_txn_id,"employee_code": st.session_state.employee_code},
-                        timeout=120
+                        timeout=300
                     )
                     
                     if response.status_code == 200:
@@ -4866,7 +4866,7 @@ RAISES:
                                         f"{API_BASE_URL}/submit-llm-feedback",
                                         json=feedback_data,
                                         headers=get_auth_headers(),
-                                        timeout=30
+                                        timeout=300
                                     )
                                     
                                     if response.status_code == 200:
@@ -4952,7 +4952,7 @@ RAISES:
                             "transaction_id": db_txn_id.strip(),
                             "employee_code":  db_employee_code.strip(),
                         },
-                        timeout=10,
+                        timeout=300,
                         headers=get_auth_headers()
                     )
                     if response.status_code == 200:
@@ -4993,7 +4993,7 @@ RAISES:
                             "transaction_id": fb_txn_id.strip(),
                             "user_name":      st.session_state.get("username")
                         },
-                        timeout=10,
+                        timeout=300,
                         headers=get_auth_headers()
                     )
                     if response.status_code == 200:

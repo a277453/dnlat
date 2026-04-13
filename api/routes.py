@@ -28,7 +28,7 @@ import pandas as pd
 from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal
 from modules.journal_parser import match_journal_file, mask_ej_log
 from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal, parse_ui_journal_from_string
-from datetime import datetime
+from datetime import datetime, date
 from collections import defaultdict
 import re
 import zipfile
@@ -2111,7 +2111,6 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
                                                         
                                                         if next_info and next_info['first_time']:
                                                             try:
-                                                                from datetime import date
                                                                 dt1 = datetime.combine(date.today(), first_time)
                                                                 dt2 = datetime.combine(date.today(), next_info['first_time'])
                                                                 duration = (dt2 - dt1).total_seconds()
@@ -2604,7 +2603,6 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                     # rather than always referencing the global first occurrence.
                                     # This prevents negative durations caused by the old screen_info
                                     # dict approach which keyed by name and lost positional context.
-                                    from datetime import date
                                     deduped_events = []
                                     for (screen, t) in all_events:
                                         if not deduped_events or deduped_events[-1][0] != screen:
@@ -3988,7 +3986,6 @@ async def get_counter_data(
             last_timestamp = txn_end_time
         else:
             # Parse transaction times
-            from datetime import datetime, time as dt_time
             
             def parse_time_from_trc_local(time_str):
                 """Parse time from TRC trace format (HH:MM:SS or HH:MM:SS.MS)"""
@@ -4059,7 +4056,6 @@ async def get_counter_data(
         txn_date_formatted = txn_date
         if len(txn_date) == 8:  # YYYYMMDD
             try:
-                from datetime import datetime
                 dt = datetime.strptime(txn_date, '%Y%m%d')
                 txn_date_formatted = dt.strftime('%d %B %Y')
             except:
@@ -4104,7 +4100,6 @@ async def get_counter_data(
             date_formatted = date_part
             if len(date_part) == 8:  # YYYYMMDD
                 try:
-                    from datetime import datetime
                     dt = datetime.strptime(date_part, '%Y%m%d')
                     date_formatted = dt.strftime('%d %B %Y')
                 except:

@@ -251,6 +251,8 @@ def _merge_one(
 # ══════════════════════════════════════════════════════════════════════════════
 #  OPTIONAL DISK WRITE  (for verification / debugging)
 # ══════════════════════════════════════════════════════════════════════════════
+#to-do: this is currently only used for debugging and verification. Once we confirm the merged files are correct, we can remove the write_to_disk option and this helper function to keep the codebase clean.
+#to-do:if want to see the meregd files on disk,ucomment code block in routes.py.
 
 def _write_to_disk(result: MergeResult, output_dir: Path, tag: str) -> None:
     """
@@ -279,10 +281,6 @@ def _write_to_disk(result: MergeResult, output_dir: Path, tag: str) -> None:
     except Exception as exc:
         logger.error(f"{tag} Failed to write file to disk: {exc}")
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  PUBLIC CLASS  —  the only symbol routes.py imports
-# ══════════════════════════════════════════════════════════════════════════════
 
 class FlatFileMerger:
     """

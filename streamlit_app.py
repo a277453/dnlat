@@ -17,6 +17,8 @@ import time
 from modules.login import create_reset_tokens_table, is_valid_password, is_same_as_old_password
 import re as _re; from datetime import datetime as _dt
 import html
+import math
+import uuid
 
 
 # Import authentication functions
@@ -1112,7 +1114,11 @@ def show_register_page():
                         st.session_state.page = "login"
                         st.rerun()
                     else:
-                        st.error(response.json().get("detail", "Registration failed."))
+                        try:
+                            error_msg = response.json().get("detail", "Registration failed. Please try again.")
+                        except ValueError:
+                            error_msg = response.text or "Registration failed. Please try again."
+                        st.error(error_msg)
 
                 except requests.exceptions.ConnectionError:
                     st.error("Service temporarily unavailable. Please try again later.")
@@ -1939,7 +1945,7 @@ def render_side_by_side_diff(content1: str, content2: str, filename1: str, filen
     with col3:
         hide_identical = st.checkbox(
             " Show Diff Lines Only",
-            value=False,
+            value= True,
             key=f"hide_identical_{filename1}_{filename2}",
             help="show only the lines that differ between the two files"
         )
@@ -3660,7 +3666,7 @@ def render_ui_flow_individual():
                     st.error(f"  {error_detail}")
                     
             except requests.exceptions.Timeout:
-                st.error("⏱  Request timeout. Please try again.")
+                st.error("Request timeout. Please try again.")
             except requests.exceptions.ConnectionError:
                 st.error("  Connection error. Ensure the API server is running on Backend:8000.")
             except Exception as e:
@@ -3670,7 +3676,7 @@ def render_ui_flow_individual():
                     st.code(traceback.format_exc())
     
     except requests.exceptions.Timeout:
-        st.error("⏱  Request timeout. Please try again.")
+        st.error("Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
@@ -4449,7 +4455,7 @@ RAISES:
                     analyze_response = requests.post(
                         f"{API_BASE_URL}/analyze-customer-journals",
                         headers=get_auth_headers(),
-                        timeout=120
+                        timeout=300
                     )
                     
                     if analyze_response.status_code in (401, 403):
@@ -4827,15 +4833,15 @@ RAISES:
                 
                 with col1:
                     _role = st.session_state.get("role", "USER")
-                    _admin_blocked = _role == "ADMIN"
+                    _can_give_feedback = _role in ("USER", "DEV_MODE")
                     can_submit = questions_answered > 0
 
-                    if _admin_blocked:
-                        st.info(" ADMIN role cannot submit feedback.")
+                    if not _can_give_feedback:
+                        st.info(f" {_role} role cannot submit feedback.")
 
                     if st.button("Submit Feedback", 
                             key=f"{feedback_key_prefix}_submit",
-                            disabled=not can_submit or _admin_blocked,
+                            disabled=not can_submit or not _can_give_feedback,
                             type="primary",
                             use_container_width=True):
                         
@@ -4933,7 +4939,11 @@ RAISES:
                 key="db_employee_code"
             )
 
-        if st.button(" Retrieve from DB", key="retrieve_db_btn", use_container_width=True):
+        _col1, _col2 = st.columns([1, 3])
+        with _col1:
+            _retrieve_db_clicked = st.button(" Retrieve from DB", key="retrieve_db_btn", use_container_width=True)
+        if _retrieve_db_clicked:
+
             if not db_txn_id.strip():
                 st.warning("Please enter a Transaction ID.")
             else:
@@ -4971,7 +4981,10 @@ RAISES:
             key="fb_txn_id"
         )
 
-        if st.button(" Retrieve Feedback", key="retrieve_feedback_btn", use_container_width=True):
+        _fb_col1, _fb_col2 = st.columns([1, 3])
+        with _fb_col1:
+            _retrieve_fb_clicked = st.button(" Retrieve Feedback", key="retrieve_feedback_btn", use_container_width=True)
+        if _retrieve_fb_clicked:
             if not fb_txn_id.strip():
                 st.warning("Please enter a Transaction ID.")
             else:
@@ -6067,99 +6080,170 @@ def show_main_app():
     st.title("DN Diagnostics Platform")
     st.caption("Comprehensive analysis tool for Diebold Nixdorf diagnostic files.")
 
-    st.markdown("## Upload Zip Package( VCP Pro)")
+    # ── Chunked upload config ─────────────────────────────────────────────────────
+    CHUNK_SIZE_MB    = 50
+    CHUNK_SIZE_BYTES = CHUNK_SIZE_MB * 1024 * 1024
+    st.markdown("## Upload Zip Package (VCP Pro)")
 
     uploaded_file = st.file_uploader(
         "Select ZIP Archive",
-        type=['zip'],
-        help="Upload a ZIP file containing diagnostic files (max 200 MB)",
-        key="zip_uploader"
+        type=["zip"],
+        help="Upload a ZIP file of any size — sent chunk by chunk, no full load into memory.",
+        key="zip_uploader",
     )
-    # Check if file was deleted (uploader is now empty but we had processed a file before)
+
+    # ── Clear state when user removes the file
     if uploaded_file is None and st.session_state.zip_processed:
-        # Keys to reset to a fixed value
-        st.session_state.zip_processed = False
-        st.session_state.processing_result = None
+        st.session_state.zip_processed        = False
+        st.session_state.processing_result   = None
         st.session_state.last_processed_file = None
-        st.session_state.selected_function = None
-        st.session_state.processing_time = None
+        st.session_state.selected_function   = None
+        st.session_state.processing_time     = None
 
-        # Keys to delete entirely (analysis / feature-specific state)
-        _keys_to_delete = [
-            # ACU
-            'acu_extracted_files',
-            'acu_parsed_df',
-            'acu_files_loaded',
-            'acu_compare_data',
-            'acu_comparison',
-            # Registry
-            'registry_comparison',
-            # Individual transaction analysis
-            'current_analysis_txn',
-            'analysis_result',
-            # Selectbox widget state (forces it back to "Select a function")
-            'function_selector',
-        ]
-        for _k in _keys_to_delete:
-            if _k in st.session_state:
-                del st.session_state[_k]
+        for _k in [
+            "acu_extracted_files", "acu_parsed_df", "acu_files_loaded",
+            "acu_compare_data", "acu_comparison", "registry_comparison",
+            "current_analysis_txn", "analysis_result", "function_selector",
+        ]:
+            st.session_state.pop(_k, None)
 
-        # Clear API response cache
         clear_cache()
-        st.info("  File removed. Please upload a new ZIP file to continue.")
+        st.info("File removed. Please upload a new ZIP file to continue.")
         st.rerun()
-        
-    # Only process if file exists AND it's different from the last processed file
+
+    # ── Process only when a new file is present 
     if uploaded_file is not None:
-        # Check if this is a new file or the same file we just processed
         current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
-        
-        if 'last_processed_file' not in st.session_state:
-            st.session_state.last_processed_file = None
-        
-        # Only process if it's a new file
-        if st.session_state.last_processed_file != current_file_id:
-            file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
-            st.info(f"File: {uploaded_file.name} ({file_size_mb:.2f} MB)")
-            
-            with st.spinner("Processing package..."):
+
+        if st.session_state.get("last_processed_file") != current_file_id:
+
+            # ── Measure file size WITHOUT loading it all into memory 
+            # seek(0, 2) moves the cursor to the end; tell() returns that position
+            # which equals the total byte count.  Then seek(0) resets for reading.
+            uploaded_file.seek(0, 2)
+            file_size_bytes = uploaded_file.tell()
+            uploaded_file.seek(0)
+
+            file_size_mb = file_size_bytes / (1024 * 1024)
+            total_chunks = math.ceil(file_size_bytes / CHUNK_SIZE_BYTES)
+
+            st.info(
+                f"**{uploaded_file.name}**  —  "
+                f"{file_size_mb:.1f} MB "
+            )
+
+            progress_bar = st.progress(0)
+            status_text  = st.empty()
+            upload_id    = str(uuid.uuid4())
+            auth_headers = get_auth_headers()
+            failed       = False
+            _t_start     = time.time()
+
+            # ── Upload loop — one chunk in RAM at a time 
+            for chunk_idx in range(total_chunks):
+
+                # read() returns at most CHUNK_SIZE_BYTES bytes from the current
+                # cursor position; Streamlit advances the cursor automatically.
+                chunk_data = uploaded_file.read(CHUNK_SIZE_BYTES)
+
+                if not chunk_data:
+                    st.error(f" Unexpected empty read at chunk {chunk_idx}.")
+                    failed = True
+                    break
+
+                status_text.markdown(
+                    f"Processing....... "
+                )
+
                 try:
-                    files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/zip")}
-                    
-                    _t_start = time.time()
-                    response = requests.post(
-                        f"{API_BASE_URL}/process-zip", 
-                        files=files,
-                        timeout=300,  # Increased to 5 minutes for larger files
-                        headers=get_auth_headers()
+                    resp = requests.post(
+                        f"{API_BASE_URL}/upload-chunk",
+                        data={
+                            "upload_id":    upload_id,
+                            "chunk_index":  chunk_idx,
+                            "total_chunks": total_chunks,
+                            "filename":     uploaded_file.name,
+                        },
+                        files={"chunk": (f"chunk_{chunk_idx}", chunk_data, "application/octet-stream")},
+                        timeout=120,
+                        headers=auth_headers,
                     )
-                    _t_elapsed = round(time.time() - _t_start, 2)
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        st.session_state.zip_processed = True
-                        st.session_state.processing_result = result
-                        st.session_state.last_processed_file = current_file_id
-                        st.session_state.processing_time = _t_elapsed
-                        
-                        # Clear cache when new ZIP is uploaded
-                        clear_cache()
-                        
-                        st.success("Package processed successfully.")
-                        st.rerun()
-                    else:
-                        error_detail = response.json().get('detail', 'Unknown error occurred.')
-                        st.error(f"Error: {error_detail}")
-                        
                 except requests.exceptions.Timeout:
-                    st.error("Request timeout. The file may be too large or the server is not responding.")
+                    st.error(f"Timeout on chunk {chunk_idx + 1}. Try reducing CHUNK_SIZE_MB.")
+                    failed = True
+                    break
                 except requests.exceptions.ConnectionError:
-                    st.error("Connection error. Please ensure the FastAPI server is running on Backend:8000.")
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    st.error("Connection error. Ensure the FastAPI server is running.")
+                    failed = True
+                    break
+
+                # chunk_data goes out of scope here — memory is freed by GC
+                del chunk_data
+
+                if resp.status_code != 200:
+                    st.error(f"Chunk {chunk_idx + 1} failed: {resp.json().get('detail', 'Unknown error')}")
+                    failed = True
+                    break
+
+                # 0 → 90% reserved for chunk uploads; last 10% for finalize
+                progress_bar.progress(0.9 * (chunk_idx + 1) / total_chunks)
+
+            # ── Cancel on failure 
+            if failed:
+                try:
+                    requests.delete(
+                        f"{API_BASE_URL}/cancel-upload/{upload_id}",
+                        headers=auth_headers,
+                        timeout=10,
+                    )
+                except Exception:
+                    pass
+                status_text.empty()
+                progress_bar.empty()
+
+            else:
+                # ── Finalize: merge + extract 
+                status_text.markdown("processing…")
+                progress_bar.progress(0.92)
+
+                try:
+                    response = requests.post(
+                        f"{API_BASE_URL}/finalize-upload",
+                        data={
+                            "upload_id":    upload_id,
+                            "filename":     uploaded_file.name,
+                            "total_chunks": total_chunks,
+                        },
+                        timeout=600,
+                        headers=auth_headers,
+                    )
+                except requests.exceptions.Timeout:
+                    st.error("Processing timed out. The file may be very large — try again.")
+                    response = None
+                except requests.exceptions.ConnectionError:
+                    st.error("Connection error during finalize step.")
+                    response = None
+
+                progress_bar.progress(1.0)
+                status_text.empty()
+                progress_bar.empty()
+
+                if response is not None and response.status_code == 200:
+                    result = response.json()
+                    st.session_state.zip_processed       = True
+                    st.session_state.processing_result   = result
+                    st.session_state.last_processed_file = current_file_id
+                    st.session_state.processing_time     = round(time.time() - _t_start, 2)
+                    clear_cache()
+                    st.success(" Package processed successfully.")
+                    st.rerun()
+                elif response is not None:
+                    st.error(f" {response.json().get('detail', 'Unknown error occurred.')}")
+
         else:
-            # File already processed, show info
-            file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
+            file_size_mb = uploaded_file.size / (1024 * 1024)
+            st.info(f" {uploaded_file.name} ({file_size_mb:.1f}MB)")
+
 
     if st.session_state.zip_processed:
         st.markdown("---")

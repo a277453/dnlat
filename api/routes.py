@@ -15,7 +15,7 @@ from modules.schemas import (
 	
 )
 
-
+from modules.login import decode_access_token
 from modules.extraction import extract_from_directory, extract_from_zip_bytes
 from modules.xml_parser_logic import parse_xml_to_dataframe
 from pathlib import Path
@@ -47,6 +47,10 @@ import logging
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from modules.flat_file_generator import FlatFileMerger
+from api.chunk_service import assemble_and_process, cancel_upload, save_chunk
+from fastapi import APIRouter, File, Form, UploadFile
+from typing import Optional
 
 logger.info("Logger initialized at startup")
 
@@ -71,7 +75,6 @@ async def require_elevated_role(
     Returns 403 if role is not in ALLOWED_ROLES (i.e. role == USER).
     Both responses are logged to the terminal.
     """
-    from modules.login import decode_access_token
 
     if not authorization or not authorization.startswith("Bearer "):
         logger.warning(
@@ -445,6 +448,27 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
         t_cat_end = time.perf_counter()
         logger.debug(f"CATEGORIZATION + ACU EXTRACTION TIME: {t_cat_end - t_cat_start:.4f} s")
+
+        # ── FLAT FILE MERGER ──────────────────────────────────────────────────
+        # Runs after categorization while file_categories still holds full paths.
+        # Normal run (buffer only, inspect via /read-log):
+        FlatFileMerger.run(
+            customer_paths=file_categories.get('customer_journals', []),
+            ui_paths=file_categories.get('ui_journals', []),
+            llm_paths=file_categories.get('journal_llm_files', []),
+        )
+
+        #to-do: add a query param to trigger writing the merged files to disk for verification, and to inspect the logs to confirm correct files were merged. This will be removed after verification is complete.
+        # With physical file written to disk for verification:
+        # FlatFileMerger.run(
+        #     customer_paths=file_categories.get('customer_journals', []),
+        #     ui_paths=file_categories.get('ui_journals', []),
+        #     llm_paths=file_categories.get('journal_llm_files', []),
+        #     write_to_disk=True,
+        #     output_dir=Path("merged_output"),
+        #  )
+
+        
 
         # ------------------ IN-MEMORY FILE LOAD ------------------
         # Read every relevant branch's file contents from Temp into session memory.
@@ -2111,9 +2135,8 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
                                                         
                                                         if next_info and next_info['first_time']:
                                                             try:
-                                                                from datetime import date
-                                                                dt1 = datetime.combine(date.today(), first_time)
-                                                                dt2 = datetime.combine(date.today(), next_info['first_time'])
+                                                                dt1 = datetime.combine(datetime.now().date(), first_time)
+                                                                dt2 = datetime.combine(datetime.now().date(), next_info['first_time'])
                                                                 duration = (dt2 - dt1).total_seconds()
                                                             except:
                                                                 duration = None
@@ -2597,50 +2620,37 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                     
                                     # print(f" Mapped {len(screen_info)} unique screens to time ranges")
                                     
-                                    # Build detailed flow for unique screens
+                                    deduped_events = []
+                                    for (screen, t) in all_events:
+                                        if not deduped_events or deduped_events[-1][0] != screen:
+                                            deduped_events.append((screen, t))
+
                                     ui_flow_details = []
-                                    
-                                    for i, screen_name in enumerate(unique_screens):
-                                        info = screen_info.get(screen_name)
-                                        
-                                        if not info:
-                                            ui_flow_details.append({
-                                                'screen': screen_name,
-                                                'timestamp': '',
-                                                'duration': None
-                                            })
-                                            continue
-                                        
-                                        first_time = info['first_time']
-                                        
-                                        # Calculate duration: from first occurrence of THIS screen
-                                        # to first occurrence of NEXT screen
+                                    for i, (screen_name, time_val) in enumerate(deduped_events):
                                         duration = None
-                                        if i < len(unique_screens) - 1:
-                                            next_screen = unique_screens[i + 1]
-                                            next_info = screen_info.get(next_screen)
-                                            
-                                            if next_info and next_info['first_time']:
+                                        if i < len(deduped_events) - 1:
+                                            next_time = deduped_events[i + 1][1]
+                                            if time_val and next_time:
                                                 try:
-                                                    from datetime import date
-                                                    dt1 = datetime.combine(date.today(), first_time)
-                                                    dt2 = datetime.combine(date.today(), next_info['first_time'])
+                                                    dt1 = datetime.combine(datetime.now().date(), time_val)
+                                                    dt2 = datetime.combine(datetime.now().date(), next_time)
                                                     duration = (dt2 - dt1).total_seconds()
-                                                except Exception as e:
+                                                except Exception:
                                                     duration = None
-                                        
+
                                         ui_flow_details.append({
                                             'screen': screen_name,
-                                            'timestamp': str(first_time) if first_time else '',
+                                            'timestamp': str(time_val) if time_val else '',
                                             'duration': duration
                                         })
+                                    
                                     
                                     if ui_flow_details and len(ui_flow_details) > 0:
                                         ui_flow_screens = ui_flow_details
                                         has_flow = True
                                         
                                         with_duration = sum(1 for s in ui_flow_details if s['duration'] is not None)
-                                        # print(f" Created detailed flow: {len(ui_flow_details)} unique screens, {with_duration} with durations")
+                                        logger.info(f" Created detailed flow: {len(ui_flow_details)} unique screens, {with_duration} with durations")
                                         
                                         # Debug: print all screens
                                         # for i, screen in enumerate(ui_flow_details):
@@ -3154,10 +3164,11 @@ class FeedbackSubmission(BaseModel):
 
 @router.post("/submit-llm-feedback")
 async def submit_llm_feedback(feedback: FeedbackSubmission, session_id: str = Query(default=CURRENT_SESSION_ID), authorization: str = Header(default=None)):
-    from modules.login import decode_access_token
+    _jwt_role = None
     if authorization and authorization.startswith("Bearer "):
         payload = decode_access_token(authorization.split(" ", 1)[1])
-        if payload.get("role") == "ADMIN":
+        _jwt_role = payload.get("role", "")
+        if _jwt_role == "ADMIN":
             logger.warning(
                 "FEEDBACK [403] — user='%s' role='ADMIN' attempted to submit feedback (blocked)",
                 payload.get("sub"),
@@ -3246,12 +3257,12 @@ RAISES:
         except Exception as e:
             logger.error(f" Could not save feedback to file {feedback_file}: {str(e)}")
 
-        # Only USER role can store feedback in database
-        role = get_user_role(feedback.user_name)
-        if role != "USER":
+        # Only USER and DEV_MODE roles can store feedback in database
+        role = (_jwt_role or get_user_role(feedback.user_name) or "").upper()
+        if role not in ("USER", "DEV_MODE"):
             raise HTTPException(
                 status_code=403,
-                detail="Only users with USER role can submit feedback."
+                detail="Only users with USER or DEV_MODE roles can submit feedback."
             )
 
         # Store feedback in database
@@ -3289,6 +3300,8 @@ RAISES:
             "message": f"Thank you {feedback.user_name}! Your feedback has been recorded.",
             "timestamp": feedback_record['timestamp']
         }
+    except HTTPException:
+        raise
         
     except Exception as e:
         logger.exception(f"Failed to submit feedback for transaction {feedback.transaction_id}: {str(e)}")
@@ -3990,7 +4003,6 @@ async def get_counter_data(
             last_timestamp = txn_end_time
         else:
             # Parse transaction times
-            from datetime import datetime, time as dt_time
             
             def parse_time_from_trc_local(time_str):
                 """Parse time from TRC trace format (HH:MM:SS or HH:MM:SS.MS)"""
@@ -4061,7 +4073,6 @@ async def get_counter_data(
         txn_date_formatted = txn_date
         if len(txn_date) == 8:  # YYYYMMDD
             try:
-                from datetime import datetime
                 dt = datetime.strptime(txn_date, '%Y%m%d')
                 txn_date_formatted = dt.strftime('%d %B %Y')
             except:
@@ -4106,7 +4117,6 @@ async def get_counter_data(
             date_formatted = date_part
             if len(date_part) == 8:  # YYYYMMDD
                 try:
-                    from datetime import datetime
                     dt = datetime.strptime(date_part, '%Y%m%d')
                     date_formatted = dt.strftime('%d %B %Y')
                 except:
@@ -4850,3 +4860,32 @@ async def auth_initialize_db():
     except Exception as e:
         logger.exception("DB bootstrap failed: %s", e)
         raise HTTPException(status_code=500, detail=f"DB bootstrap failed: {e}")
+
+@router.post("/upload-chunk")
+async def upload_chunk(
+    upload_id:    str        = Form(..., description="Client UUID for this upload session"),
+    chunk_index:  int        = Form(..., description="0-based chunk index"),
+    total_chunks: int        = Form(..., description="Total number of chunks"),
+    filename:     str        = Form(..., description="Original ZIP filename"),
+    chunk:        UploadFile = File(...,  description="Binary data of this chunk"),
+):
+    """Receive one chunk and stage it on disk."""
+    data = await chunk.read()
+    return save_chunk(upload_id, chunk_index, total_chunks, filename, data)
+
+
+@router.post("/finalize-upload")
+async def finalize_upload(
+    upload_id:    str           = Form(..., description="UUID used while uploading chunks"),
+    filename:     str           = Form(..., description="Original ZIP filename"),
+    total_chunks: int           = Form(..., description="Total number of expected chunks"),
+    mode:         Optional[str] = Form(None, description="Optional processing mode"),
+):
+    """Assemble all staged chunks and run the extraction pipeline."""
+    return await assemble_and_process(upload_id, total_chunks, mode)
+
+
+@router.delete("/cancel-upload/{upload_id}")
+async def cancel_upload_endpoint(upload_id: str):
+    """Delete staged chunks for an aborted upload."""
+    return cancel_upload(upload_id)

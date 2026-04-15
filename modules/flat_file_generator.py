@@ -381,7 +381,7 @@ class FlatFileMerger:
 
         merged_count = sum(1 for r in results.values() if r.content)
         logger.info(
-            f"[FlatFileMerger] Done — "
+            f"[FlatFileMerger] Done  "
             f"{merged_count}/{len(_JournalCategory)} categories merged."
         )
         return results

@@ -48,6 +48,9 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from modules.flat_file_generator import FlatFileMerger
+from api.chunk_service import assemble_and_process, cancel_upload, save_chunk
+from fastapi import APIRouter, File, Form, UploadFile
+from typing import Optional
 
 logger.info("Logger initialized at startup")
 
@@ -4857,3 +4860,32 @@ async def auth_initialize_db():
     except Exception as e:
         logger.exception("DB bootstrap failed: %s", e)
         raise HTTPException(status_code=500, detail=f"DB bootstrap failed: {e}")
+
+@router.post("/upload-chunk")
+async def upload_chunk(
+    upload_id:    str        = Form(..., description="Client UUID for this upload session"),
+    chunk_index:  int        = Form(..., description="0-based chunk index"),
+    total_chunks: int        = Form(..., description="Total number of chunks"),
+    filename:     str        = Form(..., description="Original ZIP filename"),
+    chunk:        UploadFile = File(...,  description="Binary data of this chunk"),
+):
+    """Receive one chunk and stage it on disk."""
+    data = await chunk.read()
+    return save_chunk(upload_id, chunk_index, total_chunks, filename, data)
+
+
+@router.post("/finalize-upload")
+async def finalize_upload(
+    upload_id:    str           = Form(..., description="UUID used while uploading chunks"),
+    filename:     str           = Form(..., description="Original ZIP filename"),
+    total_chunks: int           = Form(..., description="Total number of expected chunks"),
+    mode:         Optional[str] = Form(None, description="Optional processing mode"),
+):
+    """Assemble all staged chunks and run the extraction pipeline."""
+    return await assemble_and_process(upload_id, total_chunks, mode)
+
+
+@router.delete("/cancel-upload/{upload_id}")
+async def cancel_upload_endpoint(upload_id: str):
+    """Delete staged chunks for an aborted upload."""
+    return cancel_upload(upload_id)

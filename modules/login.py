@@ -72,8 +72,8 @@ DB_CONFIG = {
 # UAT / DEV CREDENTIALS
 # ============================================
 UAT_CREDENTIALS = {
-    "username": os.getenv("DN_UAT_USERNAME"),
-    "password": os.getenv("DN_UAT_PASSWORD")
+    "username": os.getenv("DN_UAT_USERNAME","DN_UAT_USERNAME_1"),
+    "password": os.getenv("DN_UAT_PASSWORD","DN_UAT_PASSWORD_1")
 }
 # ============================================
 # DEV MODE CONFIG

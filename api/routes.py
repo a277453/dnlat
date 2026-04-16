@@ -53,6 +53,12 @@ logger.info("Logger initialized at startup")
 router = APIRouter()
 logger.info("FastAPI app started")
 
+# ── Counter Analysis ─────────────────────────────────────────────────────────
+# Imported after require_elevated_role is defined below — see bottom of this
+# block for the include_router call.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 # ============================================
 # RBAC DEPENDENCY
 # ============================================
@@ -71,8 +77,11 @@ async def require_elevated_role(
     Returns 403 if role is not in ALLOWED_ROLES (i.e. role == USER).
     Both responses are logged to the terminal.
     """
+<<<<<<< Updated upstream
     from modules.login import decode_access_token
 
+=======
+>>>>>>> Stashed changes
     if not authorization or not authorization.startswith("Bearer "):
         logger.warning(
             "RBAC [401] — missing Authorization header on elevated endpoint"
@@ -113,6 +122,9 @@ async def require_elevated_role(
             },
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+# ── Counter Analysis import (after require_elevated_role is defined) ──────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 log_file=Path("app.log")
 
@@ -268,10 +280,9 @@ async def debug_zip_members(file: UploadFile = File(...)):
 
 # Simple session ID for now (use UUID in production)
 global CURRENT_SESSION_ID
-CURRENT_SESSION_ID =str(uuid4())
+CURRENT_SESSION_ID = str(uuid4())
 
-# ── Session-ID resolver ───────────────────────────────────────
-# so that session is not passed as a string like it previously was.
+# ── Session-ID resolver ───────────────────────────────────────────────────────
 _SESSION_SENTINELS = {"current_session", "CURRENT_SESSION_ID", "", None}
 
 def _resolve_session_id(session_id) -> str:
@@ -287,6 +298,10 @@ def _resolve_session_id(session_id) -> str:
         return CURRENT_SESSION_ID
     return session_id
 # ──────────────────────────────────────────────────────────────────────────────
+
+from modules.counter_analysis import init_counter_router, counter_router
+init_counter_router(require_elevated_role, _resolve_session_id)
+router.include_router(counter_router)
 
 # Global variable to track processed files directory (for registry endpoints)
 PROCESSED_FILES_DIR = None
@@ -369,7 +384,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
         try:
             extraction_service = ZipExtractionService()
-            extract_path, total_files_in_zip, acu_zip_bytes = extraction_service.extract_zip(zip_content)
+            extract_path, total_files_in_zip, acu_zip_bytes_list = extraction_service.extract_zip(zip_content)
             all_files_on_disk = [p for p in Path(extract_path).rglob('*') if p.is_file()]
             total_files_on_disk = len(all_files_on_disk)
             logger.info(f"Total files in original ZIP: {total_files_in_zip}")
@@ -405,11 +420,22 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         #  extract_zip() captured and returned. This avoids re-opening the main ZIP and
         #  re-decompressing acu.zip a second time.
         try:
-            if acu_zip_bytes:
-                acu_files = extract_from_zip_bytes(acu_zip_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
+            acu_files = {}
+            if acu_zip_bytes_list:
+                for acu_zip_bytes in acu_zip_bytes_list:
+                    partial = extract_from_zip_bytes(acu_zip_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
+                    for key, content in partial.items():
+                        # Use the same _1, _2 suffix dedup as the on-disk ACU/ branch so
+                        # that duplicate filenames from multiple acu.zip copies are all kept.
+                        dedup_key = key
+                        i = 1
+                        while dedup_key in acu_files:
+                            base, ext = os.path.splitext(key)
+                            dedup_key = f"{base}_{i}{ext}"
+                            i += 1
+                        acu_files[dedup_key] = content
             else:
                 logger.info(" No acu.zip found in uploaded package — skipping ACU extraction.")
-                acu_files = {}
             xml_count = sum(1 for k in acu_files if not k.startswith('__xsd__'))
             xsd_count = sum(1 for k in acu_files if k.startswith('__xsd__'))
             logger.info(f" ACU extraction: {xml_count} XML, {xsd_count} XSD files")
@@ -669,7 +695,7 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
         # extract_from_zip_bytes only scans the top level of whatever bytes
         # you hand it, so passing the outer ZIP would never find jdd*/x3* files.
         # We locate acu.zip inside the outer archive first, then pass its bytes.
-        acu_zip_bytes = None
+        acu_files: dict = {}
         try:
             with zipfile.ZipFile(io.BytesIO(zip_content)) as outer_zf:
                 acu_candidates = [
@@ -677,18 +703,26 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
                     if os.path.basename(name).lower() == 'acu.zip'
                 ]
                 if acu_candidates:
-                    acu_zip_bytes = outer_zf.read(acu_candidates[0])
-                    logger.info(f"Found nested acu.zip at: {acu_candidates[0]}")
+                    for candidate in acu_candidates:   # loop ALL, not just [0]
+                        candidate_bytes = outer_zf.read(candidate)
+                        logger.info(f"Processing nested acu.zip at: {candidate}")
+                        partial = extract_from_zip_bytes(candidate_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
+                        for key, content in partial.items():
+                            # Use _1, _2 suffix dedup so duplicate filenames from multiple
+                            # acu.zip copies are all kept (same logic as on-disk ACU/ branch).
+                            dedup_key = key
+                            i = 1
+                            while dedup_key in acu_files:
+                                base, ext = os.path.splitext(key)
+                                dedup_key = f"{base}_{i}{ext}"
+                                i += 1
+                            acu_files[dedup_key] = content
                 else:
                     logger.info("No nested acu.zip found — treating uploaded ZIP as the ACU archive directly")
+                    acu_files = extract_from_zip_bytes(zip_content, acu_logs, target_prefixes=('jdd', 'x3'))
         except zipfile.BadZipFile as e:
             logger.error(f"BadZipFile when scanning for nested acu.zip in {file.filename}: {e}")
             raise HTTPException(status_code=400, detail=f"Invalid ZIP file: {e}")
-
-        # Use inner acu.zip bytes when found; fall back to the outer ZIP for
-        # flat packages that already contain jdd*/x3* files at the top level.
-        target_bytes = acu_zip_bytes if acu_zip_bytes else zip_content
-        acu_files = extract_from_zip_bytes(target_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
         logger.debug(f"ACU extraction logs: {acu_logs}")
 
         if not acu_files:
@@ -1534,8 +1568,19 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
             logger.info(f"   Sample record keys: {list(sample.keys())}")
             logger.info(f"   Sample 'Source File' value: '{sample.get('Source File', 'KEY NOT FOUND')}'")
         
-        # Store in session (remove duplicates from source_files)
-        unique_source_files = sorted(set(source_files))
+        # Preserve all source file names including deduplicated variants (_1, _2, …).
+        # Do NOT collapse via set() — duplicate .jrn files in the ZIP are stored in
+        # the session as  20250404, 20250404_1, 20250404_2 … and each must remain a
+        # distinct entry so that the Counters Analysis dropdown can surface them all.
+        # We still deduplicate consecutive identical names that arise from the same
+        # filename appearing twice in the loop (shouldn't happen, but guard anyway).
+        seen = set()
+        unique_source_files = []
+        for sf in source_files:
+            if sf not in seen:
+                seen.add(sf)
+                unique_source_files.append(sf)
+        unique_source_files = sorted(unique_source_files)
 
         logger.info(f" Unique source files being stored: {unique_source_files}")
         logger.info(f" Total source files count: {len(unique_source_files)}")
@@ -3412,6 +3457,7 @@ RAISES:
             detail=f"Failed to retrieve feedback: {str(e)}"
         )
     
+<<<<<<< Updated upstream
 class CounterDataRequest(BaseModel):
     transaction_id: str
     source_file: str
@@ -4250,6 +4296,8 @@ def get_counter_column_descriptions():
         'HWsens': 'HWsens',
         'Record_Type': 'Record Type'
     }
+=======
+>>>>>>> Stashed changes
 
 # ============================================
 # GET ANALYSIS RECORDS

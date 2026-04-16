@@ -316,7 +316,7 @@ class ZipExtractionService:
                 return zlib.decompress(compressed, -zlib.MAX_WBITS)
             raise ValueError(f"Unsupported compress type {zinfo.compress_type} for '{filename}'")
 
-    def extract_zip(self, zip_content: bytes) -> Tuple[Path, int, Optional[bytes]]:
+    def extract_zip(self, zip_content: bytes) -> Tuple[Path, int, List[bytes]]:
         """
         FUNCTION: extract_zip
 
@@ -347,13 +347,14 @@ class ZipExtractionService:
             zip_content (bytes) : Raw bytes of the uploaded ZIP archive.
 
         RETURNS:
-            Tuple[Path, int, Optional[bytes]] :
-                - Path         : Path to the run directory (e.g. .../dn_extracts/dn_20240101_120000/).
-                - int          : Total number of files found in the top-level ZIP (for logging).
-                - Optional[bytes] : Raw decompressed bytes of acu.zip if it was present,
-                                    otherwise None. Returned so the caller can pass them
-                                    directly to extract_from_zip_bytes(), avoiding a second
-                                    decompress of the same nested archive.
+            Tuple[Path, int, List[bytes]] :
+                - Path        : Path to the run directory (e.g. .../dn_extracts/dn_20240101_120000/).
+                - int         : Total number of files found in the top-level ZIP (for logging).
+                - List[bytes] : Raw decompressed bytes for every acu.zip found in the archive
+                                (empty list if none were present). A list is returned instead of
+                                a single Optional[bytes] so that packages containing duplicate
+                                acu.zip files are fully handled — callers must loop over every
+                                entry and merge the results.
 
         RAISES:
             ValueError : If zip_content is empty, not a valid ZIP, or yields no files.
@@ -468,9 +469,9 @@ class ZipExtractionService:
                 all_files_after = [p for p in dn_folder.rglob('*') if p.is_file()]
                 logger.info(f"Total files in run folder after nested ZIP expansion: {len(all_files_after)}")
 
-                # Return the folder path, the top-level file count, and the raw acu.zip bytes (None if acu.zip was not present). Done to avoid re-opening the main ZIP for counting and to avoid re-decompressing acu.zip for the ACU extraction pass.
-                acu_zip_bytes = next(iter(nested_zip_bytes.values()), None) if nested_zip_bytes else None
-                return dn_folder, total_files_in_zip, acu_zip_bytes
+                # Return the folder path, the top-level file count, and the raw acu.zip bytes as list (None if acu.zip was not present). Done to avoid re-opening the main ZIP for counting and to avoid re-decompressing acu.zip for the ACU extraction pass.
+                acu_zip_bytes_list = list(nested_zip_bytes.values()) if nested_zip_bytes else []
+                return dn_folder, total_files_in_zip, acu_zip_bytes_list
 
         except zipfile.BadZipFile:
             shutil.rmtree(dn_folder, ignore_errors=True)

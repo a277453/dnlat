@@ -576,9 +576,15 @@ def get_user_role(user_name: str) -> str:
         row = cursor.fetchone()
         cursor.close()
         conn.close()
-        return row[0] if row else None
+        if row:
+            print(f"get_user_role: user='{user_name}' role='{row[0]}'")
+            return row[0]
+        else:
+            print(f"get_user_role: user='{user_name}' not found in Users table")
+            return None
     except Exception as e:
-        print(f"Failed to get user role: {e}")
+        print(f"get_user_role: DB connection/query failed for user='{user_name}': {e}")
+        print(f"  DB_CONFIG in use → host={DB_CONFIG.get('host')}, db={DB_CONFIG.get('database')}, user={DB_CONFIG.get('user')}")
         return None
 # ============================================
 # RUN

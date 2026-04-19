@@ -339,6 +339,156 @@ Confidence Level:
 ---
 """
 
+MESSAGE user """
+LOG:
+[
+  {
+    "ts_start": "10:38:13",
+    "ts_end": "10:39:24",
+    "type": "Cash Withdrawal",
+    "pin_entered": true,
+    "card_returned": true,
+    "status": "Incomplete",
+    "transaction_chain": [
+      {
+        "function": "PINAUTH/PV",
+        "protocol_steps": ["TDR_PV→PROCEED_NEXT (REPLY NEXT 046 FUNCTION 5)"],
+        "state": "N",
+        "end_state": "N"
+      },
+      {
+        "function": "COUT/GA",
+        "protocol_steps": [
+          "TDR_GA→INTERACTIVE (6305)",
+          "TDR_GA→PROCEED_NEXT (REPLY NEXT 024 FUNCTION A)"
+        ],
+        "state": "R",
+        "end_state": "E"
+      }
+    ],
+    "card_events": [
+      "10:38:48 [3209] Card successfully presented to customer"
+    ],
+    "retract_occurred": true,
+    "app_state_start": "TRANSACTION (5)",
+    "app_state_end": "OPEN (1)"
+  }
+]
+"""
+
+MESSAGE assistant """
+---
+Transaction Summary:
+- ATM ID: Not specified in log
+- Transaction Type: Cash Withdrawal (Chained: PINAUTH → COUT)
+- Status: Incomplete — Cash Retracted
+- Timestamp: 10:38:13 - 10:39:24
+
+What Happened:
+- Customer initiated a chained transaction starting with PIN authentication (PINAUTH/PV).
+- PIN was verified and host accepted the PIN check (REPLY NEXT 046 FUNCTION 5).
+- Transaction chained (3239) into a Cash Withdrawal function (COUT/GA).
+- Host sent an interactive response (6305) during authorization, requiring a follow-up request.
+- Host approved the withdrawal (REPLY NEXT 024 FUNCTION A).
+- Card was presented to the customer at 10:38:48.
+- Transaction finished with state 'R' (Retract), end-state 'E' — cash was retracted.
+- Customer did not collect the dispensed cash within the timeout window.
+
+Why It Might Have Happened:
+- Cash was physically dispensed and presented but not taken by the customer in time.
+- The ATM retracted the cash after the preset present-cash timeout expired (~36 seconds after card was presented).
+
+Possible Root Causes:
+1. Customer walked away or was distracted after card was returned but before collecting cash.
+2. Present-cash timeout interval may be too short for this deployment environment.
+
+Recommended Actions:
+- Check retract bin count to confirm cash was retracted and logged correctly.
+- Flag this transaction for reconciliation — dispensed cash not received by customer.
+- Review present-cash timeout configuration if retract incidents are frequent.
+- Customer may need to be contacted or reimbursed depending on reconciliation outcome.
+
+Confidence Level:
+- High
+---
+"""
+
+MESSAGE user """
+LOG:
+[
+  {
+    "ts_start": "10:36:48",
+    "ts_end": "10:37:28",
+    "type": "Balance Inquiry",
+    "pin_entered": true,
+    "card_returned": true,
+    "status": "Incomplete",
+    "transaction_chain": [
+      {
+        "function": "PINAUTH/PV",
+        "protocol_steps": ["TDR_PV→PROCEED_NEXT (REPLY NEXT 046 FUNCTION 5)"],
+        "state": "N",
+        "end_state": "N"
+      },
+      {
+        "function": "BAL/BI",
+        "protocol_steps": [
+          "TDR_BI→INTERACTIVE (6305)",
+          "TDR_BI→PROCEED_NEXT (REPLY NEXT 069 FUNCTION 5)"
+        ],
+        "state": "T",
+        "end_state": "E"
+      }
+    ],
+    "card_events": [
+      "10:37:22 [3209] Card successfully presented to customer"
+    ],
+    "customer_actions": [
+      "10:37:28 [3220] Transaction cancelled. Customer timeout."
+    ],
+    "app_state_start": "TRANSACTION (5)",
+    "app_state_end": "OPEN (1)"
+  }
+]
+"""
+
+MESSAGE assistant """
+---
+Transaction Summary:
+- ATM ID: Not specified in log
+- Transaction Type: Balance Inquiry (Chained: PINAUTH → BAL/BI)
+- Status: Incomplete — Customer Timeout
+- Timestamp: 10:36:48 - 10:37:28
+
+What Happened:
+- Customer initiated a chained transaction starting with PIN authentication (PINAUTH/PV).
+- PIN was verified and host accepted the PIN check (REPLY NEXT 046 FUNCTION 5).
+- Transaction chained (3239) into a Balance Inquiry function (BAL/BI).
+- Host sent an interactive response (6305) during the balance request, requiring a follow-up request.
+- Host responded successfully (REPLY NEXT 069 FUNCTION 5).
+- Card was presented to the customer at 10:37:22.
+- Customer did not respond to the post-balance screen within the timeout window.
+- Transaction was cancelled due to customer inactivity at 10:37:28 (3220).
+- Transaction finished with state 'T' (Timeout), end-state 'E'.
+
+Why It Might Have Happened:
+- Balance inquiry completed successfully at the host level.
+- Customer took the card but did not interact with any post-balance prompt or confirmation screen in time.
+
+Possible Root Causes:
+1. Customer inactivity after receiving the card — did not acknowledge the balance result screen.
+2. Customer may have walked away after collecting card without completing the final screen interaction.
+
+Recommended Actions:
+- No hardware or host issues detected.
+- No action required — balance was retrieved successfully, timeout is customer-side.
+- If timeout cancellations are frequent at this ATM, consider reviewing the post-transaction screen timeout duration.
+
+Confidence Level:
+- High
+---
+"""
+
 # Deterministic behavior for log analysis
 PARAMETER temperature 0.1
 PARAMETER top_p 0.85

@@ -27,6 +27,7 @@ MIN_PROMPT_CHARS = 150
 _EJ_REDUNDANT_CODES = {
     '3239', '3202',            # txn open/close (ts_start/ts_end/status)
     '3201',                    # txn number line
+    '60002',                   # account number — already in customer_actions [3260]
     # NOTE: 3207 (card retract) intentionally kept — contains retract reason
     # details (e.g. card not taken, card jammed) not always in ordered_events
 }
@@ -230,15 +231,27 @@ def _build_ej_record_from_txn_data(txn_data: dict, transaction_log: str) -> dict
         if ev not in already_added:
             ordered_events.append(ev)
 
+    raw_protocol_steps = _parse_list_field(txn_data.get("JRN Protocol Steps"))
+
+    # ── Deduplicate protocol steps: drop →sent if a →result exists for same step ──
+    # e.g. keep TDR_CV(CV)→PROCEED_NEXT, drop TDR_CV(CV)→sent
+    result_steps = {
+        s.split('→')[0] for s in raw_protocol_steps if '→' in s and not s.endswith('→sent')
+    }
+    protocol_steps_clean = [
+        s for s in raw_protocol_steps
+        if not (s.endswith('→sent') and s.split('→')[0] in result_steps)
+    ]
+
     record = {
         "ts_start":         _safe_ts(txn_data.get("Start Time")),
         "ts_end":           _safe_ts(txn_data.get("End Time")),
-        "txn_number":       str(txn_data.get("Transaction ID", "")),
+        # txn_number intentionally excluded — same as transaction_id, pure duplicate
         "type":             str(txn_data.get("Transaction Type", "Unknown")),
         "status":           str(txn_data.get("End State", "Unknown")),
         # NOTE: raw_log intentionally excluded — contains PAN and unredacted host data
         # JRN-enriched fields already merged during analyze_customer_journals
-        "protocol_steps":   _parse_list_field(txn_data.get("JRN Protocol Steps")),
+        "protocol_steps":   protocol_steps_clean,
         "device_errors":    _parse_list_field(txn_data.get("JRN Device Errors")),
         "events":           ordered_events,      # sequenced — see above
         "response_code":    txn_data.get("JRN Response Code"),
@@ -520,6 +533,21 @@ def analyze_transaction(
         f"preprocess_merged={merged_record is not ej_record} | "
         f"jrn_data_available={jrn_data_available}"
     )
+
+    # ── STEP 2b: Strip emv_events that carry no diagnostic value ────────────
+    # [3214] card track 2 lines with fully masked data have zero signal for the LLM.
+    # Keep only lines that contain an AID, chip decision, or non-masked content.
+    if ej_record.get('emv_events'):
+        ej_record['emv_events'] = [
+            e for e in ej_record['emv_events']
+            if not (
+                '[3214]' in e and
+                '[MASKED]' in e and
+                'AID:' not in e
+            )
+        ]
+        if not ej_record['emv_events']:
+            del ej_record['emv_events']
 
     # ── STEP 3: Build prompt ──────────────────────────────────────────────
     user_content = _preprocessor.build_prompt(

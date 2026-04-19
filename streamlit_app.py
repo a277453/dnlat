@@ -15,7 +15,8 @@ from modules.analysis import create_analysis_table, create_feedback_table, creat
 from modules.streamlit_logger import logger as frontend_logger
 import time
 from modules.login import create_reset_tokens_table, is_valid_password, is_same_as_old_password
-import re as _re; from datetime import datetime as _dt
+import re as _re
+from datetime import datetime as _dt
 import html
 import math
 import uuid
@@ -1519,8 +1520,7 @@ def create_comparison_flow_plotly(txn1_id, txn1_state, txn1_flow_screens, txn1_m
         TypeError  :
             If any parameter is passed with an incorrect data type.
     """
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
+    
     
     # Create subplots: 1 row, 2 columns
     fig = make_subplots(
@@ -1624,8 +1624,6 @@ def init_cache():
 
 def get_cache_key(endpoint: str, **params) -> str:
     """Generate a unique cache key from endpoint and parameters"""
-    import hashlib
-    import json
     
     # Sort parameters for consistent keys
     sorted_params = json.dumps(params, sort_keys=True)
@@ -2073,7 +2071,7 @@ def render_transaction_stats():
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
                         # Give a moment for the session to update
-                        import time
+                        
                         time.sleep(0.5)
                     else:
                         error_detail = analyze_response.json().get('detail', 'Analysis failed')
@@ -2088,7 +2086,6 @@ def render_transaction_stats():
                     return
                 except Exception as e:
                     st.error(f"  Error during analysis: {str(e)}")
-                    import traceback
                     st.code(traceback.format_exc())
                     return
         
@@ -2364,7 +2361,6 @@ def render_transaction_stats():
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error loading transaction statistics: {str(e)}")
-        import traceback
         with st.expander(" Debug Information"):
             st.code(traceback.format_exc())
 
@@ -2439,7 +2435,7 @@ RAISES:
                     content_b64 = registry_contents[selected_file_name]
                     
                     # Decode base64 to bytes
-                    import base64
+                    
                     content = base64.b64decode(content_b64)
                     
                     # Parse registry file
@@ -2492,7 +2488,6 @@ RAISES:
                 except Exception as e:
                     st.error(f"Error loading file: {str(e)}")
                     logger.exception(f"Error parsing registry file {selected_file_name}")
-                    import traceback
                     with st.expander("  Debug Information"):
                         st.code(traceback.format_exc())
                     
@@ -2503,7 +2498,6 @@ RAISES:
     except Exception as e:
         st.error(f"  Error: {str(e)}")
         logger.exception("Error in render_registry_single")
-        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -2603,7 +2597,6 @@ def render_registry_compare():
                         st.error("  Connection error. Ensure the API server is running.")
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
-                        import traceback
                         with st.expander("  Debug Information"):
                             st.code(traceback.format_exc())
         
@@ -2658,7 +2651,6 @@ def render_registry_compare():
                     with st.spinner("Comparing files..."):
                         try:
                             # Get contents from both packages
-                            import base64
                             
                             content_a_b64 = registry_contents_a[selected_filename]
                             content_b_b64 = registry_contents_b[selected_filename]
@@ -2683,7 +2675,6 @@ def render_registry_compare():
 
                         except Exception as e:
                             st.error(f"Error comparing files: {str(e)}")
-                            import traceback
                             with st.expander("  Debug Information"):
                                 st.code(traceback.format_exc())
 
@@ -2706,7 +2697,6 @@ def render_registry_compare():
     except Exception as e:
         st.error(f"  Error in comparison setup: {str(e)}")
         logger.exception("Error in render_registry_compare")
-        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -2793,7 +2783,6 @@ def render_transaction_comparison():
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
                         st.success(f"  Analysis complete! Found {analyze_data.get('total_transactions', 0)} transactions")
-                        import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -3002,7 +2991,6 @@ def render_transaction_comparison():
                 
                 if txn1_data:
                     try:
-                        import re as _re1; from datetime import datetime as _dt1
                         _src1 = _re1.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt1.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), str(txn1_data.get('Source File', 'Unknown')))
                     except Exception: _src1 = txn1_data.get('Source File', 'Unknown')
                     st.info(
@@ -3046,7 +3034,6 @@ def render_transaction_comparison():
                 
                 if txn2_data:
                     try:
-                        import re as _re2; from datetime import datetime as _dt2
                         _src2 = _re2.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt2.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), str(txn2_data.get('Source File', 'Unknown')))
                     except Exception: _src2 = txn2_data.get('Source File', 'Unknown')
                     st.info(
@@ -3327,17 +3314,16 @@ def render_transaction_comparison():
                 st.error("  Connection error. Ensure the API server is running.")
             except Exception as e:
                 st.error(f"  Error during comparison: {str(e)}")
-                import traceback
                 with st.expander("  Debug Information"):
                     st.code(traceback.format_exc())
     
     except requests.exceptions.Timeout:
-        st.error("⏱  Request timeout. Please try again.")
+        st.error("Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error in transaction comparison: {str(e)}")
-        import traceback
+  
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -3423,7 +3409,6 @@ def render_ui_flow_individual():
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
                         st.success(f" Analysis complete! Found {analyze_data.get('total_transactions', 0)} transactions")
-                        import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -3439,7 +3424,6 @@ def render_ui_flow_individual():
                     return
                 except Exception as e:
                     st.error(f"  Error during analysis: {str(e)}")
-                    import traceback
                     with st.expander("  Debug Information"):
                         st.code(traceback.format_exc())
                     return
@@ -3671,7 +3655,6 @@ def render_ui_flow_individual():
                 st.error("  Connection error. Ensure the API server is running on Backend:8000.")
             except Exception as e:
                 st.error(f"  Error in UI flow visualization: {str(e)}")
-                import traceback
                 with st.expander("  Debug Information"):
                     st.code(traceback.format_exc())
     
@@ -3681,7 +3664,6 @@ def render_ui_flow_individual():
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error loading UI flow: {str(e)}")
-        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -3747,7 +3729,7 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
         - The layout adapts its height based on the number of screens.
         - Background is dark-themed to match Streamlit dark mode aesthetics.
     """
-    import plotly.graph_objects as go
+    
     
     if not flow_screens or flow_screens[0] == 'No flow data':
         return None
@@ -3914,8 +3896,7 @@ def create_consolidated_flow_plotly(flow_data):
         - Layout adapts to the number of screens and columns.
         - Hovering over a screen shows sample transactions passing through it.
     """
-    import plotly.graph_objects as go
-    from collections import defaultdict
+    
     
     screens = flow_data['screens']
     transitions = flow_data['transitions']
@@ -4257,8 +4238,7 @@ def render_consolidated_flow():
                         st.error(" Access Denied — your role does not have permission to use this feature.")
                         return
                     if analyze_response.status_code == 200:
-                        st.success("✓ Analysis complete!")
-                        import time
+                        st.success("Analysis complete!")
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -4382,18 +4362,16 @@ def render_consolidated_flow():
                         st.error(f"  {error_detail}")
                         
                 except requests.exceptions.Timeout:
-                    st.error("⏱  Request timeout. Please try again.")
+                    st.error("Request timeout. Please try again.")
                 except requests.exceptions.ConnectionError:
-                    st.error("  Connection error. Ensure the API server is running.")
+                    st.error("Connection error. Ensure the API server is running.")
                 except Exception as e:
                     st.error(f"  Error: {str(e)}")
-                    import traceback
                     with st.expander("  Debug Information"):
                         st.code(traceback.format_exc())
     
     except Exception as e:
         st.error(f"  Error: {str(e)}")
-        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -4430,7 +4408,7 @@ RAISES:
         try:
             sources_response = requests.get(
                 f"{API_BASE_URL}/get-transactions-with-sources",
-                timeout=30,
+                timeout=300,
                 headers=get_auth_headers()
             )
             
@@ -4462,8 +4440,7 @@ RAISES:
                         st.error(" Access Denied — your role does not have permission to use this feature.")
                         return
                     if analyze_response.status_code == 200:
-                        st.success("  Analysis complete!")
-                        import time
+                        st.success(" Analysis complete!")
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -4477,7 +4454,7 @@ RAISES:
         # STEP 3: Get source files and transactions
         sources_response = requests.get(
             f"{API_BASE_URL}/get-transactions-with-sources",
-            timeout=30,
+            timeout=300,
             headers=get_auth_headers()
         )
         
@@ -4597,10 +4574,8 @@ RAISES:
             # Format source file date (e.g. 20250423 -> 23 April 2025)
             _src = selected_txn_data['Source File']
             try:
-                import re as _re
                 _match = _re.search(r'(\d{4})(\d{2})(\d{2})', _src)
                 if _match:
-                    from datetime import datetime as _dt
                     _readable = _dt.strptime(_match.group(), '%Y%m%d').strftime('%d %B %Y')
                     _src = _re.sub(r'\d{8}', _readable, _src)
             except Exception:
@@ -4652,7 +4627,7 @@ RAISES:
                         f"{API_BASE_URL}/analyze-transaction-llm",
                         cache_enabled=True,
                         json={"transaction_id": selected_txn_id,"employee_code": st.session_state.employee_code},
-                        timeout=120
+                        timeout=300
                     )
                     
                     if response.status_code == 200:
@@ -4868,7 +4843,7 @@ RAISES:
                                         f"{API_BASE_URL}/submit-llm-feedback",
                                         json=feedback_data,
                                         headers=get_auth_headers(),
-                                        timeout=30
+                                        timeout=300
                                     )
                                     
                                     if response.status_code == 200:
@@ -4885,7 +4860,6 @@ RAISES:
                                             if key in st.session_state:
                                                 del st.session_state[key]
                                         
-                                        import time
                                         time.sleep(1)
                                         st.rerun()
                                     else:
@@ -4913,7 +4887,6 @@ RAISES:
     
     except Exception as e:
         st.error(f"  Error: {str(e)}")
-        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -4954,7 +4927,7 @@ RAISES:
                             "transaction_id": db_txn_id.strip(),
                             "employee_code":  db_employee_code.strip(),
                         },
-                        timeout=10,
+                        timeout=300,
                         headers=get_auth_headers()
                     )
                     if response.status_code == 200:
@@ -4995,7 +4968,7 @@ RAISES:
                             "transaction_id": fb_txn_id.strip(),
                             "user_name":      st.session_state.get("username")
                         },
-                        timeout=10,
+                        timeout=300,
                         headers=get_auth_headers()
                     )
                     if response.status_code == 200:
@@ -5084,7 +5057,6 @@ RAISES:
                         return
                     if analyze_response.status_code == 200:
                         st.success("  Analysis complete!")
-                        import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -5256,7 +5228,6 @@ RAISES:
                     counter_data = response.json()
                     
                     # Display START counter (static - first counter in file)
-                    from datetime import datetime
                     
                     start_date = counter_data['start_counter']['date']
                     start_time = counter_data['start_counter']['timestamp']
@@ -5603,13 +5574,11 @@ RAISES:
                 st.error("  Connection error. Ensure the API server is running.")
             except Exception as e:
                 st.error(f"  Error: {str(e)}")
-                import traceback
                 with st.expander("  Debug Information"):
                     st.code(traceback.format_exc())
     
     except Exception as e:
         st.error(f"  Error: {str(e)}")
-        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -5743,7 +5712,6 @@ def render_acu_single_parse(): # MODIFIED
                     
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
-                        import traceback
                         with st.expander("  Debug Info"):
                             st.code(traceback.format_exc())
         else:
@@ -5847,7 +5815,7 @@ RAISES:
     comp_data = st.session_state.acu_compare_data
     
     # Source A is now automatically loaded from the main processed ZIP
-    st.markdown("####   Source A (Main Package)")
+    st.markdown("####Source A (Main Package)")
     if not comp_data.get('files1'):
         with st.spinner("Loading ACU files from main package for Source A..."):
             try:
@@ -5869,7 +5837,7 @@ RAISES:
                         comp_data['files1'] = {k: v for k, v in all_files.items() if not k.startswith('__xsd__')}
                         #st.write("  DEBUG: Filtered XML files for Source A:", comp_data['files1'])  # DEBUG ADDED
                         comp_data['files1_all'] = all_files
-                        st.success(f"  **Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
+                        st.success(f"**Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
                         st.rerun()
                     else:
                         comp_data['files1'] = None
@@ -5881,16 +5849,15 @@ RAISES:
             except Exception as e:
                 st.error(f"Error loading Source A: {e}")
     else:
-        st.success(f"✓ **Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
+        st.success(f"**Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
     
     st.markdown("---")
     
     # Source B
-    # Source B
-    st.markdown("####   Source B")
+    st.markdown("####Source B")
     
     if comp_data.get('files2'):
-        st.success(f"  **Source B:** {comp_data.get('zip2_name')} ({len(comp_data['files2'])} XML files)")
+        st.success(f"**Source B:** {comp_data.get('zip2_name')} ({len(comp_data['files2'])} XML files)")
         if st.button("Replace Source B", key="acu_replace_b"):
             comp_data['zip2_name'] = None
             comp_data['files2'] = None
@@ -5941,7 +5908,6 @@ RAISES:
                     st.error("  Connection error. Check if API server is running.")
                 except Exception as e:
                     st.error(f"  Error: {str(e)}")
-                    import traceback
                     with st.expander("  Debug Info"):
                         st.code(traceback.format_exc())
     

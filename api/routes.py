@@ -1,4 +1,11 @@
 from uuid import uuid4
+import traceback
+from modules.login import decode_access_token
+from datetime import date, datetime
+import base64 as _b64
+import base64
+from pydantic import BaseModel
+from datetime import datetime, time as dt_time
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query, status, Depends
 from modules.extraction import ZipExtractionService
 from modules.categorization import CategorizationService
@@ -14,6 +21,13 @@ from modules.schemas import (
     TransactionVisualizationRequest
 	
 )
+from admin_setup import create_dn_diagnostics_database, initialize_admin_table
+from modules.login import create_login_history_table, create_reset_tokens_table
+from modules.analysis import (
+        create_userresponse_database,
+        create_analysis_table,
+        create_feedback_table,
+    )
 
 from modules.login import decode_access_token
 from modules.extraction import extract_from_directory, extract_from_zip_bytes
@@ -28,7 +42,7 @@ import pandas as pd
 from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal
 from modules.journal_parser import match_journal_file, mask_ej_log
 from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal, parse_ui_journal_from_string
-from datetime import datetime
+from datetime import datetime, date
 from collections import defaultdict
 import re
 import zipfile
@@ -260,7 +274,6 @@ async def debug_zip_members(file: UploadFile = File(...)):
         }
         
     except Exception as e:
-        import traceback
         logger.error(f"Unexpected error in /debug-zip-members: {e}")  
         logger.debug(traceback.format_exc()) 
         return {
@@ -337,7 +350,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
     Step 1: Receive and validate ZIP file upload
     """
     logger.info(" Received request to process ZIP file")
-    if not file.filename.endswith('.zip'):
+    if not file.filename.lower().endswith('.zip'):
         logger.error(" Invalid file type - only ZIP allowed")
         raise HTTPException(
             status_code=400,
@@ -491,7 +504,6 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
         # --- REGISTRY ---
         # Base64-encode bytes before storing so the session remains JSON-serialisable.
-        import base64 as _b64
         registry_contents: dict = {}
         for path_str in file_categories.get('registry_files', []):
             p = Path(path_str)
@@ -632,7 +644,6 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
     except HTTPException:
         raise   
     except Exception as e:
-        import traceback
         logger.error(f" ERROR in process_zip:{e}", exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -676,7 +687,7 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
     """
     logger.info(f" Received request: /extract-files/ for file: {file.filename}")  
     try:
-        if not file.filename.endswith('.zip'):
+        if not file.filename.lower().endswith('.zip'):
             logger.error(f"Invalid file type uploaded: {file.filename}")  
             raise HTTPException(
                 status_code=400,
@@ -735,7 +746,6 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
         logger.error(f"Unexpected error during ACU extraction for file {file.filename}: {e}")  
         logger.debug(traceback.format_exc())  
         raise HTTPException(
@@ -750,27 +760,14 @@ async def extract_registry_from_zip(file: UploadFile = File(...), session_id: st
         extract_registry_from_zip
 
     DESCRIPTION:
-        Lightweight endpoint that scans an uploaded ZIP archive and extracts
-        ONLY registry-related files without performing full package processing.
-        This avoids the overhead of ACU extraction, categorization, session
-        creation, and disk writes that the full /process-zip pipeline incurs.
+        Extracts ONLY registry-related files from an uploaded ZIP archive.
 
-        A file is treated as a registry file when ANY of these conditions holds:
-            1. Its extension is .reg
-            2. Its name contains 'reg' and its extension is .txt  (e.g. reg.txt,
-               machine_reg.txt)
-            3. It lives inside a folder whose name contains 'registry' or 'reg'
-               and has one of these extensions: .reg .txt .ini .cfg .conf
-
-        The returned contents are base64-encoded raw bytes so the caller can
-        decode them with any supported encoding without a second API round-trip.
-
-    USAGE:
-        result = await extract_registry_from_zip(file=some_zip_file)
+        Uses the same ZipExtractionService + CategorizationService pipeline as
+        /process-zip so that both Package A (main upload) and Package B (compare
+        upload) identify registry files with identical logic.  
 
     PARAMETERS:
-        file (UploadFile) : The ZIP file uploaded via mu
-        ltipart/form-data.
+        file (UploadFile) : ZIP file uploaded via multipart/form-data.
 
     RETURNS:
         dict :
@@ -792,45 +789,33 @@ async def extract_registry_from_zip(file: UploadFile = File(...), session_id: st
         raise HTTPException(status_code=400, detail="Only ZIP files are accepted")
 
     try:
-        import base64
+        
 
         zip_bytes = await file.read()
         logger.info(f"Read {len(zip_bytes)} bytes from {file.filename}")
 
-        # Registry-file detection rules (mirrors categorization.py logic)
-        REGISTRY_EXTENSIONS     = {'.reg', 'reg.txt'}
-        REGISTRY_FOLDER_MARKERS = {'registry', 'reg'}
+        # ------------------------------------------------------------------
+        # Step 1: Extract ZIP using the same ZipExtractionService used by
+        # /process-zip.  This routes every file into branch folders (REGISTRY/,
+        # ACU/, TRC/, …) using _classify_to_branch() — identical logic to what
+        # builds Package A's registry_contents in the session.
+        # ------------------------------------------------------------------
+        extraction_service = ZipExtractionService()
+        try:
+            extract_path, _, _ = extraction_service.extract_zip(zip_bytes)
+        except Exception as e:
+            logger.error(f"ZIP extraction failed: {e}")
+            raise HTTPException(status_code=400, detail=f"ZIP extraction failed: {str(e)}")
 
-        def _is_registry_file(zip_member_name: str) -> bool:
-            """Return True when the ZIP member looks like a registry file."""
-            norm        = zip_member_name.replace('\\\\', '/')
-            parts       = [p.lower() for p in norm.split('/')]
-            fname       = parts[-1] if parts else ''
-            ext         = os.path.splitext(fname)[1]
-            name_no_ext = os.path.splitext(fname)[0]
-
-            # Rule 1 – plain .reg file anywhere in the archive
-            if ext == '.reg':
-                return True
-
-            # Rule 2 – .txt file whose name contains 'reg'
-            if ext == '.txt' and 'reg' in name_no_ext:
-                return True
-
-            # Rule 3 – file inside a folder that contains 'registry' or 'reg'
-            parent_parts = parts[:-1]
-            in_registry_folder = any(
-                marker in part
-                for part in parent_parts
-                for marker in REGISTRY_FOLDER_MARKERS
-            )
-            if in_registry_folder and ext in REGISTRY_EXTENSIONS:
-                return True
-
-            return False
+        # ------------------------------------------------------------------
+        # Step 2: Read every file that landed in the REGISTRY/ branch folder.
+        # CategorizationService is not needed here — anything in REGISTRY/ is
+        # already a registry file by construction.
+        # ------------------------------------------------------------------
+        registry_branch = extract_path / "REGISTRY"
+        registry_contents: dict = {}
 
         def _dedup_key(basename: str, existing: dict) -> str:
-            """Return a unique key by appending a counter when needed."""
             key = basename
             counter = 1
             while key in existing:
@@ -839,42 +824,27 @@ async def extract_registry_from_zip(file: UploadFile = File(...), session_id: st
                 counter += 1
             return key
 
-        registry_contents: dict = {}
+        if registry_branch.exists():
+            for reg_file in registry_branch.iterdir():
+                if not reg_file.is_file():
+                    continue
+                try:
+                    key = _dedup_key(reg_file.name, registry_contents)
+                    registry_contents[key] = _b64.b64encode(reg_file.read_bytes()).decode('utf-8')
+                    logger.info(f"Loaded registry file: {reg_file.name} -> key={key}")
+                except Exception as e:
+                    logger.warning(f"Could not read registry file {reg_file.name}: {e}")
+        else:
+            logger.warning(f"REGISTRY branch folder not found at {registry_branch}")
 
+        # ------------------------------------------------------------------
+        # Step 3: Clean up the temp extraction folder
+        # ------------------------------------------------------------------
         try:
-            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-                for info in zf.infolist():
-                    if info.is_dir():
-                        continue
-                    member_name = info.filename
-                    if _is_registry_file(member_name):
-                        try:
-                            raw = zf.read(member_name)
-                            basename = os.path.basename(member_name.replace('\\\\', '/'))
-                            key = _dedup_key(basename, registry_contents)
-                            registry_contents[key] = base64.b64encode(raw).decode('utf-8')
-                            logger.info(f"Extracted registry file: {member_name} -> key={key}")
-                        except Exception as e:
-                            logger.warning(f"Could not read {member_name} from ZIP: {e}")
-                    elif member_name.lower().endswith('.zip'):
-                        # Also scan one level of nested ZIPs
-                        try:
-                            inner_bytes = zf.read(member_name)
-                            with zipfile.ZipFile(io.BytesIO(inner_bytes)) as inner_zf:
-                                for inner_info in inner_zf.infolist():
-                                    if inner_info.is_dir():
-                                        continue
-                                    if _is_registry_file(inner_info.filename):
-                                        raw = inner_zf.read(inner_info.filename)
-                                        basename = os.path.basename(inner_info.filename.replace('\\\\', '/'))
-                                        key = _dedup_key(basename, registry_contents)
-                                        registry_contents[key] = base64.b64encode(raw).decode('utf-8')
-                                        logger.info(f"Extracted registry file from nested ZIP [{member_name}]: {inner_info.filename} -> key={key}")
-                        except Exception as e:
-                            logger.warning(f"Could not open nested ZIP {member_name}: {e}")
-
-        except zipfile.BadZipFile as e:
-            raise HTTPException(status_code=400, detail=f"Invalid or corrupt ZIP file: {e}")
+            shutil.rmtree(extract_path, ignore_errors=True)
+            logger.info(f"Cleaned up temp folder: {extract_path}")
+        except Exception as e:
+            logger.warning(f"Could not clean up temp folder {extract_path}: {e}")
 
         count = len(registry_contents)
         logger.info(f"Registry extraction complete: {count} file(s) found in {file.filename}")
@@ -939,7 +909,6 @@ RAISES:
 
         
         # Convert bytes to base64 for JSON serialization
-        import base64
         raw_contents = session_data.get('registry_contents', {})
         encoded_contents = {}
         for filename, content in raw_contents.items():
@@ -1519,7 +1488,6 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
 
             except Exception as e:
                 logger.error(f"Error processing {journal_filename}: {str(e)}")
-                import traceback
                 traceback.print_exc()
                 continue
 
@@ -1604,7 +1572,6 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
         raise
     except Exception as e:
         logger.error(f"Analysis failed: {str(e)}")
-        import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
@@ -1690,7 +1657,6 @@ async def get_transactions_with_sources(session_id: str = Query(default=None)):
     
     except Exception as e:
         logger.error(f"Unexpected error retrieving transactions: {str(e)}")
-        import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
@@ -1794,7 +1760,6 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
     
     except Exception as e:
         logger.error(f"Unexpected error while filtering transactions: {str(e)}")
-        import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
@@ -1902,7 +1867,6 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
     
     except Exception as e:
         logger.error(f"Unexpected error while generating statistics: {str(e)}")
-        import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
@@ -2664,8 +2628,6 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                     raise Exception("No filtered events")
                                     
                             except Exception as e:
-                                # print(f" Enhancement failed: {e}")
-                                import traceback
                                 traceback.print_exc()
                                 
                                 # Fallback
@@ -2987,14 +2949,12 @@ RAISES:
         raise
     except Exception as e:
         logger.error(f"Unexpected failure: {str(e)}")
-        import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate consolidated flow: {str(e)}"
         )
     
-from pydantic import BaseModel
 
 
 class TransactionAnalysisRequest(BaseModel):
@@ -3722,7 +3682,6 @@ def extract_counter_blocks(trc_file_path: str) -> list:
     
     except Exception as e:
         logger.error(f"Error extracting counter blocks: {e}")
-        import traceback
         traceback.print_exc()
     
     return all_counter_blocks
@@ -4229,7 +4188,6 @@ async def get_counter_data(
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
@@ -4840,13 +4798,7 @@ async def auth_logout(request: LogoutRequest):
 @router.post("/auth/initialize-db")
 async def auth_initialize_db():
     """Bootstrap all required tables. Called once from the FastAPI lifespan handler."""
-    from admin_setup import create_dn_diagnostics_database, initialize_admin_table
-    from modules.login import create_login_history_table, create_reset_tokens_table
-    from modules.analysis import (
-        create_userresponse_database,
-        create_analysis_table,
-        create_feedback_table,
-    )
+    
     try:
         create_dn_diagnostics_database()
         initialize_admin_table()

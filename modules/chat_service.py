@@ -26,6 +26,20 @@ from modules.logging_config import logger
 
 MODEL_NAME = os.getenv("OLLAMA_MODEL", "llama3_log_analyzer")
 
+# ── Ollama client configuration ───────────────────────────────────────────────
+# OLLAMA_HOST should be set in the environment for Docker deployments,
+# e.g. OLLAMA_HOST=http://ollama:11434 (where 'ollama' is the container name).
+# When running locally, the ollama client defaults to http://localhost:11434
+# automatically — no env var needed.
+# Reads OLLAMA_BASE_URL to match the existing docker-compose environment variable.
+# Locally this var is not set, so the client falls back to http://localhost:11434.
+_ollama_host = os.getenv("OLLAMA_BASE_URL", "").strip()
+_ollama_client = ollama.Client(host=_ollama_host) if _ollama_host else ollama.Client()
+logger.info(
+    f"chat_service: Ollama client initialised | "
+    f"host={'<default localhost:11434>' if not _ollama_host else _ollama_host}"
+)
+
 _MAX_EJ_CHARS       = 3000
 _MAX_JRN_CHARS      = 2000
 _MAX_ANALYSIS_CHARS = 2000
@@ -51,7 +65,17 @@ _OFFTOPIC_PATTERNS = re.compile(
     r'stock\s+price|cryptocurrency|bitcoin|forex|invest\b|'
     r'tell\s+me\s+a\s+joke|funny\s+story|tell\s+me\s+a\s+story|'
     r'who\s+are\s+you|what\s+is\s+your\s+name|how\s+are\s+you|'
-    r'what\s+can\s+you\s+do'
+    r'what\s+can\s+you\s+do|'
+    # Casual greetings / small talk
+    r'\bhow\s+r\s+u\b|\bhi\b|\bhello\b|\bhey\b|\bwassup\b|\bwhat.?s\s+up\b|'
+    r'good\s+(morning|afternoon|evening|night)|'
+    r'how\s+are\s+you|how\s+r\s+u|how\s+do\s+you\s+do|'
+    # Generic definition questions — "what is an atm/emv/pin/etc."
+    # These are general knowledge, not transaction-specific.
+    r'what\s+is\s+(an?\s+)?(atm|bank|card|pin|emv|network|server|database|'
+    r'machine|system|protocol|api|queue|cache)|'
+    r'define\s+(atm|emv|pin|icc|host|terminal|cassette|dispenser)|'
+    r'explain\s+what\s+(an?\s+)?(atm|emv|pin|icc|host)\s+is'
     r')\b',
     re.IGNORECASE,
 )
@@ -72,7 +96,11 @@ _ONTOPIC_PATTERNS = re.compile(
     r'why\s+(did|was|is)\s+.{0,30}(fail|error|cancel|timeout|retract)|'
     r'what\s+(caused|happened|went\s+wrong)|'
     r'explain\s+(the\s+)?(error|failure|result|analysis|log)|'
-    r'timestamp|start\s+time|end\s+time|sequence|step'
+    r'timestamp|start\s+time|end\s+time|sequence|step|'
+    r'duration|how\s+long|what\s+time|'
+    r'unsuccessful|successful|succeed|fail(ed|ure)?|incomplete|'
+    r'in\s+the\s+first\s+place|at\s+this\s+(point|step)|'
+    r'what\s+happen(ed|s)|what\s+went|how\s+did\s+it'
     r')\b',
     re.IGNORECASE,
 )
@@ -99,11 +127,16 @@ def _layer_b_check(question: str, analysis_result: str) -> bool:
 
     scope_check_prompt = (
         "You are a strict scope checker for an ATM transaction log analysis tool.\n"
-        "Decide if the user question can be answered using ATM transaction log data "
-        "(EJ logs, journal logs, error codes, hardware events, transaction states).\n\n"
+        "Decide if this question requires THIS SPECIFIC transaction log data to answer.\n"
+        "Answer YES only if the question asks about events, errors, states, timings, or "
+        "hardware behaviour visible in the logs of THIS transaction.\n"
+        "Answer NO if the question is a general definition, general knowledge, or conceptual "
+        "question that could be answered without any transaction log "
+        "(e.g. \'what is an ATM\', \'what is EMV\', \'how does a PIN work\').\n\n"
         f"Transaction context summary:\n{analysis_snippet}\n\n"
         f"User question: {question}\n\n"
-        "Reply with ONLY the single word YES or NO. No explanation."
+        "Does answering this require THIS transaction\'s specific log data?\n"
+        "Reply with ONLY YES or NO. No explanation."
     )
 
     logger.info(
@@ -114,7 +147,7 @@ def _layer_b_check(question: str, analysis_result: str) -> bool:
 
     start = time.perf_counter()
     try:
-        response = ollama.chat(
+        response = _ollama_client.chat(
             model=MODEL_NAME,
             messages=[{"role": "user", "content": scope_check_prompt}],
             options={"temperature": 0.0, "num_predict": 5},
@@ -157,8 +190,9 @@ def _build_chat_prompt(
         "Do NOT produce structured analysis output.",
         "Do NOT use section headers, numbered sections, or the analysis report format.",
         "Answer the question below in plain, concise conversational sentences only.",
-        "Base your answer strictly on the provided log context.",
-        "Do not speculate beyond what is present in the logs.",
+        "Base your answer STRICTLY on evidence present in the log context below.",
+        "Do NOT speculate, suggest actions, give recommendations, or invent details not in the logs.",
+        "If the logs do not contain enough information to answer, say so explicitly.",
         "── END OVERRIDE ──",
         "",
         # ── Task identity ─────────────────────────────────────────────────
@@ -238,7 +272,7 @@ def chat_turn(
     )
 
     start = time.perf_counter()
-    response = ollama.chat(
+    response = _ollama_client.chat(
         model=MODEL_NAME,
         messages=[{"role": "user", "content": prompt}],
         options={"temperature": 0.2, "num_predict": 300},

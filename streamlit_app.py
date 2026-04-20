@@ -729,7 +729,7 @@ inject_theme_css()
 # ============================================
 # GLOBAL VARIABLES
 # ============================================
-API_BASE_URL = "http://localhost:8000/api/v1"
+API_BASE_URL = "http://backend:8000/api/v1"
 
 def get_auth_headers() -> dict:
     """Returns Authorization: Bearer header carrying the JWT issued at login."""
@@ -4666,12 +4666,24 @@ RAISES:
                     
                     if response.status_code == 200:
                         st.session_state.analysis_result = response.json()
-                        # Populate chat context — reset history for fresh analysis
-                        st.session_state.chat_history = []
+                        _analysis_text = st.session_state.analysis_result.get("analysis", "")
+                        # Seed chat history with the analysis as the opening exchange.
+                        # User bubble = the action taken; assistant bubble = the analysis result.
+                        # All subsequent user questions appear below this naturally.
+                        st.session_state.chat_history = [
+                            {
+                                "role":    "user",
+                                "content": f"Analyze transaction: {selected_txn_id}",
+                            },
+                            {
+                                "role":    "assistant",
+                                "content": _analysis_text,
+                            },
+                        ]
                         st.session_state.chat_context = {
                             "ej":       transaction_log,
                             "jrn":      "",
-                            "analysis": st.session_state.analysis_result.get("analysis", ""),
+                            "analysis": _analysis_text,
                         }
                         st.rerun()
                     else:

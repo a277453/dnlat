@@ -12,6 +12,7 @@ from datetime import datetime
 import numpy as np
 from fastapi.logger import logger
 from modules.analysis import create_analysis_table, create_feedback_table, create_userresponse_database
+from modules.chat_service import chat_turn as llm_chat_turn
 from modules.streamlit_logger import logger as frontend_logger
 import time
 from modules.login import create_reset_tokens_table, is_valid_password, is_same_as_old_password
@@ -4623,11 +4624,21 @@ RAISES:
             st.session_state.current_analysis_txn = None
         if 'analysis_result' not in st.session_state:
             st.session_state.analysis_result = None
-        
+
+        # ── Chat session state ────────────────────────────────────────────
+        if 'chat_history' not in st.session_state:
+            st.session_state.chat_history = []
+        if 'chat_context' not in st.session_state:
+            st.session_state.chat_context = {}
+        # ─────────────────────────────────────────────────────────────────
+
         # Check if we need to clear previous analysis
         if st.session_state.current_analysis_txn != selected_txn_id:
             st.session_state.analysis_result = None
             st.session_state.current_analysis_txn = selected_txn_id
+            # Reset chat whenever the selected transaction changes
+            st.session_state.chat_history = []
+            st.session_state.chat_context = {}
         
         col1, col2 = st.columns([1, 3])
         
@@ -4655,6 +4666,13 @@ RAISES:
                     
                     if response.status_code == 200:
                         st.session_state.analysis_result = response.json()
+                        # Populate chat context — reset history for fresh analysis
+                        st.session_state.chat_history = []
+                        st.session_state.chat_context = {
+                            "ej":       transaction_log,
+                            "jrn":      "",
+                            "analysis": st.session_state.analysis_result.get("analysis", ""),
+                        }
                         st.rerun()
                     else:
                         error_detail = response.json().get('detail', 'Analysis failed')
@@ -4907,8 +4925,45 @@ RAISES:
                                 del st.session_state[key]
                         st.rerun()
 
+            # ── CHAT PANEL ────────────────────────────────────────────────
+            st.markdown("---")
+            st.markdown("### 💬 Ask About This Transaction")
+            st.caption("Ask follow-up questions about this transaction. Answers are based on the EJ log and analysis above.")
 
-    
+            # Render prior conversation history
+            for _msg in st.session_state.chat_history:
+                with st.chat_message(_msg["role"]):
+                    st.markdown(_msg["content"])
+
+            # Chat input — appears at bottom of panel
+            _question = st.chat_input("Ask a follow-up question about this transaction...")
+            if _question:
+                # Show user message immediately
+                st.session_state.chat_history.append({"role": "user", "content": _question})
+                with st.chat_message("user"):
+                    st.markdown(_question)
+
+                # Call LLM and show reply
+                with st.chat_message("assistant"):
+                    with st.spinner("Thinking..."):
+                        try:
+                            _ctx = st.session_state.chat_context
+                            _reply = llm_chat_turn(
+                                ej_content      = _ctx.get("ej", ""),
+                                jrn_content     = _ctx.get("jrn", ""),
+                                analysis_result = _ctx.get("analysis", ""),
+                                history         = st.session_state.chat_history[:-1],
+                                question        = _question,
+                            )
+                            st.markdown(_reply)
+                            st.session_state.chat_history.append({"role": "assistant", "content": _reply})
+                        except Exception as _chat_err:
+                            _err_msg = f"Chat error: {str(_chat_err)}"
+                            st.error(_err_msg)
+                            st.session_state.chat_history.append({"role": "assistant", "content": _err_msg})
+            # ── END CHAT PANEL ────────────────────────────────────────────
+
+
     except Exception as e:
         st.error(f"  Error: {str(e)}")
         import traceback

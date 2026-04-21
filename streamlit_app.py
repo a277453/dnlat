@@ -15,8 +15,11 @@ from modules.analysis import create_analysis_table, create_feedback_table, creat
 from modules.streamlit_logger import logger as frontend_logger
 import time
 from modules.login import create_reset_tokens_table, is_valid_password, is_same_as_old_password
-import re as _re; from datetime import datetime as _dt
+import re as _re
+from datetime import datetime as _dt
 import html
+import math
+import uuid
 
 
 # Import authentication functions
@@ -1517,8 +1520,7 @@ def create_comparison_flow_plotly(txn1_id, txn1_state, txn1_flow_screens, txn1_m
         TypeError  :
             If any parameter is passed with an incorrect data type.
     """
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
+    
     
     # Create subplots: 1 row, 2 columns
     fig = make_subplots(
@@ -1622,8 +1624,6 @@ def init_cache():
 
 def get_cache_key(endpoint: str, **params) -> str:
     """Generate a unique cache key from endpoint and parameters"""
-    import hashlib
-    import json
     
     # Sort parameters for consistent keys
     sorted_params = json.dumps(params, sort_keys=True)
@@ -2071,7 +2071,7 @@ def render_transaction_stats():
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
                         # Give a moment for the session to update
-                        import time
+                        
                         time.sleep(0.5)
                     else:
                         error_detail = analyze_response.json().get('detail', 'Analysis failed')
@@ -2086,7 +2086,6 @@ def render_transaction_stats():
                     return
                 except Exception as e:
                     st.error(f"  Error during analysis: {str(e)}")
-                    import traceback
                     st.code(traceback.format_exc())
                     return
         
@@ -2362,7 +2361,6 @@ def render_transaction_stats():
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error loading transaction statistics: {str(e)}")
-        import traceback
         with st.expander(" Debug Information"):
             st.code(traceback.format_exc())
 
@@ -2437,7 +2435,7 @@ RAISES:
                     content_b64 = registry_contents[selected_file_name]
                     
                     # Decode base64 to bytes
-                    import base64
+                    
                     content = base64.b64decode(content_b64)
                     
                     # Parse registry file
@@ -2490,7 +2488,6 @@ RAISES:
                 except Exception as e:
                     st.error(f"Error loading file: {str(e)}")
                     logger.exception(f"Error parsing registry file {selected_file_name}")
-                    import traceback
                     with st.expander("  Debug Information"):
                         st.code(traceback.format_exc())
                     
@@ -2501,7 +2498,6 @@ RAISES:
     except Exception as e:
         st.error(f"  Error: {str(e)}")
         logger.exception("Error in render_registry_single")
-        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -2601,7 +2597,6 @@ def render_registry_compare():
                         st.error("  Connection error. Ensure the API server is running.")
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
-                        import traceback
                         with st.expander("  Debug Information"):
                             st.code(traceback.format_exc())
         
@@ -2656,7 +2651,6 @@ def render_registry_compare():
                     with st.spinner("Comparing files..."):
                         try:
                             # Get contents from both packages
-                            import base64
                             
                             content_a_b64 = registry_contents_a[selected_filename]
                             content_b_b64 = registry_contents_b[selected_filename]
@@ -2681,7 +2675,6 @@ def render_registry_compare():
 
                         except Exception as e:
                             st.error(f"Error comparing files: {str(e)}")
-                            import traceback
                             with st.expander("  Debug Information"):
                                 st.code(traceback.format_exc())
 
@@ -2704,7 +2697,6 @@ def render_registry_compare():
     except Exception as e:
         st.error(f"  Error in comparison setup: {str(e)}")
         logger.exception("Error in render_registry_compare")
-        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -2791,7 +2783,6 @@ def render_transaction_comparison():
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
                         st.success(f"  Analysis complete! Found {analyze_data.get('total_transactions', 0)} transactions")
-                        import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -3000,7 +2991,6 @@ def render_transaction_comparison():
                 
                 if txn1_data:
                     try:
-                        import re as _re1; from datetime import datetime as _dt1
                         _src1 = _re1.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt1.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), str(txn1_data.get('Source File', 'Unknown')))
                     except Exception: _src1 = txn1_data.get('Source File', 'Unknown')
                     st.info(
@@ -3044,7 +3034,6 @@ def render_transaction_comparison():
                 
                 if txn2_data:
                     try:
-                        import re as _re2; from datetime import datetime as _dt2
                         _src2 = _re2.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt2.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), str(txn2_data.get('Source File', 'Unknown')))
                     except Exception: _src2 = txn2_data.get('Source File', 'Unknown')
                     st.info(
@@ -3325,17 +3314,16 @@ def render_transaction_comparison():
                 st.error("  Connection error. Ensure the API server is running.")
             except Exception as e:
                 st.error(f"  Error during comparison: {str(e)}")
-                import traceback
                 with st.expander("  Debug Information"):
                     st.code(traceback.format_exc())
     
     except requests.exceptions.Timeout:
-        st.error("⏱  Request timeout. Please try again.")
+        st.error("Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error in transaction comparison: {str(e)}")
-        import traceback
+  
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -3421,7 +3409,6 @@ def render_ui_flow_individual():
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
                         st.success(f" Analysis complete! Found {analyze_data.get('total_transactions', 0)} transactions")
-                        import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -3437,7 +3424,6 @@ def render_ui_flow_individual():
                     return
                 except Exception as e:
                     st.error(f"  Error during analysis: {str(e)}")
-                    import traceback
                     with st.expander("  Debug Information"):
                         st.code(traceback.format_exc())
                     return
@@ -3669,7 +3655,6 @@ def render_ui_flow_individual():
                 st.error("  Connection error. Ensure the API server is running on Backend:8000.")
             except Exception as e:
                 st.error(f"  Error in UI flow visualization: {str(e)}")
-                import traceback
                 with st.expander("  Debug Information"):
                     st.code(traceback.format_exc())
     
@@ -3679,7 +3664,6 @@ def render_ui_flow_individual():
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error loading UI flow: {str(e)}")
-        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -3745,7 +3729,7 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
         - The layout adapts its height based on the number of screens.
         - Background is dark-themed to match Streamlit dark mode aesthetics.
     """
-    import plotly.graph_objects as go
+    
     
     if not flow_screens or flow_screens[0] == 'No flow data':
         return None
@@ -3912,8 +3896,7 @@ def create_consolidated_flow_plotly(flow_data):
         - Layout adapts to the number of screens and columns.
         - Hovering over a screen shows sample transactions passing through it.
     """
-    import plotly.graph_objects as go
-    from collections import defaultdict
+    
     
     screens = flow_data['screens']
     transitions = flow_data['transitions']
@@ -4255,8 +4238,7 @@ def render_consolidated_flow():
                         st.error(" Access Denied — your role does not have permission to use this feature.")
                         return
                     if analyze_response.status_code == 200:
-                        st.success("✓ Analysis complete!")
-                        import time
+                        st.success("Analysis complete!")
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -4380,18 +4362,16 @@ def render_consolidated_flow():
                         st.error(f"  {error_detail}")
                         
                 except requests.exceptions.Timeout:
-                    st.error("⏱  Request timeout. Please try again.")
+                    st.error("Request timeout. Please try again.")
                 except requests.exceptions.ConnectionError:
-                    st.error("  Connection error. Ensure the API server is running.")
+                    st.error("Connection error. Ensure the API server is running.")
                 except Exception as e:
                     st.error(f"  Error: {str(e)}")
-                    import traceback
                     with st.expander("  Debug Information"):
                         st.code(traceback.format_exc())
     
     except Exception as e:
         st.error(f"  Error: {str(e)}")
-        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -4460,8 +4440,7 @@ RAISES:
                         st.error(" Access Denied — your role does not have permission to use this feature.")
                         return
                     if analyze_response.status_code == 200:
-                        st.success("  Analysis complete!")
-                        import time
+                        st.success(" Analysis complete!")
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -4595,10 +4574,8 @@ RAISES:
             # Format source file date (e.g. 20250423 -> 23 April 2025)
             _src = selected_txn_data['Source File']
             try:
-                import re as _re
                 _match = _re.search(r'(\d{4})(\d{2})(\d{2})', _src)
                 if _match:
-                    from datetime import datetime as _dt
                     _readable = _dt.strptime(_match.group(), '%Y%m%d').strftime('%d %B %Y')
                     _src = _re.sub(r'\d{8}', _readable, _src)
             except Exception:
@@ -4883,7 +4860,6 @@ RAISES:
                                             if key in st.session_state:
                                                 del st.session_state[key]
                                         
-                                        import time
                                         time.sleep(1)
                                         st.rerun()
                                     else:
@@ -4911,7 +4887,6 @@ RAISES:
     
     except Exception as e:
         st.error(f"  Error: {str(e)}")
-        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -5082,7 +5057,6 @@ RAISES:
                         return
                     if analyze_response.status_code == 200:
                         st.success("  Analysis complete!")
-                        import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -5254,7 +5228,6 @@ RAISES:
                     counter_data = response.json()
                     
                     # Display START counter (static - first counter in file)
-                    from datetime import datetime
                     
                     start_date = counter_data['start_counter']['date']
                     start_time = counter_data['start_counter']['timestamp']
@@ -5601,13 +5574,11 @@ RAISES:
                 st.error("  Connection error. Ensure the API server is running.")
             except Exception as e:
                 st.error(f"  Error: {str(e)}")
-                import traceback
                 with st.expander("  Debug Information"):
                     st.code(traceback.format_exc())
     
     except Exception as e:
         st.error(f"  Error: {str(e)}")
-        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -5741,7 +5712,6 @@ def render_acu_single_parse(): # MODIFIED
                     
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
-                        import traceback
                         with st.expander("  Debug Info"):
                             st.code(traceback.format_exc())
         else:
@@ -5845,7 +5815,7 @@ RAISES:
     comp_data = st.session_state.acu_compare_data
     
     # Source A is now automatically loaded from the main processed ZIP
-    st.markdown("####   Source A (Main Package)")
+    st.markdown("####Source A (Main Package)")
     if not comp_data.get('files1'):
         with st.spinner("Loading ACU files from main package for Source A..."):
             try:
@@ -5867,7 +5837,7 @@ RAISES:
                         comp_data['files1'] = {k: v for k, v in all_files.items() if not k.startswith('__xsd__')}
                         #st.write("  DEBUG: Filtered XML files for Source A:", comp_data['files1'])  # DEBUG ADDED
                         comp_data['files1_all'] = all_files
-                        st.success(f"  **Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
+                        st.success(f"**Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
                         st.rerun()
                     else:
                         comp_data['files1'] = None
@@ -5879,16 +5849,15 @@ RAISES:
             except Exception as e:
                 st.error(f"Error loading Source A: {e}")
     else:
-        st.success(f"✓ **Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
+        st.success(f"**Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
     
     st.markdown("---")
     
     # Source B
-    # Source B
-    st.markdown("####   Source B")
+    st.markdown("####Source B")
     
     if comp_data.get('files2'):
-        st.success(f"  **Source B:** {comp_data.get('zip2_name')} ({len(comp_data['files2'])} XML files)")
+        st.success(f"**Source B:** {comp_data.get('zip2_name')} ({len(comp_data['files2'])} XML files)")
         if st.button("Replace Source B", key="acu_replace_b"):
             comp_data['zip2_name'] = None
             comp_data['files2'] = None
@@ -5939,7 +5908,6 @@ RAISES:
                     st.error("  Connection error. Check if API server is running.")
                 except Exception as e:
                     st.error(f"  Error: {str(e)}")
-                    import traceback
                     with st.expander("  Debug Info"):
                         st.code(traceback.format_exc())
     
@@ -6078,99 +6046,170 @@ def show_main_app():
     st.title("DN Diagnostics Platform")
     st.caption("Comprehensive analysis tool for Diebold Nixdorf diagnostic files.")
 
-    st.markdown("## Upload Zip Package( VCP Pro)")
+    # ── Chunked upload config ─────────────────────────────────────────────────────
+    CHUNK_SIZE_MB    = 50
+    CHUNK_SIZE_BYTES = CHUNK_SIZE_MB * 1024 * 1024
+    st.markdown("## Upload Zip Package (VCP Pro)")
 
     uploaded_file = st.file_uploader(
         "Select ZIP Archive",
-        type=['zip'],
-        help="Upload a ZIP file containing diagnostic files (max 200 MB)",
-        key="zip_uploader"
+        type=["zip"],
+        help="Upload a ZIP file of any size — sent chunk by chunk, no full load into memory.",
+        key="zip_uploader",
     )
-    # Check if file was deleted (uploader is now empty but we had processed a file before)
+
+    # ── Clear state when user removes the file
     if uploaded_file is None and st.session_state.zip_processed:
-        # Keys to reset to a fixed value
-        st.session_state.zip_processed = False
-        st.session_state.processing_result = None
+        st.session_state.zip_processed        = False
+        st.session_state.processing_result   = None
         st.session_state.last_processed_file = None
-        st.session_state.selected_function = None
-        st.session_state.processing_time = None
+        st.session_state.selected_function   = None
+        st.session_state.processing_time     = None
 
-        # Keys to delete entirely (analysis / feature-specific state)
-        _keys_to_delete = [
-            # ACU
-            'acu_extracted_files',
-            'acu_parsed_df',
-            'acu_files_loaded',
-            'acu_compare_data',
-            'acu_comparison',
-            # Registry
-            'registry_comparison',
-            # Individual transaction analysis
-            'current_analysis_txn',
-            'analysis_result',
-            # Selectbox widget state (forces it back to "Select a function")
-            'function_selector',
-        ]
-        for _k in _keys_to_delete:
-            if _k in st.session_state:
-                del st.session_state[_k]
+        for _k in [
+            "acu_extracted_files", "acu_parsed_df", "acu_files_loaded",
+            "acu_compare_data", "acu_comparison", "registry_comparison",
+            "current_analysis_txn", "analysis_result", "function_selector",
+        ]:
+            st.session_state.pop(_k, None)
 
-        # Clear API response cache
         clear_cache()
-        st.info("  File removed. Please upload a new ZIP file to continue.")
+        st.info("File removed. Please upload a new ZIP file to continue.")
         st.rerun()
-        
-    # Only process if file exists AND it's different from the last processed file
+
+    # ── Process only when a new file is present 
     if uploaded_file is not None:
-        # Check if this is a new file or the same file we just processed
         current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
-        
-        if 'last_processed_file' not in st.session_state:
-            st.session_state.last_processed_file = None
-        
-        # Only process if it's a new file
-        if st.session_state.last_processed_file != current_file_id:
-            file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
-            st.info(f"File: {uploaded_file.name} ({file_size_mb:.2f} MB)")
-            
-            with st.spinner("Processing package..."):
+
+        if st.session_state.get("last_processed_file") != current_file_id:
+
+            # ── Measure file size WITHOUT loading it all into memory 
+            # seek(0, 2) moves the cursor to the end; tell() returns that position
+            # which equals the total byte count.  Then seek(0) resets for reading.
+            uploaded_file.seek(0, 2)
+            file_size_bytes = uploaded_file.tell()
+            uploaded_file.seek(0)
+
+            file_size_mb = file_size_bytes / (1024 * 1024)
+            total_chunks = math.ceil(file_size_bytes / CHUNK_SIZE_BYTES)
+
+            st.info(
+                f"**{uploaded_file.name}**  —  "
+                f"{file_size_mb:.1f} MB "
+            )
+
+            progress_bar = st.progress(0)
+            status_text  = st.empty()
+            upload_id    = str(uuid.uuid4())
+            auth_headers = get_auth_headers()
+            failed       = False
+            _t_start     = time.time()
+
+            # ── Upload loop — one chunk in RAM at a time 
+            for chunk_idx in range(total_chunks):
+
+                # read() returns at most CHUNK_SIZE_BYTES bytes from the current
+                # cursor position; Streamlit advances the cursor automatically.
+                chunk_data = uploaded_file.read(CHUNK_SIZE_BYTES)
+
+                if not chunk_data:
+                    st.error(f" Unexpected empty read at chunk {chunk_idx}.")
+                    failed = True
+                    break
+
+                status_text.markdown(
+                    f"Processing....... "
+                )
+
                 try:
-                    files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/zip")}
-                    
-                    _t_start = time.time()
-                    response = requests.post(
-                        f"{API_BASE_URL}/process-zip", 
-                        files=files,
-                        timeout=300,  # Increased to 5 minutes for larger files
-                        headers=get_auth_headers()
+                    resp = requests.post(
+                        f"{API_BASE_URL}/upload-chunk",
+                        data={
+                            "upload_id":    upload_id,
+                            "chunk_index":  chunk_idx,
+                            "total_chunks": total_chunks,
+                            "filename":     uploaded_file.name,
+                        },
+                        files={"chunk": (f"chunk_{chunk_idx}", chunk_data, "application/octet-stream")},
+                        timeout=120,
+                        headers=auth_headers,
                     )
-                    _t_elapsed = round(time.time() - _t_start, 2)
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        st.session_state.zip_processed = True
-                        st.session_state.processing_result = result
-                        st.session_state.last_processed_file = current_file_id
-                        st.session_state.processing_time = _t_elapsed
-                        
-                        # Clear cache when new ZIP is uploaded
-                        clear_cache()
-                        
-                        st.success("Package processed successfully.")
-                        st.rerun()
-                    else:
-                        error_detail = response.json().get('detail', 'Unknown error occurred.')
-                        st.error(f"Error: {error_detail}")
-                        
                 except requests.exceptions.Timeout:
-                    st.error("Request timeout. The file may be too large or the server is not responding.")
+                    st.error(f"Timeout on chunk {chunk_idx + 1}. Try reducing CHUNK_SIZE_MB.")
+                    failed = True
+                    break
                 except requests.exceptions.ConnectionError:
-                    st.error("Connection error. Please ensure the FastAPI server is running on Backend:8000.")
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    st.error("Connection error. Ensure the FastAPI server is running.")
+                    failed = True
+                    break
+
+                # chunk_data goes out of scope here — memory is freed by GC
+                del chunk_data
+
+                if resp.status_code != 200:
+                    st.error(f"Chunk {chunk_idx + 1} failed: {resp.json().get('detail', 'Unknown error')}")
+                    failed = True
+                    break
+
+                # 0 → 90% reserved for chunk uploads; last 10% for finalize
+                progress_bar.progress(0.9 * (chunk_idx + 1) / total_chunks)
+
+            # ── Cancel on failure 
+            if failed:
+                try:
+                    requests.delete(
+                        f"{API_BASE_URL}/cancel-upload/{upload_id}",
+                        headers=auth_headers,
+                        timeout=10,
+                    )
+                except Exception:
+                    pass
+                status_text.empty()
+                progress_bar.empty()
+
+            else:
+                # ── Finalize: merge + extract 
+                status_text.markdown("processing…")
+                progress_bar.progress(0.92)
+
+                try:
+                    response = requests.post(
+                        f"{API_BASE_URL}/finalize-upload",
+                        data={
+                            "upload_id":    upload_id,
+                            "filename":     uploaded_file.name,
+                            "total_chunks": total_chunks,
+                        },
+                        timeout=600,
+                        headers=auth_headers,
+                    )
+                except requests.exceptions.Timeout:
+                    st.error("Processing timed out. The file may be very large — try again.")
+                    response = None
+                except requests.exceptions.ConnectionError:
+                    st.error("Connection error during finalize step.")
+                    response = None
+
+                progress_bar.progress(1.0)
+                status_text.empty()
+                progress_bar.empty()
+
+                if response is not None and response.status_code == 200:
+                    result = response.json()
+                    st.session_state.zip_processed       = True
+                    st.session_state.processing_result   = result
+                    st.session_state.last_processed_file = current_file_id
+                    st.session_state.processing_time     = round(time.time() - _t_start, 2)
+                    clear_cache()
+                    st.success(" Package processed successfully.")
+                    st.rerun()
+                elif response is not None:
+                    st.error(f" {response.json().get('detail', 'Unknown error occurred.')}")
+
         else:
-            # File already processed, show info
-            file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
+            file_size_mb = uploaded_file.size / (1024 * 1024)
+            st.info(f" {uploaded_file.name} ({file_size_mb:.1f}MB)")
+
 
     if st.session_state.zip_processed:
         st.markdown("---")

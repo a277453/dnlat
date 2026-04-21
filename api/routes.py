@@ -30,7 +30,7 @@ from modules.analysis import (
         create_feedback_table,
     )
 
-from modules.extraction import extract_from_directory, extract_from_zip_bytes
+from modules.extraction import extract_from_directory, extract_from_zip_bytes, resolve_main_zips
 from modules.xml_parser_logic import parse_xml_to_dataframe
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -696,26 +696,36 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
 
         acu_logs = []
 
-        # --- Drill into nested acu.zip (mirrors /process-zip logic) ---
-        # The uploaded package wraps ACU files inside an inner acu.zip.
-        # extract_from_zip_bytes only scans the top level of whatever bytes
-        # you hand it, so passing the outer ZIP would never find jdd*/x3* files.
-        # We locate acu.zip inside the outer archive first, then pass its bytes.
+        # --- Resolve shell ZIP if needed, then drill into acu.zip ---
+        # resolve_main_zips handles the case where the user uploaded a shell ZIP
+        # that wraps the real main ZIP(s). For a normal upload it is a no-op fast path.
+        # We then search each confirmed main ZIP for acu.zip and extract from it.
         acu_files: dict = {}
         try:
-            with zipfile.ZipFile(io.BytesIO(zip_content)) as outer_zf:
-                acu_candidates = [
-                    name for name in outer_zf.namelist()
-                    if os.path.basename(name).lower() == 'acu.zip'
-                ]
-                if acu_candidates:
-                    for candidate in acu_candidates:   # loop ALL, not just [0]
-                        candidate_bytes = outer_zf.read(candidate)
-                        logger.info(f"Processing nested acu.zip at: {candidate}")
-                        partial = extract_from_zip_bytes(candidate_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
+            main_zip_list = resolve_main_zips(zip_content)
+            for main_zip_bytes in main_zip_list:
+                with zipfile.ZipFile(io.BytesIO(main_zip_bytes)) as outer_zf:
+                    acu_candidates = [
+                        name for name in outer_zf.namelist()
+                        if os.path.basename(name).lower() == 'acu.zip'
+                    ]
+                    if acu_candidates:
+                        for candidate in acu_candidates:
+                            candidate_bytes = outer_zf.read(candidate)
+                            logger.info(f"Processing nested acu.zip at: {candidate}")
+                            partial = extract_from_zip_bytes(candidate_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
+                            for key, content in partial.items():
+                                dedup_key = key
+                                i = 1
+                                while dedup_key in acu_files:
+                                    base, ext = os.path.splitext(key)
+                                    dedup_key = f"{base}_{i}{ext}"
+                                    i += 1
+                                acu_files[dedup_key] = content
+                    else:
+                        logger.info("No nested acu.zip found — treating main ZIP as the ACU archive directly")
+                        partial = extract_from_zip_bytes(main_zip_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
                         for key, content in partial.items():
-                            # Use _1, _2 suffix dedup so duplicate filenames from multiple
-                            # acu.zip copies are all kept (same logic as on-disk ACU/ branch).
                             dedup_key = key
                             i = 1
                             while dedup_key in acu_files:
@@ -723,9 +733,6 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
                                 dedup_key = f"{base}_{i}{ext}"
                                 i += 1
                             acu_files[dedup_key] = content
-                else:
-                    logger.info("No nested acu.zip found — treating uploaded ZIP as the ACU archive directly")
-                    acu_files = extract_from_zip_bytes(zip_content, acu_logs, target_prefixes=('jdd', 'x3'))
         except zipfile.BadZipFile as e:
             logger.error(f"BadZipFile when scanning for nested acu.zip in {file.filename}: {e}")
             raise HTTPException(status_code=400, detail=f"Invalid ZIP file: {e}")

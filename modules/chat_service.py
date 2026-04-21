@@ -170,16 +170,74 @@ def _truncate(text: str, max_chars: int) -> str:
     return text[:max_chars] + f"\n... [truncated at {max_chars} chars]"
 
 
+def _compute_duration(txn_data: dict) -> str:
+    """
+    Derives a human-readable duration string from txn_data Start/End Time fields.
+    Returns an empty string if timestamps are missing or unparseable.
+    """
+    from datetime import datetime as dt
+
+    start_raw = str(txn_data.get("Start Time", "")).strip()
+    end_raw   = str(txn_data.get("End Time",   "")).strip()
+
+    if not start_raw or not end_raw:
+        return ""
+
+    # Try common formats: "HH:MM:SS", "YYYY-MM-DD HH:MM:SS"
+    _FORMATS = ["%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S"]
+    t_start = t_end = None
+    for fmt in _FORMATS:
+        try:
+            t_start = dt.strptime(start_raw.split()[-1] if " " in start_raw else start_raw, "%H:%M:%S")
+            t_end   = dt.strptime(end_raw.split()[-1]   if " " in end_raw   else end_raw,   "%H:%M:%S")
+            break
+        except ValueError:
+            continue
+
+    if t_start is None or t_end is None:
+        return ""
+
+    secs = int((t_end - t_start).total_seconds())
+    if secs < 0:
+        secs += 86400  # handle midnight rollover
+
+    if secs < 60:
+        return f"{secs} seconds"
+    mins, rem = divmod(secs, 60)
+    return f"{mins} minute{'s' if mins != 1 else ''} {rem} second{'s' if rem != 1 else ''}" if rem else f"{mins} minute{'s' if mins != 1 else ''}"
+
+
 def _build_chat_prompt(
     ej_content: str,
     jrn_content: str,
     analysis_result: str,
     history: list,
     question: str,
+    txn_data: dict = None,
 ) -> str:
     ej_block       = _truncate(ej_content,      _MAX_EJ_CHARS)
     jrn_block      = _truncate(jrn_content,     _MAX_JRN_CHARS)
     analysis_block = _truncate(analysis_result, _MAX_ANALYSIS_CHARS)
+
+    # ── Pre-compute transaction facts so the model never does the math ────────
+    txn_facts_lines = []
+    if txn_data:
+        start_raw = str(txn_data.get("Start Time", "")).strip()
+        end_raw   = str(txn_data.get("End Time",   "")).strip()
+        txn_type  = str(txn_data.get("Transaction Type", "")).strip()
+        end_state = str(txn_data.get("End State", "")).strip()
+        duration  = _compute_duration(txn_data)
+
+        if start_raw:
+            txn_facts_lines.append(f"Start Time    : {start_raw}")
+        if end_raw:
+            txn_facts_lines.append(f"End Time      : {end_raw}")
+        if duration:
+            txn_facts_lines.append(f"Duration      : {duration}  ← use this value, do not recompute")
+        if txn_type:
+            txn_facts_lines.append(f"Type          : {txn_type}")
+        if end_state:
+            txn_facts_lines.append(f"Outcome       : {end_state}")
 
     parts = [
         # ── Modelfile override ────────────────────────────────────────────
@@ -193,12 +251,25 @@ def _build_chat_prompt(
         "Base your answer STRICTLY on evidence present in the log context below.",
         "Do NOT speculate, suggest actions, give recommendations, or invent details not in the logs.",
         "If the logs do not contain enough information to answer, say so explicitly.",
+        "DURATION RULE: When stating how long a transaction lasted, use the pre-computed",
+        "duration from the TRANSACTION FACTS block below. Do NOT recompute from timestamps.",
+        "State durations in seconds if under 60 s, in minutes and seconds if 60 s or more.",
         "── END OVERRIDE ──",
         "",
         # ── Task identity ─────────────────────────────────────────────────
         "You are answering a follow-up question about an ATM transaction that has already been analyzed.",
         "Answer based ONLY on the context below. Do not speculate or invent details not present in the logs.",
         "",
+    ]
+
+    if txn_facts_lines:
+        parts += [
+            "--- TRANSACTION FACTS (pre-computed, authoritative) ---",
+            *txn_facts_lines,
+            "",
+        ]
+
+    parts += [
         "--- EJ LOG (CUSTOMER JOURNAL) ---",
         ej_block if ej_block.strip() else "(not available)",
         "",
@@ -227,6 +298,7 @@ def chat_turn(
     analysis_result: str,
     history: list,
     question: str,
+    txn_data: dict = None,
 ) -> str:
     """
     Runs a single chat turn with two-layer scope enforcement.
@@ -260,6 +332,7 @@ def chat_turn(
         analysis_result=analysis_result,
         history=history,
         question=question,
+        txn_data=txn_data,
     )
 
     prompt_fingerprint = hashlib.md5(prompt.encode()).hexdigest()[:8]
@@ -293,3 +366,97 @@ def chat_turn(
     )
 
     return reply
+
+
+def chat_turn_stream(
+    ej_content: str,
+    jrn_content: str,
+    analysis_result: str,
+    history: list,
+    question: str,
+    txn_data: dict = None,
+):
+    """
+    Streaming variant of chat_turn.
+
+    Applies the same two-layer scope guard. If the question is rejected,
+    yields the out-of-scope reply as a single chunk and returns.
+    If allowed, streams token chunks from Ollama as they arrive.
+
+    Yields:
+        str — successive text chunks from the model, suitable for
+              server-sent events (SSE) or chunked HTTP transfer.
+    """
+    if not question or not question.strip():
+        raise ValueError("Question cannot be empty.")
+
+    # ── Layer A ───────────────────────────────────────────────────────────────
+    layer_a_result = _layer_a_check(question)
+    logger.info(
+        f"SCOPE CHECK (Layer A) [stream] | result={layer_a_result} | question='{question[:80]}'"
+    )
+
+    if layer_a_result == "reject":
+        logger.info("SCOPE GUARD | Layer A rejected — streaming out-of-scope reply")
+        yield _OUT_OF_SCOPE_REPLY
+        return
+
+    # ── Layer B (borderline only) ─────────────────────────────────────────────
+    if layer_a_result == "borderline":
+        if not _layer_b_check(question, analysis_result):
+            logger.info("SCOPE GUARD | Layer B rejected — streaming out-of-scope reply")
+            yield _OUT_OF_SCOPE_REPLY
+            return
+
+    # ── Build prompt ──────────────────────────────────────────────────────────
+    prompt = _build_chat_prompt(
+        ej_content=ej_content,
+        jrn_content=jrn_content,
+        analysis_result=analysis_result,
+        history=history,
+        question=question,
+        txn_data=txn_data,
+    )
+
+    prompt_fingerprint = hashlib.md5(prompt.encode()).hexdigest()[:8]
+    logger.info(
+        f"CHAT TURN STREAM | "
+        f"history_turns={len(history)} | "
+        f"prompt_chars={len(prompt)} | "
+        f"tokens_est={len(prompt) // 4} | "
+        f"fingerprint={prompt_fingerprint}"
+    )
+
+    # ── Stream from Ollama ────────────────────────────────────────────────────
+    start = time.perf_counter()
+    total_chunks = 0
+    total_chars  = 0
+
+    try:
+        stream = _ollama_client.chat(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            options={"temperature": 0.2, "num_predict": 300},
+            stream=True,
+        )
+
+        for chunk in stream:
+            token = chunk.get("message", {}).get("content", "")
+            if token:
+                total_chunks += 1
+                total_chars  += len(token)
+                yield token
+
+    except Exception as exc:
+        logger.exception(f"CHAT TURN STREAM | Ollama stream failed: {exc}")
+        raise
+
+    finally:
+        duration = round(time.perf_counter() - start, 3)
+        logger.info(
+            f"CHAT TURN STREAM COMPLETE | "
+            f"model={MODEL_NAME} | "
+            f"time={duration}s | "
+            f"chunks={total_chunks} | "
+            f"reply_chars={total_chars}"
+        )

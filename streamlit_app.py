@@ -4684,6 +4684,7 @@ RAISES:
                             "ej":       transaction_log,
                             "jrn":      "",
                             "analysis": _analysis_text,
+                            "txn_data": selected_txn_data.to_dict(),
                         }
                         st.rerun()
                     else:
@@ -4966,6 +4967,7 @@ RAISES:
                                 analysis_result = _ctx.get("analysis", ""),
                                 history         = st.session_state.chat_history[:-1],
                                 question        = _question,
+                                txn_data        = _ctx.get("txn_data", {}),
                             )
                             st.markdown(_reply)
                             st.session_state.chat_history.append({"role": "assistant", "content": _reply})

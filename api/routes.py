@@ -45,7 +45,7 @@ from modules.login import (verify_reset_identity,generate_reset_token,send_reset
 
 import logging
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
 
 logger.info("Logger initialized at startup")
@@ -3130,6 +3130,199 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
             status_code=500,
             detail=f"Analysis failed: {str(e)}"
         )
+
+
+# ============================================
+# TRANSACTION CHAT ENDPOINT
+# ============================================
+
+class ChatRequest(BaseModel):
+    transaction_id: str
+    question: str
+    analysis_result: str                  # full LLM analysis text from /analyze-transaction-llm
+    history: list[dict] = []              # [{"role": "user"/"assistant", "content": "..."}]
+
+
+@router.post("/chat-transaction")
+async def chat_transaction(
+    request: ChatRequest,
+    session_id: str = Query(default=None),
+):
+    """
+    FUNCTION:
+        chat_transaction
+
+    DESCRIPTION:
+        Handles a single chat turn for a previously analyzed transaction.
+        Pulls EJ and JRN content from session memory, then delegates to
+        chat_service.chat_turn() which applies the two-layer scope guard
+        and calls the LLM.
+
+    USAGE:
+        POST /chat-transaction?session_id=<id>
+        Body: { "transaction_id": "...", "question": "...",
+                "analysis_result": "...", "history": [...] }
+
+    PARAMETERS:
+        request.transaction_id  : ID of the transaction being discussed.
+        request.question        : The user's follow-up question.
+        request.analysis_result : The full analysis text returned by /analyze-transaction-llm.
+                                  The React frontend holds this in state and sends it each turn.
+        request.history         : Full conversation history so far (role/content pairs).
+                                  The frontend owns history; the backend is stateless for chat.
+        session_id              : Session containing the processed log data.
+
+    RETURNS:
+        { "response": "<assistant reply string>" }
+
+    RAISES:
+        HTTPException:
+            - 404 if session not found
+            - 500 if LLM call fails
+    """
+    from modules.chat_service import chat_turn
+
+    session_id = _resolve_session_id(session_id)
+
+    if not session_service.session_exists(session_id):
+        logger.error("chat_transaction: no session found for session_id=%s", session_id)
+        raise HTTPException(status_code=404, detail="No session found")
+
+    session_data = session_service.get_session(session_id)
+
+    # Pull the same log data that analyze-transaction-llm uses
+    customer_journal_contents = session_data.get('customer_journal_contents', {})
+    ui_journal_contents       = session_data.get('ui_journal_contents', {})
+    journal_llm_contents      = session_data.get('journal_llm_contents', {})
+    all_jrn_contents          = {**ui_journal_contents, **journal_llm_contents}
+
+    # Pull txn_data row for pre-computed facts (duration, timestamps, outcome)
+    txn_data = {}
+    raw_transaction_data = session_data.get('transaction_data')
+    if raw_transaction_data:
+        df = pd.DataFrame(raw_transaction_data)
+        matches = df[df['Transaction ID'] == request.transaction_id]
+        if not matches.empty:
+            txn_data = matches.iloc[0].to_dict()
+
+    logger.info(
+        "chat_transaction: txn=%s question_len=%d history_turns=%d",
+        request.transaction_id,
+        len(request.question),
+        len(request.history),
+    )
+
+    try:
+        response_text = chat_turn(
+            question=request.question,
+            ej_content=customer_journal_contents,
+            jrn_content=all_jrn_contents,
+            analysis_result=request.analysis_result,
+            history=request.history,
+            txn_data=txn_data,
+        )
+        return {"response": response_text}
+
+    except Exception as e:
+        logger.exception("chat_transaction: LLM call failed for txn=%s: %s", request.transaction_id, e)
+        raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
+
+
+@router.post("/chat-transaction-stream")
+async def chat_transaction_stream(
+    request: ChatRequest,
+    session_id: str = Query(default=None),
+):
+    """
+    FUNCTION:
+        chat_transaction_stream
+
+    DESCRIPTION:
+        Streaming variant of /chat-transaction.
+        Returns a text/event-stream response — the React frontend can
+        consume this with the Fetch API (ReadableStream) to render tokens
+        as they arrive, giving a typewriter effect.
+
+        Uses the same two-layer scope guard as the non-streaming endpoint.
+        If the question is rejected, the refusal message is sent as a
+        single chunk and the stream closes.
+
+    USAGE:
+        POST /chat-transaction-stream?session_id=<id>
+        Body: same as /chat-transaction
+
+    RETURNS:
+        text/event-stream — chunks formatted as SSE:
+            data: <token text>\n\n
+        Final message signals end of stream:
+            data: [DONE]\n\n
+
+    RAISES:
+        HTTPException:
+            - 404 if session not found
+            - 500 if Ollama stream fails
+    """
+    from modules.chat_service import chat_turn_stream
+
+    session_id = _resolve_session_id(session_id)
+
+    if not session_service.session_exists(session_id):
+        logger.error("chat_transaction_stream: no session found for session_id=%s", session_id)
+        raise HTTPException(status_code=404, detail="No session found")
+
+    session_data = session_service.get_session(session_id)
+
+    customer_journal_contents = session_data.get('customer_journal_contents', {})
+    ui_journal_contents       = session_data.get('ui_journal_contents', {})
+    journal_llm_contents      = session_data.get('journal_llm_contents', {})
+    all_jrn_contents          = {**ui_journal_contents, **journal_llm_contents}
+
+    # Pull txn_data row for pre-computed facts (duration, timestamps, outcome)
+    txn_data = {}
+    raw_transaction_data = session_data.get('transaction_data')
+    if raw_transaction_data:
+        df = pd.DataFrame(raw_transaction_data)
+        matches = df[df['Transaction ID'] == request.transaction_id]
+        if not matches.empty:
+            txn_data = matches.iloc[0].to_dict()
+
+    logger.info(
+        "chat_transaction_stream: txn=%s question_len=%d history_turns=%d",
+        request.transaction_id,
+        len(request.question),
+        len(request.history),
+    )
+
+    def _sse_generator():
+        try:
+            for chunk in chat_turn_stream(
+                ej_content=customer_journal_contents,
+                jrn_content=all_jrn_contents,
+                analysis_result=request.analysis_result,
+                history=request.history,
+                question=request.question,
+                txn_data=txn_data,
+            ):
+                # SSE format: each token sent as its own event
+                yield f"data: {chunk}\n\n"
+        except Exception as e:
+            logger.exception(
+                "chat_transaction_stream: stream error for txn=%s: %s",
+                request.transaction_id, e,
+            )
+            yield f"data: [ERROR] Stream failed: {str(e)}\n\n"
+        finally:
+            # Signal to the client that the stream is complete
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _sse_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # disables Nginx response buffering
+        },
+    )
 
 
 # Add this Pydantic model near the top with other models

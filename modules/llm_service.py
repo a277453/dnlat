@@ -17,8 +17,10 @@ from modules.journal_parser import (
 )
 from modules.analysis import store_metadata
 from modules.logging_config import logger
+from modules.example_store import fetch_relevant_examples, build_example_block, needs_examples
 
-MODEL_NAME       = "llama3_log_analyzer"
+import os
+MODEL_NAME       = os.getenv("OLLAMA_MODEL", "llama3_log_analyzer")
 MIN_PROMPT_CHARS = 150
 
 # ── EJ line codes / patterns already captured by the structured record ────
@@ -234,13 +236,17 @@ def _build_ej_record_from_txn_data(txn_data: dict, transaction_log: str) -> dict
     raw_protocol_steps = _parse_list_field(txn_data.get("JRN Protocol Steps"))
 
     # ── Deduplicate protocol steps: drop →sent if a →result exists for same step ──
+    # Uses Unicode arrow → explicitly to match actual log characters.
     # e.g. keep TDR_CV(CV)→PROCEED_NEXT, drop TDR_CV(CV)→sent
+    _SENT = '→sent'
+    _ARROW = '→'
     result_steps = {
-        s.split('→')[0] for s in raw_protocol_steps if '→' in s and not s.endswith('→sent')
+        s.split(_ARROW)[0] for s in raw_protocol_steps
+        if _ARROW in s and not s.endswith(_SENT)
     }
     protocol_steps_clean = [
         s for s in raw_protocol_steps
-        if not (s.endswith('→sent') and s.split('→')[0] in result_steps)
+        if not (s.endswith(_SENT) and s.split(_ARROW)[0] in result_steps)
     ]
 
     record = {
@@ -265,6 +271,33 @@ def _build_ej_record_from_txn_data(txn_data: dict, transaction_log: str) -> dict
         "retract_counter":  retract_counter,
     }
 
+    # ── Strip low-value fields that bloat the prompt ────────────────────
+    # These fields add token cost with minimal diagnostic value for the LLM.
+    LOW_VALUE_FIELDS = {
+        'uuids',            # reference IDs — not diagnostic
+        'trn_numbers',      # reference IDs — not diagnostic
+        'stan_values',      # reference IDs — not diagnostic
+        'host_requests',    # already represented in protocol_steps
+        'terminal_id',      # used as ATM ID in summary, not needed in body
+    }
+    record = {k: v for k, v in record.items() if k not in LOW_VALUE_FIELDS}
+
+    # EMV events — keep only lines that contain a failure/decline/error signal.
+    # Pure AID listing lines (3951/3952/3953/3954) with no failure are noise.
+    if record.get('emv_events'):
+        emv_filtered = [
+            e for e in record['emv_events']
+            if any(kw in e for kw in (
+                'fail', 'Fail', 'error', 'Error',
+                'decline', 'Decline', 'offline', 'Offline',
+                'fallback', 'Fallback', 'blocked', 'Blocked'
+            ))
+        ]
+        if emv_filtered:
+            record['emv_events'] = emv_filtered
+        else:
+            del record['emv_events']
+
     # Strip empty/null values so build_prompt receives only meaningful fields
     return {k: v for k, v in record.items() if v not in (None, [], "", False)}
 
@@ -287,27 +320,29 @@ def _enrich_record_with_jrn_context(record: dict, jrn_context: dict) -> dict:
         dict : Enriched record (mutated in place and returned for convenience).
     """
     # Map jrn_context keys → record keys (only fields the LLM prompt uses)
+    # LOW-VALUE FIELDS INTENTIONALLY EXCLUDED:
+    #   host_requests  — already represented in protocol_steps
+    #   uuids          — reference IDs, not diagnostic
+    #   trn_numbers    — reference IDs, not diagnostic
+    #   stan_values    — reference IDs, not diagnostic
+    #   terminal_id    — used as ATM ID, not needed in record body
+    # emv_events is included but filtered to failure-only lines below.
     FIELD_MAP = {
-        'protocol_steps':   'protocol_steps',
-        'device_errors':    'device_errors',
-        'device_states':    'device_states',
-        'card_events':      'card_events',
-        'app_state_start':  'app_state_start',
-        'app_state_end':    'app_state_end',
-        'response_codes':   'response_code',
-        'host_requests':    'host_requests',
-        'host_replies':     'host_replies',
-        'host_outcome':     'host_outcome',
-        'host_notes':       'host_notes',
-        'emv_events':       'emv_events',
-        'chip_decision':    'chip_decision',
-        'tvr_tsi':          'tvr_tsi',
-        'cryptogram_info':  'cryptogram_info',
-        'customer_actions': 'customer_actions',
-        'uuids':            'uuids',
-        'trn_numbers':      'trn_numbers',
-        'stan_values':      'stan_values',
-        'terminal_id':      'terminal_id',
+        'protocol_steps':    'protocol_steps',
+        'device_errors':     'device_errors',
+        'device_states':     'device_states',
+        'card_events':       'card_events',
+        'app_state_start':   'app_state_start',
+        'app_state_end':     'app_state_end',
+        'response_codes':    'response_code',
+        'host_replies':      'host_replies',
+        'host_outcome':      'host_outcome',
+        'host_notes':        'host_notes',
+        'emv_events':        'emv_events',
+        'chip_decision':     'chip_decision',
+        'tvr_tsi':           'tvr_tsi',
+        'cryptogram_info':   'cryptogram_info',
+        'customer_actions':  'customer_actions',
         'transaction_types': 'transaction_types',
     }
 
@@ -337,6 +372,37 @@ def _enrich_record_with_jrn_context(record: dict, jrn_context: dict) -> dict:
                     record[dst_key] = src_val[0]
             elif not existing:
                 record[dst_key] = src_val
+
+    # ── Post-enrichment: deduplicate protocol_steps ─────────────────────
+    # JRN context merges raw protocol_steps including →sent lines.
+    # Apply the same dedup logic here to strip them after enrichment.
+    if record.get('protocol_steps'):
+        _SENT  = '→sent'
+        _ARROW = '→'
+        _result_steps = {
+            s.split(_ARROW)[0] for s in record['protocol_steps']
+            if _ARROW in s and not s.endswith(_SENT)
+        }
+        record['protocol_steps'] = [
+            s for s in record['protocol_steps']
+            if not (s.endswith(_SENT) and s.split(_ARROW)[0] in _result_steps)
+        ]
+
+    # ── Post-enrichment: filter EMV events to failure-only lines ──────────
+    # Pure AID listing lines added during enrichment are noise for the LLM.
+    if record.get('emv_events'):
+        emv_filtered = [
+            e for e in record['emv_events']
+            if any(kw in e for kw in (
+                'fail', 'Fail', 'error', 'Error',
+                'decline', 'Decline', 'offline', 'Offline',
+                'fallback', 'Fallback', 'blocked', 'Blocked'
+            ))
+        ]
+        if emv_filtered:
+            record['emv_events'] = emv_filtered
+        else:
+            record.pop('emv_events', None)
 
     return record
 
@@ -576,6 +642,25 @@ def analyze_transaction(
                 f"structured record covers everything"
             )
 
+    # ── STEP 3c: Inject dynamic few-shot examples ───────────────────────
+    # Only injected for complex transactions (host offline, cancel, retract,
+    # chained, device errors). Simple cases (customer cancel, timeout, success)
+    # skip injection entirely — saves ~660 tokens per call.
+    # top_k=1 to minimise token overhead while still providing format guidance.
+    if needs_examples(ej_record):
+        relevant_examples = fetch_relevant_examples(ej_record, top_k=1)
+        if relevant_examples:
+            example_block = build_example_block(relevant_examples)
+            user_content = example_block + "\n\nNow analyze the following transaction and produce output in the same format:\n\n" + user_content
+            logger.info(
+                f"Injected {len(relevant_examples)} few-shot example(s) into prompt "
+                f"for {transaction_id}"
+            )
+        else:
+            logger.info(f"Complex transaction but no matching examples found for {transaction_id}")
+    else:
+        logger.info(f"Simple transaction — skipping few-shot injection for {transaction_id}")
+
     if len(user_content.strip()) < MIN_PROMPT_CHARS:
         raise ValueError(
             "No diagnostic information could be extracted from the transaction record. "
@@ -602,15 +687,13 @@ def analyze_transaction(
             f"Consider trimming the transaction log before sending to the model."
         )
 
-    messages = [{"role": "user", "content": user_content}]
-
     # ── Debug dump ────────────────────────────────────────────────────────
     debug_path = Path("llm_debug_input.json")
     debug_path.write_text(
         json.dumps(
             {
                 "transaction_id":        transaction_id,
-                "messages":              messages,
+                "prompt":                user_content,
                 "jrn_available":         jrn_data_available,
                 "jrn_already_enriched":  jrn_already_enriched,
                 "jrn_context_enriched":  jrn_context_enriched,
@@ -626,10 +709,21 @@ def analyze_transaction(
     logger.info(f"LLM input dumped to {debug_path.resolve()}")
 
     # ── STEP 5: Ollama call ───────────────────────────────────────────────
+    # Uses ollama.chat() with a fresh single-message list on every call.
+    # No history object is ever appended to — each call is fully independent.
+    # options are passed explicitly to override any Modelfile defaults at
+    # call time (temperature, num_predict).
     logger.info(f"Calling Ollama model: {MODEL_NAME}")
     analysis_start = time.perf_counter()
 
-    response = ollama.chat(model=MODEL_NAME, messages=messages)
+    response = ollama.chat(
+        model=MODEL_NAME,
+        messages=[{"role": "user", "content": user_content}],
+        options={
+            "temperature": 0.1,
+            "num_predict": 400,
+        }
+    )
 
     analysis_duration = round(time.perf_counter() - analysis_start, 3)
     raw_response      = response["message"]["content"].strip()

@@ -513,6 +513,50 @@ class LogPreprocessorService:
             t.pop("_pending_req",  None)
         return [self._compact(t) for t in transactions]
 
+    # Field order for LLM prompt serialization.
+    # Protocol steps first — they define the transaction flow and must be read
+    # before host outcomes or card events so the model narrates chronologically.
+    # host_* fields come after steps so the model reads the flow THEN the outcome.
+    # card_events and customer_actions are always last — they are post-flow events.
+    _PROMPT_FIELD_ORDER = [
+        "ts_start", "ts_end",
+        "type", "status",
+        "pin_entered", "card_returned",
+        "transaction_chain",
+        "protocol_steps",
+        "device_errors",
+        "device_states",
+        "events",
+        "app_state_start", "app_state_end",
+        "response_code",
+        "host_outcome",
+        "host_decline_reason",
+        "host_notes",
+        "host_replies",
+        "chip_decision",
+        "tvr_tsi",
+        "cryptogram_info",
+        "transaction_types",
+        "retract_occurred",
+        "retract_notes",
+        "deposit_notes",
+        "emv_events",
+        "customer_actions",
+        "card_events",
+    ]
+
+    def _order_record(self, record: dict) -> dict:
+        """Return a copy of record with fields in _PROMPT_FIELD_ORDER first,
+        followed by any remaining fields not in the order list."""
+        ordered = {}
+        for key in self._PROMPT_FIELD_ORDER:
+            if key in record:
+                ordered[key] = record[key]
+        for key, val in record.items():
+            if key not in ordered:
+                ordered[key] = val
+        return ordered
+
     def build_prompt(self, records: List[dict], atm_id: str = "", max_chars: int = 12_000) -> str:
         """
         FUNCTION:
@@ -521,6 +565,9 @@ class LogPreprocessorService:
         DESCRIPTION:
             Serialises a list of merged transaction records into a compact
             LLM-ready prompt string, optionally prefixed with the ATM ID.
+            Fields are serialized in a fixed diagnostic order so the model
+            always reads protocol_steps before host outcomes and card events,
+            ensuring chronological narration in What Happened.
             Long payloads are truncated at max_chars with a [TRUNCATED] marker.
 
         USAGE:
@@ -537,7 +584,8 @@ class LogPreprocessorService:
         RAISES:
             None
         """
-        payload = json.dumps(records, indent=2, ensure_ascii=False)
+        ordered_records = [self._order_record(r) for r in records]
+        payload = json.dumps(ordered_records, indent=2, ensure_ascii=False)
         if len(payload) > max_chars:
             payload = payload[:max_chars] + "\n... [TRUNCATED]"
         atm_line = f"ATM_ID={atm_id}\n" if atm_id else ""

@@ -302,9 +302,21 @@ async def get_counter_data(
         # Extract counter blocks from TRC content in session memory
         txn_start_time = str(txn_data.get('Start Time', ''))
         txn_end_time = str(txn_data.get('End Time', ''))
+        txn_type_for_blocks = str(txn_data.get('Transaction Type', ''))
 
-        # OPTIMIZATION: Extract ALL counter blocks from TRC content ONCE
-        all_counter_blocks = extract_counter_blocks_from_string(matching_trc_content)
+        # Extract ALL blocks scanning both CDM and CIM commands.
+        # This is used for first/start/last counter selection — whichever
+        # command appears first/last/before-txn-time wins, regardless of
+        # whether the selected transaction is a deposit or withdrawal.
+        all_counter_blocks = extract_counter_blocks_from_string(
+            matching_trc_content, txn_type=None
+        )
+
+        # Also extract blocks filtered by transaction type — used only for
+        # the main counter table displayed for the selected transaction.
+        typed_counter_blocks = extract_counter_blocks_from_string(
+            matching_trc_content, txn_type=txn_type_for_blocks
+        )
 
         if not all_counter_blocks:
             print(" No counter blocks found")
@@ -510,12 +522,20 @@ async def get_counter_data(
 
         # print(f" Created counter per transaction table with {len(counter_per_transaction)} entries")
 
-        # Find this section in get_counter_data endpoint (around line 1890):
+        # Strip non-JSON-serialisable fields ('time', 'source_cmd') before
+        # sending typed_counter_blocks in the response.
+        # typed_counter_blocks is filtered by transaction type (CDM for withdrawal,
+        # CIM for deposit) and is used for the main counter table display.
+        serialisable_blocks = [
+            {'timestamp': b['timestamp'], 'data': b['data']}
+            for b in typed_counter_blocks
+        ]
+
         response_data = {
             "transaction_id": request.transaction_id,
             "source_file": request.source_file,
-            "all_blocks": all_counter_blocks,
-            "column_descriptions": get_counter_column_descriptions(),  # ADD THIS LINE
+            "all_blocks": serialisable_blocks,
+            "column_descriptions": get_counter_column_descriptions(),
             "start_counter": {
                 "date": txn_date_formatted,
                 "timestamp": start_timestamp,
@@ -547,28 +567,24 @@ async def get_counter_data(
 
 
 def get_counter_column_descriptions():
-    """Return descriptions for counter table columns"""
+    """Return descriptions for counter table columns (covers both CDM and CIM formats)"""
     return {
-        'No': 'Cassette number',
-        'Ty': 'Type',
-        # 'ID': 'Unit ID',
-        # 'UnitName': 'UnitName',
-        'Cur': 'Currency',
-        'Val': 'Denomination',
-        'Ini': 'Ini - count in number',
-        'Cnt': 'Cnt - Remaining counters formula: INI - (RETRACT + DISP)',
-        'RCnt': 'Reject Count -> (Reject + Presented (Pres))',
-        'Safe': 'Safe',
-        # 'Min': 'Min',
-        # 'Max': 'Max',
-        'Disp': 'Disp',
-        'Pres': 'Presented notes to customer',
-        'Retr': 'Retract',
-        # 'A': 'AppL',
-        # 'DevL': 'DevL',
-        # 'St': 'Status - Indicates status of Logical cassette',
-        # 'HWsens': 'HWsens',
-        'Record_Type': 'Record Type'
+        # Common
+        'No':          'Cassette number',
+        'Ty':          'Type',
+        'Cur':         'Currency',
+        'Val':         'Denomination',
+        'Ini':         'Ini - count in number',
+        'Cnt':         'Cnt - Remaining counters formula: INI - (RETRACT + DISP)',
+        'Retr':        'Retract',
+        'PName':       'Position / Slot name',
+        'Record_Type': 'Record Type',
+        # CDM-specific
+        'RCnt':        'Reject Count -> (Reject + Presented (Pres))',
+        # CIM-specific
+        'IT':          'Item Type',
+        'ICnt':        'Initial Count',
+        'Rej':         'Rejected notes count',
     }
 
 
@@ -786,8 +802,12 @@ async def get_counter_comparison(
 
         DESCRIPTION:
             Computes a before/after Cnt comparison for a single Cash Withdrawal or
-            Cash Deposit transaction using WFS_INF_CDM_CASH_UNIT_INFO counter blocks
-            extracted from the matching TRC trace file.
+            Cash Deposit transaction using counter blocks extracted from the matching
+            TRC trace file.
+
+            Command selection:
+              - Cash Withdrawal -> WFS_INF_CDM_CASH_UNIT_INFO blocks only
+              - Cash Deposit    -> WFS_INF_CIM_CASH_UNIT_INFO blocks only
 
             Only rows that satisfy all three eligibility conditions are included:
                 - Cur is not empty
@@ -892,7 +912,8 @@ async def get_counter_comparison(
             )
 
         # Extract all counter blocks
-        all_blocks = extract_counter_blocks_from_string(matching_trc_content)
+        # Use CDM for Cash Withdrawal, CIM for Cash Deposit, both for unknown.
+        all_blocks = extract_counter_blocks_from_string(matching_trc_content, txn_type=txn_type)
         if not all_blocks:
             raise HTTPException(status_code=404, detail="No counter blocks found in TRC file")
 
@@ -1013,46 +1034,76 @@ def safe_decode(blob: bytes) -> str:
 
 def parse_counter_data_from_trc(log_lines: list) -> list:
     """
-    Parses WFS_INF_CDM_CASH_UNIT_INFO table format.
-    Captured columns: No, Ty, ID, Cur, Val, Ini, Cnt, RCnt, Disp, Pres, Retr, PName
-    Skipped columns:  UnitName, Min, Max, A, St, NrPCU
-    Anything after PName is ignored.
+    Parses WFS_INF_CDM_CASH_UNIT_INFO or WFS_INF_CIM_CASH_UNIT_INFO table format.
+
+    CDM columns (captured): No, Ty, ID, Cur, Val, Ini, Cnt, RCnt, Retr, PName
+    CDM columns (skipped):  UnitName, Min, Max, A, St, NrPCU, Disp, Pres
+    Stop column: PName
+
+    CIM columns (captured): No, Ty, IT, ID, Cur, Val, ICnt, Cnt, Ini, Retr, Rej, PposName
+    CIM columns (skipped):  CT, Disp, Pres, Min, St, A
+    Stop column: PposName
+
+    Everything after the stop column is ignored (avoids the repeated PCU section in CIM).
     """
     counter_rows = []
 
-    # Find header line
+    # ── Format definitions ────────────────────────────────────────────────────
+    # Each format: (required_cols_to_detect_header, all_col_names, skip_cols, stop_col, stop_output_key)
+    FORMATS = [
+        {
+            # CDM: WFS_INF_CDM_CASH_UNIT_INFO
+            'required':  {'No', 'Ty', 'UnitName', 'NrPCU', 'PName'},
+            'all_cols':  ['No', 'Ty', 'UnitName', 'ID', 'Cur', 'Val', 'Ini', 'Cnt',
+                          'RCnt', 'Min', 'Disp', 'Pres', 'Retr', 'Max', 'A', 'St', 'NrPCU', 'PName'],
+            'skip':      {'UnitName', 'Min', 'Max', 'A', 'St', 'NrPCU', 'Disp', 'Pres'},
+            'stop_col':  'PName',
+            'stop_key':  'PName',
+        },
+        {
+            # CIM: WFS_INF_CIM_CASH_UNIT_INFO
+            'required':  {'No', 'Ty', 'IT', 'ICnt', 'Rej', 'PposName'},
+            'all_cols':  ['No', 'Ty', 'IT', 'ID', 'Cur', 'Val', 'ICnt', 'Cnt', 'Max',
+                          'CT', 'Ini', 'Disp', 'Pres', 'Retr', 'Rej', 'Min', 'St', 'A', 'PposName'],
+            'skip':      {'CT', 'Disp', 'Pres', 'Min', 'St', 'A', 'Max'},
+            'stop_col':  'PposName',
+            'stop_key':  'PName',   # normalise to PName so the rest of the app is unchanged
+        },
+    ]
+
+    # ── Detect header line and which format it matches ────────────────────────
     header_line = None
-    header_idx = -1
+    header_idx  = -1
+    fmt         = None
 
     for idx, line in enumerate(log_lines):
-        if ('No' in line and 'Ty' in line and 'UnitName' in line and
-                'Disp' in line and 'Pres' in line and 'NrPCU' in line and 'PName' in line):
-            header_line = line
-            header_idx = idx
+        for candidate in FORMATS:
+            if all(col in line for col in candidate['required']):
+                header_line = line
+                header_idx  = idx
+                fmt         = candidate
+                break
+        if header_line:
             break
 
-    if not header_line or header_idx == -1:
+    if not header_line or fmt is None:
         return []
 
-    # ALL columns used for position mapping (including skipped ones as anchors)
-    all_col_names = ['No', 'Ty', 'UnitName', 'ID', 'Cur', 'Val', 'Ini', 'Cnt',
-                     'RCnt', 'Min', 'Disp', 'Pres', 'Retr', 'Max', 'A', 'St', 'NrPCU', 'PName']
-
-    # Columns to skip (not stored in output)
-    skip_cols = {'UnitName', 'Min', 'Max', 'A', 'St', 'NrPCU'}
-
-    # Find character position of each column from the header line
+    # ── Build sorted column positions from the header ─────────────────────────
     col_positions = {}
-    for col in all_col_names:
+    for col in fmt['all_cols']:
         pos = header_line.find(col)
         if pos != -1:
             col_positions[col] = pos
 
-    # Sort by position
     sorted_cols = sorted(col_positions.items(), key=lambda x: x[1])
 
     if len(sorted_cols) < 5:
         return []
+
+    stop_col  = fmt['stop_col']
+    stop_key  = fmt['stop_key']
+    skip_cols = fmt['skip']
 
     # Parse data lines
     for idx in range(header_idx + 1, len(log_lines)):
@@ -1074,11 +1125,11 @@ def parse_counter_data_from_trc(log_lines: list) -> list:
 
             for i, (col_name, col_start) in enumerate(sorted_cols):
 
-                # Hard stop at PName — extract first token only, then break
-                if col_name == 'PName':
+                # Hard stop at the format's stop column — first token only, then break
+                if col_name == stop_col:
                     raw = line[col_start:].strip() if col_start < len(line) else ''
                     if col_name not in skip_cols:
-                        counter_data[col_name] = raw.split()[0] if raw else ''
+                        counter_data[stop_key] = raw.split()[0] if raw else ''
                     break
 
                 # Get slice end from next column's start position
@@ -1096,8 +1147,8 @@ def parse_counter_data_from_trc(log_lines: list) -> list:
             # Val:
             val_raw = counter_data.get('Val', '')
             if val_raw.isdigit():
-                counter_data['Val'] 
-                
+                counter_data['Val']
+
             counter_data['Record_Type'] = 'Logical'
             counter_rows.append(counter_data)
 
@@ -1120,86 +1171,60 @@ def parse_time_from_trc(time_str: str) -> dt_time:
 
 
 
-def extract_counter_blocks(trc_file_path: str) -> list:
+def extract_counter_blocks(trc_file_path: str, txn_type: str = None) -> list:
     """
-        Extracts all WFS_INF_CDM_CASH_UNIT_INFO counter blocks from a TRC file.
-        Each block is kept separate; no merging occurs.
+    Extracts counter blocks from a TRC file.
+    Each block is kept separate; no merging occurs.
 
-        RETURNS:
-            list of dicts:
-                - 'time'      : datetime.time
-                - 'timestamp' : str (HH:MM:SS.ss)
-                - 'data'      : list of counter row dicts
+    Command selection based on txn_type:
+      - 'Cash Withdrawal' -> WFS_INF_CDM_CASH_UNIT_INFO only
+      - 'Cash Deposit'    -> WFS_INF_CIM_CASH_UNIT_INFO only
+      - None / unknown    -> both commands; whichever appears first in the file
+                            is used for the first/start block, whichever appears
+                            last is used for the last block.
+
+    RETURNS:
+        list of dicts:
+            - 'time'       : datetime.time
+            - 'timestamp'  : str (HH:MM:SS.ss)
+            - 'data'       : list of counter row dicts
+            - 'source_cmd' : 'CDM' or 'CIM'
     """
-    all_counter_blocks = []
-
     try:
         with open(trc_file_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
-            lines = content.split('\n')
-
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-
-            # NEW: detect WFS_INF_CDM_CASH_UNIT_INFO instead of CCdmCashUnitInfoDataEx
-            if 'WFS_INF_CDM_CASH_UNIT_INFO' in line:
-                timestamp_str = None
-                block_time = None
-
-                ts_match = re.search(r'(\d+)\s+(\d{6})\s+(\d{2}:\d{2}:\d{2}\.\d{2})', line)
-                if not ts_match and i > 0:
-                    ts_match = re.search(r'(\d+)\s+(\d{6})\s+(\d{2}:\d{2}:\d{2}\.\d{2})', lines[i - 1])
-
-                if ts_match:
-                    timestamp_str = ts_match.group(3)
-                    try:
-                        block_time = datetime.strptime(timestamp_str, '%H:%M:%S.%f').time()
-                    except Exception:
-                        pass
-
-                block_lines = []
-                i += 1
-
-                while i < len(lines):
-                    current_line = lines[i]
-
-                    # Stop if we hit another WFS_INF_CDM_CASH_UNIT_INFO block
-                    if 'WFS_INF_CDM_CASH_UNIT_INFO' in current_line:
-                        i -= 1
-                        break
-
-                    # Stop if we hit a new timestamp line (new trace entry)
-                    if re.search(r'^\d+\s+\d{6}\s+\d{2}:\d{2}:\d{2}\.\d{2}', current_line):
-                        break
-
-                    block_lines.append(current_line)
-                    i += 1
-
-                counter_data = parse_counter_data_from_trc(block_lines)
-
-                if counter_data and timestamp_str:
-                    all_counter_blocks.append({
-                        'time': block_time,
-                        'timestamp': timestamp_str,
-                        'data': counter_data
-                    })
-
-            i += 1
-
+        return extract_counter_blocks_from_string(content, txn_type=txn_type)
     except Exception as e:
         logger.error(f"Error extracting counter blocks: {e}")
         traceback.print_exc()
-
-    return all_counter_blocks
-
+        return []
 
 
-def extract_counter_blocks_from_string(content: str) -> list:
+def extract_counter_blocks_from_string(content: str, txn_type: str = None) -> list:
     """
-    Identical to extract_counter_blocks() but accepts file content as a string.
-    Detects WFS_INF_CDM_CASH_UNIT_INFO blocks.
+    Accepts file content as a string and extracts counter blocks.
+
+    Command selection based on txn_type:
+      - 'Cash Withdrawal' -> WFS_INF_CDM_CASH_UNIT_INFO only
+      - 'Cash Deposit'    -> WFS_INF_CIM_CASH_UNIT_INFO only
+      - None / unknown    -> both commands; whichever appears first in the file
+                            is used for the first/start block, whichever appears
+                            last is used for the last block.
+
+    Each returned block dict carries a 'source_cmd' key ('CDM' or 'CIM') so
+    callers can distinguish origin if needed.
     """
+    CDM_CMD = 'WFS_INF_CDM_CASH_UNIT_INFO'
+    CIM_CMD = 'WFS_INF_CIM_CASH_UNIT_INFO'
+
+    # Determine which commands to scan for
+    if txn_type == 'Cash Withdrawal':
+        target_cmds = {CDM_CMD: 'CDM'}
+    elif txn_type == 'Cash Deposit':
+        target_cmds = {CIM_CMD: 'CIM'}
+    else:
+        target_cmds = {CDM_CMD: 'CDM', CIM_CMD: 'CIM'}
+
     all_counter_blocks = []
     try:
         lines = content.split('\n')
@@ -1207,7 +1232,16 @@ def extract_counter_blocks_from_string(content: str) -> list:
         while i < len(lines):
             line = lines[i]
 
-            if 'WFS_INF_CDM_CASH_UNIT_INFO' in line:
+            # Check if the line contains any of our target commands
+            matched_cmd = None
+            matched_label = None
+            for cmd, label in target_cmds.items():
+                if cmd in line:
+                    matched_cmd = cmd
+                    matched_label = label
+                    break
+
+            if matched_cmd:
                 timestamp_str = None
                 block_time = None
 
@@ -1228,7 +1262,8 @@ def extract_counter_blocks_from_string(content: str) -> list:
                 while i < len(lines):
                     current_line = lines[i]
 
-                    if 'WFS_INF_CDM_CASH_UNIT_INFO' in current_line:
+                    # Stop if we hit any target command block (not just the same one)
+                    if any(cmd in current_line for cmd in target_cmds):
                         i -= 1
                         break
 
@@ -1244,7 +1279,8 @@ def extract_counter_blocks_from_string(content: str) -> list:
                     all_counter_blocks.append({
                         'time': block_time,
                         'timestamp': timestamp_str,
-                        'data': counter_data
+                        'data': counter_data,
+                        'source_cmd': matched_label,
                     })
 
             i += 1

@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Dict, List, Any
 import pandas as pd
 from modules.logging_config import logger
-import logging
 
 
 logger.info("Starting app_logger.file_content_detector")
@@ -11,6 +10,7 @@ logger.info("Starting app_logger.file_content_detector")
 
 SECTION_RE = re.compile(r"^\s*\[(.+?)\]\s*$")
 KV_RE = re.compile(r'^\s*(@|".+?"|[^=]+?)\s*=\s*(.+?)\s*$')
+
 
 class RegistryAnalyzerService:
     """
@@ -43,9 +43,9 @@ class RegistryAnalyzerService:
             _safe_decode_lines
 
         DESCRIPTION:
-            Safely decodes raw registry file bytes using multiple encodings
-            until decoding succeeds. Falls back to UTF-8 with replacement
-            if all other decoders fail.
+            Safely decodes raw registry file bytes using BOM/magic-byte
+            sniffing first, then falls back to sequential encoding attempts.
+            Avoids redundant full-blob decodes by detecting encoding upfront.
 
         USAGE:
             lines = self._safe_decode_lines(blob)
@@ -61,16 +61,29 @@ class RegistryAnalyzerService:
         RAISES:
             None
         """
-        logger.debug("Starting safe decode for registry file content.")
-        encs = ["utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "cp1252", "latin-1", "utf-8"]
-        for e in encs:
+        # FIX 1: Sniff BOM / magic bytes first to avoid trying all encodings
+        # on every file. The vast majority of .reg files are UTF-16 LE with BOM
+        # or UTF-8 with BOM — we can detect that in O(1) from the first bytes.
+        if blob[:2] in (b'\xff\xfe', b'\xfe\xff'):
+            enc = "utf-16"
+        elif blob[:3] == b'\xef\xbb\xbf':
+            enc = "utf-8-sig"
+        else:
+            enc = None
+
+        if enc:
             try:
-                lines = blob.decode(e).splitlines()
-                logger.debug(f"Decoded blob successfully using encoding: {e}")
-                return lines
+                return blob.decode(enc).splitlines()
             except Exception:
-                logger.debug(f"Failed decoding with encoding: {e}")
+                pass  # Fall through to sequential attempt
+
+        # Only reach here for ambiguous encodings
+        for e in ("cp1252", "latin-1", "utf-8"):
+            try:
+                return blob.decode(e).splitlines()
+            except Exception:
                 continue
+
         logger.error("All decoders failed. Falling back to utf-8 with replacement.")
         return blob.decode("utf-8", errors="replace").splitlines()
 
@@ -97,7 +110,6 @@ class RegistryAnalyzerService:
         RAISES:
             None
         """
-        logger.debug(f"Normalizing registry key: {raw}")
         s = (raw or "").strip()
         if s == "@":
             return s
@@ -113,6 +125,10 @@ class RegistryAnalyzerService:
         DESCRIPTION:
             Parses registry lines into structured dictionaries containing
             section names (registry paths), keys, and values.
+
+            Optimized: avoids per-line regex where possible by using
+            fast character checks before falling back to compiled patterns.
+            Also avoids repeated string allocations with strip() in the hot path.
 
         USAGE:
             rows = self._parse_lines(lines)
@@ -131,45 +147,66 @@ class RegistryAnalyzerService:
         RAISES:
             None
         """
-        logger.debug("Parsing lines from registry file.")
         rows: List[Dict[str, str]] = []
         current_section: str | None = None
         seen_kv = False
         i, n = 0, len(lines)
+
+        # FIX 2: Cache bound methods and avoid repeated attribute lookups
+        # inside the hot loop.
+        section_match = SECTION_RE.match
+        kv_match = KV_RE.match
+        normalize = self._normalize_key
+        rows_append = rows.append
+
         while i < n:
-            raw = lines[i].rstrip("\n")
-            line = raw.strip()
+            line = lines[i].strip()
             i += 1
-            if not line:
+
+            # FIX 3: Fast-path empty line and comment skip before any regex.
+            if not line or line.startswith(';'):
                 continue
-            m = SECTION_RE.match(line)
-            if m:
-                logger.debug(f"Found section: {m.group(1)}")
-                if current_section and not seen_kv:
-                    rows.append({"Device Path": current_section, "Key": "", "Value": ""})
-                current_section = m.group(1).strip()
-                seen_kv = False
-                continue
-            if current_section:
-                mv = KV_RE.match(line)
+
+            # FIX 4: Use first-char check to decide which regex to try,
+            # avoiding running both patterns on every line.
+            if line[0] == '[':
+                m = section_match(line)
+                if m:
+                    if current_section and not seen_kv:
+                        rows_append({"Device Path": current_section, "Key": "", "Value": ""})
+                    current_section = m.group(1).strip()
+                    seen_kv = False
+                    continue
+
+            if current_section and '=' in line:
+                mv = kv_match(line)
                 if mv:
-                    logger.debug(f"Found key-value under section {current_section}: {line}")
                     kraw, vraw = mv.groups()
-                    vfull = vraw
-                    while vfull.endswith("\\") and i < n:
-                        cont = lines[i].rstrip("\n")
-                        i += 1
-                        vfull = vfull[:-1] + cont.strip()
-                    rows.append({
+                    # FIX 5: Build continuation string once via list join
+                    # rather than repeated string concatenation (O(n) vs O(n²)).
+                    if vraw.endswith("\\"):
+                        parts = [vraw[:-1]]
+                        while i < n and vraw.endswith("\\"):
+                            vraw = lines[i].strip()
+                            i += 1
+                            if vraw.endswith("\\"):
+                                parts.append(vraw[:-1])
+                            else:
+                                parts.append(vraw)
+                        vfull = "".join(parts)
+                    else:
+                        vfull = vraw
+
+                    rows_append({
                         "Device Path": current_section,
-                        "Key": self._normalize_key(kraw),
+                        "Key": normalize(kraw),
                         "Value": vfull.strip()
                     })
                     seen_kv = True
-                    continue
+
         if current_section and not seen_kv:
-            rows.append({"Device Path": current_section, "Key": "", "Value": ""})
-        logger.debug("Completed parsing registry lines.")
+            rows_append({"Device Path": current_section, "Key": "", "Value": ""})
+
         return rows
 
     def _parse_reg_file_to_df(self, file_path: str) -> pd.DataFrame:
@@ -201,10 +238,10 @@ class RegistryAnalyzerService:
 
         with open(file_path, 'rb') as f:
             blob = f.read()
-        
+
         lines = self._safe_decode_lines(blob)
         rows = self._parse_lines(lines)
-        
+
         if not rows:
             logger.warning(f"No valid registry entries found in: {file_path}")
             return pd.DataFrame(columns=["Device Path", "Key", "Value"])
@@ -263,14 +300,14 @@ class RegistryAnalyzerService:
             }
 
     def compare_registry_files(self, file1_path: str, file2_path: str) -> Dict[str, Any]:
-
         """
         FUNCTION: compare_registry_files
 
         DESCRIPTION:
-        Compares two registry files by reading and parsing both, merging
-        their content, and identifying added, removed, changed, and identical
-        entries.
+        Compares two registry files by reading and parsing both, then
+        performing a dict-based diff instead of a Pandas merge. This avoids
+        the overhead of outer-merge + indicator column allocation and is
+        significantly faster for typical registry file sizes.
 
         USAGE:
         result = service.compare_registry_files("a.reg", "b.reg")
@@ -298,49 +335,51 @@ class RegistryAnalyzerService:
 
         if df_a.empty and df_b.empty:
             logger.info("Both registry files are empty. Nothing to compare.")
-            return {
-                "changed": [],
-                "added": [],
-                "removed": [],
-                "identical_count": 0
-            }
+            return {"changed": [], "added": [], "removed": [], "identical_count": 0}
 
-        # Merge dataframes to find differences
-        merged = df_a.merge(
-            df_b, 
-            on=["Device Path", "Key"], 
-            how="outer", 
-            suffixes=("_A", "_B"), 
-            indicator=True
+        # FIX 6: Replace pandas outer-merge+indicator with dict lookups.
+        # Building dicts is O(n); lookups are O(1). The merge approach
+        # allocates a combined DataFrame and iterates it multiple times.
+        def to_dict(df: pd.DataFrame) -> dict:
+            result = {}
+            for row in df.itertuples(index=False):
+                result[(row[0], row[1])] = row[2]  # (Device Path, Key) -> Value
+            return result
+
+        map_a = to_dict(df_a)
+        map_b = to_dict(df_b)
+
+        changed, added, removed = [], [], []
+        identical_count = 0
+
+        keys_a = set(map_a)
+        keys_b = set(map_b)
+
+        for key in keys_a & keys_b:
+            val_a, val_b = map_a[key], map_b[key]
+            if val_a == val_b:
+                identical_count += 1
+            else:
+                changed.append({
+                    "Device Path": key[0],
+                    "Key": key[1],
+                    "Value_A": val_a,
+                    "Value_B": val_b,
+                })
+
+        for key in keys_a - keys_b:
+            removed.append({"Device Path": key[0], "Key": key[1], "Value": map_a[key]})
+
+        for key in keys_b - keys_a:
+            added.append({"Device Path": key[0], "Key": key[1], "Value": map_b[key]})
+
+        logger.info(
+            f"Comparison completed: changed={len(changed)}, added={len(added)}, "
+            f"removed={len(removed)}, identical={identical_count}"
         )
-
-        # Entries only in File A (removed)
-        removed_df = merged[merged["_merge"] == "left_only"]
-        removed_list = removed_df[["Device Path", "Key", "Value_A"]].rename(columns={"Value_A": "Value"}).to_dict('records')
-
-        # Entries only in File B (added)
-        added_df = merged[merged["_merge"] == "right_only"]
-        added_list = added_df[["Device Path", "Key", "Value_B"]].rename(columns={"Value_B": "Value"}).to_dict('records')
-
-        # Entries in both files
-        both_df = merged[merged["_merge"] == "both"].copy()
-        
-        # Fill NaN to handle cases where a value is present in one but not the other
-        both_df['Value_A'] = both_df['Value_A'].fillna('')
-        both_df['Value_B'] = both_df['Value_B'].fillna('')
-
-        # Find changed values
-        changed_df = both_df[both_df["Value_A"] != both_df["Value_B"]]
-        changed_list = changed_df[["Device Path", "Key", "Value_A", "Value_B"]].to_dict('records')
-
-        # Find identical entries
-        identical_count = len(both_df[both_df["Value_A"] == both_df["Value_B"]])
-
-        logger.info(f"Comparison completed: changed={len(changed_list)}, added={len(added_list)}, removed={len(removed_list)}, identical={identical_count}")
-
         return {
-            "changed": changed_list,
-            "added": added_list,
-            "removed": removed_list,
-            "identical_count": identical_count
+            "changed": changed,
+            "added": added,
+            "removed": removed,
+            "identical_count": identical_count,
         }

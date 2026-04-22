@@ -5278,7 +5278,7 @@ RAISES:
                     start_df = pd.DataFrame(counter_data['start_counter']['counter_data'])
                     col_descriptions = counter_data.get('column_descriptions', {})
                     column_config = {}
-                    for col in first_df.columns:
+                    for col in start_df.columns:
                         if col in col_descriptions:
                             column_config[col] = st.column_config.TextColumn(col, help=col_descriptions[col], width="small")
                     render_themed_table(start_df)

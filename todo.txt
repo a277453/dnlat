@@ -51,3 +51,19 @@ how? -
 template name:  add a toggle button 
 what ? -        in on mode = dev mode(directly access ) don't need db authentication just bypass the authentication 
 how? -          
+
+
+Template Name: View Counters button for Cash Deposit
+What? - The View Counters button was not appearing for deposit transactions.
+How? -  The app now records that a counter entry was seen in the log even if it couldn't be fully read, so the button shows up correctly.
+
+Template Name: Slot name showing as "-"
+What? - The slot name column was showing a dash instead of the actual name like SLOT1, SLOT2.
+How? - The log writes the slot name as "- SLOT1" with a dash separator. The app was picking up the dash. Fixed to skip the dash and take the name after it.
+
+Template Name: Deposit counter table values
+What? - The deposit counter table was showing wrong or empty values for columns like ICnt, Cnt, Ini etc.
+How? - Fixed the column position detection to use word boundaries so short column names like "Cnt" don't get misread as part of longer names like "ICnt".
+
+Template Name: Actual count of Deposit
+What? - Currently only looking up Cnt difference and not as per Ty as actual logs are not available.

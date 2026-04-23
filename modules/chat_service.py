@@ -66,6 +66,24 @@ _OFFTOPIC_PATTERNS = re.compile(
     r'tell\s+me\s+a\s+joke|funny\s+story|tell\s+me\s+a\s+story|'
     r'who\s+are\s+you|what\s+is\s+your\s+name|how\s+are\s+you|'
     r'what\s+can\s+you\s+do|'
+    # ── SQL injection patterns ──────────────────────────────────────────────
+    r'\bSELECT\b.{0,50}\bFROM\b|\bDROP\s+TABLE\b|\bINSERT\s+INTO\b|'
+    r'\bDELETE\s+FROM\b|\bUPDATE\b.{0,30}\bSET\b|\bUNION\s+SELECT\b|'
+    r'\bOR\s+1\s*=\s*1\b|--\s*DROP|;\s*DROP|\bEXEC\s*\(|\bxp_cmdshell\b|'
+    r"'\s*OR\s*'|\bSLEEP\s*\(|\bBENCHMARK\s*\(|\bINFORMATION_SCHEMA\b|'"
+    r'\bWAITFOR\s+DELAY\b|\bCAST\s*\(|\bCONVERT\s*\(.*\bCHAR\b|'
+    # ── Prompt injection / instruction override ───────────────────────────
+    r'ignore\s+(previous|all|your|the)\s+(instructions?|rules?|guidelines?|prompt)|'
+    r'disregard\s+(your|all|previous)\s+(instructions?|rules?|guidelines?)|'
+    r'forget\s+(everything|all|your|previous|what\s+you|what\s+i)|'
+    r'(new|updated|override|ignore\s+all)\s+instructions?\s*:|'
+    r'(reveal|show|print|display|output|tell\s+me)\s+(your\s+)?(system\s+)?prompt|'
+    r'what\s+is\s+your\s+system\s+prompt|'
+    r'(act|behave|respond|pretend)\s+(as|like)\s+(a\s+)?(different|unrestricted|DAN|evil|unfiltered)|'
+    r'you\s+are\s+now\s+(a\s+)?(different|unrestricted|new)|'
+    r'pretend\s+(you\s+)?(have\s+)?(no\s+)?(restrictions?|rules?|limits?|filters?)|'
+    r'\bjailbreak\b|do\s+anything\s+now|\bDANmode\b|\bDAN\s+mode\b|'
+    r'roleplay\s+as\s+(an?\s+)?(unrestricted|evil|unfiltered|different)|'
     # Casual greetings / small talk
     r'\bhow\s+r\s+u\b|\bhi\b|\bhello\b|\bhey\b|\bwassup\b|\bwhat.?s\s+up\b|'
     r'good\s+(morning|afternoon|evening|night)|'

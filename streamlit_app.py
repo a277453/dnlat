@@ -13,6 +13,7 @@ import numpy as np
 from fastapi.logger import logger
 from modules.analysis import create_analysis_table, create_feedback_table, create_userresponse_database
 from modules.chat_service import chat_turn as llm_chat_turn
+from modules.chat_logger import ChatLogger
 from modules.streamlit_logger import logger as frontend_logger
 import time
 from modules.login import create_reset_tokens_table, is_valid_password, is_same_as_old_password
@@ -4681,10 +4682,11 @@ RAISES:
                             },
                         ]
                         st.session_state.chat_context = {
-                            "ej":       transaction_log,
-                            "jrn":      "",
-                            "analysis": _analysis_text,
-                            "txn_data": selected_txn_data.to_dict(),
+                            "ej":             transaction_log,
+                            "jrn":            "",
+                            "analysis":       _analysis_text,
+                            "txn_data":       selected_txn_data.to_dict(),
+                            "transaction_id": selected_txn_id,
                         }
                         st.rerun()
                     else:
@@ -4960,7 +4962,15 @@ RAISES:
                 with st.chat_message("assistant"):
                     with st.spinner("Thinking..."):
                         try:
-                            _ctx = st.session_state.chat_context
+                            _ctx      = st.session_state.chat_context
+                            _username = getattr(st.session_state, "username", "unknown") or "unknown"
+                            _txn_id   = _ctx.get("transaction_id", "unknown")
+                            _chat_log = ChatLogger(
+                                transaction_id=_txn_id,
+                                username=_username,
+                                txn_data=_ctx.get("txn_data", {}),
+                            )
+                            _chat_log.log_turn("user", _question)
                             _reply = llm_chat_turn(
                                 ej_content      = _ctx.get("ej", ""),
                                 jrn_content     = _ctx.get("jrn", ""),
@@ -4969,6 +4979,7 @@ RAISES:
                                 question        = _question,
                                 txn_data        = _ctx.get("txn_data", {}),
                             )
+                            _chat_log.log_turn("assistant", _reply)
                             st.markdown(_reply)
                             st.session_state.chat_history.append({"role": "assistant", "content": _reply})
                         except Exception as _chat_err:

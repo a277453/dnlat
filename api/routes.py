@@ -40,6 +40,7 @@ import time
 
 #  Import our central logger
 from modules.logging_config import logger
+from modules.chat_logger import ChatLogger
 from modules.analysis import store_metadata, store_feedback, get_user_role, get_analysis_records, get_feedback_records
 from modules.login import (verify_reset_identity,generate_reset_token,send_reset_email,validate_reset_token,reset_user_password,is_valid_password,authenticate_user_backend,register_user,is_user_pending_approval,log_login_event,create_access_token)
 
@@ -3147,6 +3148,7 @@ class ChatRequest(BaseModel):
 async def chat_transaction(
     request: ChatRequest,
     session_id: str = Query(default=None),
+    authorization: str = Header(default=None),
 ):
     """
     FUNCTION:
@@ -3212,6 +3214,23 @@ async def chat_transaction(
         len(request.history),
     )
 
+    # Extract username from JWT for per-user log attribution
+    _username = "unknown"
+    try:
+        _auth = authorization or ""
+        if _auth.startswith("Bearer "):
+            _username = decode_access_token(_auth.split(" ", 1)[1]).get("sub", "unknown")
+    except Exception:
+        pass
+
+    chat_log = ChatLogger(
+        transaction_id=request.transaction_id,
+        session_id=session_id,
+        username=_username,
+        txn_data=txn_data,
+    )
+    chat_log.log_turn("user", request.question)
+
     try:
         response_text = chat_turn(
             question=request.question,
@@ -3221,9 +3240,11 @@ async def chat_transaction(
             history=request.history,
             txn_data=txn_data,
         )
+        chat_log.log_turn("assistant", response_text)
         return {"response": response_text}
 
     except Exception as e:
+        chat_log.log_turn("assistant", f"[ERROR] {str(e)}")
         logger.exception("chat_transaction: LLM call failed for txn=%s: %s", request.transaction_id, e)
         raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
 
@@ -3232,6 +3253,7 @@ async def chat_transaction(
 async def chat_transaction_stream(
     request: ChatRequest,
     session_id: str = Query(default=None),
+    authorization: str = Header(default=None),
 ):
     """
     FUNCTION:
@@ -3293,7 +3315,25 @@ async def chat_transaction_stream(
         len(request.history),
     )
 
+    # Extract username from JWT for per-user log attribution
+    _username = "unknown"
+    try:
+        _auth = authorization or ""
+        if _auth.startswith("Bearer "):
+            _username = decode_access_token(_auth.split(" ", 1)[1]).get("sub", "unknown")
+    except Exception:
+        pass
+
+    chat_log = ChatLogger(
+        transaction_id=request.transaction_id,
+        session_id=session_id,
+        username=_username,
+        txn_data=txn_data,
+    )
+    chat_log.log_turn("user", request.question)
+
     def _sse_generator():
+        collected_reply = []
         try:
             for chunk in chat_turn_stream(
                 ej_content=customer_journal_contents,
@@ -3303,16 +3343,18 @@ async def chat_transaction_stream(
                 question=request.question,
                 txn_data=txn_data,
             ):
-                # SSE format: each token sent as its own event
+                collected_reply.append(chunk)
                 yield f"data: {chunk}\n\n"
         except Exception as e:
             logger.exception(
                 "chat_transaction_stream: stream error for txn=%s: %s",
                 request.transaction_id, e,
             )
+            chat_log.log_turn("assistant", f"[ERROR] {str(e)}")
             yield f"data: [ERROR] Stream failed: {str(e)}\n\n"
+        else:
+            chat_log.log_turn("assistant", "".join(collected_reply))
         finally:
-            # Signal to the client that the stream is complete
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(

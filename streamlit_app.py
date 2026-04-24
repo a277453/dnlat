@@ -20,7 +20,18 @@ from datetime import datetime as _dt
 import html
 import math
 import uuid
-
+import traceback
+import base64
+from datetime import datetime as _dt1
+from datetime import datetime as _dt2
+import re as _re1
+import re as _re2
+import plotly.graph_objects as go
+from collections import defaultdict
+import hashlib
+import json
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Import authentication functions
 from admin_setup import create_dn_diagnostics_database, initialize_admin_table

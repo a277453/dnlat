@@ -1,0 +1,92 @@
+A simple script that reads a customer journal file, pulls out transaction data, and loads it into Power BI.
+
+---
+
+## What It Does
+
+1. **`parse_journal.py`** — reads your `.jrn` log file and creates two CSV files
+2. **`powerbi_load.py`** — loads those CSVs into Power BI as tables
+
+---
+
+## What You Need
+
+- Python 3.11 
+- pandas library
+- numpy library
+- matplotlib library
+
+---
+
+## Installation
+
+```bash
+pip install pandas
+pip install matplotlib
+pip install numpy
+```
+
+---
+
+## Setup
+
+Before running anything, open `config.ini` and fill in your file paths:
+
+```ini
+[PATHS]
+journal_file = D:\path\to\your\journal.jrn
+stats_csv    = D:\path\to\stats_output.csv
+details_csv  = D:\path\to\details_output.csv
+```
+in this just set your folder path where you have your log file and where you want that two csv file .
+That's the only file you need to edit.
+
+---
+
+## How to Run
+
+**Step 1** — Parse the journal file:
+
+```bash
+python parse_journal.py
+```
+
+This creates two CSV files:
+- `stats_output.csv` — summary (average, min, max duration per transaction type)
+- `details_output.csv` — every individual transaction with its start time, end time, and duration
+
+**Step 2** — Load into Power BI:
+
+1. Open Power BI Desktop
+2. Click **Get Data → Python script**
+3. Paste in the contents of `powerbi_load.py`
+4. Select both tables (`stats_df` and `details_df`) and click **Load**
+
+---
+
+## Output Tables
+
+**Stats table** — one row per transaction type:
+
+| Column | What it means |
+|---|---|
+| Transaction Type | Name of the transaction |
+| Avg Duration (s) | Average time taken |
+| Min / Max Duration (s) | Fastest and slowest recorded |
+| Count | How many times it ran |
+
+**Details table** — one row per transaction:
+
+| Column | What it means |
+|---|---|
+| Transaction ID | Unique ID from the log |
+| Transaction Type | Name of the transaction |
+| Start / End Time | When it started and finished |
+| End State | Successful or Unsuccessful |
+| Duration (s) | How long it took |
+
+---
+
+## Updating Data
+
+Just re-run `parse_journal.py` with a new journal file, then hit **Refresh** in Power BI.

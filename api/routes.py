@@ -2099,8 +2099,8 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
                                                         
                                                         if next_info and next_info['first_time']:
                                                             try:
-                                                                dt1 = datetime.combine(datetime.now().date(), first_time)
-                                                                dt2 = datetime.combine(datetime.now().date(), next_info['first_time'])
+                                                                dt1 = datetime.combine(date.today(), first_time)
+                                                                dt2 = datetime.combine(date.today(), next_info['first_time'])
                                                                 duration = (dt2 - dt1).total_seconds()
                                                             except:
                                                                 duration = None
@@ -2584,6 +2584,13 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                     
                                     # print(f" Mapped {len(screen_info)} unique screens to time ranges")
                                     
+                                    # FIX: Build the flow by consecutively deduplicating all_events.
+                                    # This preserves each screen's ACTUAL occurrence timestamp in
+                                    # sequence order, so screens visited multiple times (e.g. back-
+                                    # navigation to DMMainMenu) each get their own correct timestamp
+                                    # rather than always referencing the global first occurrence.
+                                    # This prevents negative durations caused by the old screen_info
+                                    # dict approach which keyed by name and lost positional context.
                                     deduped_events = []
                                     for (screen, t) in all_events:
                                         if not deduped_events or deduped_events[-1][0] != screen:
@@ -2596,8 +2603,8 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                             next_time = deduped_events[i + 1][1]
                                             if time_val and next_time:
                                                 try:
-                                                    dt1 = datetime.combine(datetime.now().date(), time_val)
-                                                    dt2 = datetime.combine(datetime.now().date(), next_time)
+                                                    dt1 = datetime.combine(date.today(), time_val)
+                                                    dt2 = datetime.combine(date.today(), next_time)
                                                     duration = (dt2 - dt1).total_seconds()
                                                 except Exception:
                                                     duration = None
@@ -3123,154 +3130,208 @@ class FeedbackSubmission(BaseModel):
     original_llm_response: str
 
 @router.post("/submit-llm-feedback")
-async def submit_llm_feedback(feedback: FeedbackSubmission, session_id: str = Query(default=CURRENT_SESSION_ID), authorization: str = Header(default=None)):
-    _jwt_role = None
-    if authorization and authorization.startswith("Bearer "):
-        payload = decode_access_token(authorization.split(" ", 1)[1])
-        _jwt_role = payload.get("role", "")
-        if _jwt_role == "ADMIN":
-            logger.warning(
-                "FEEDBACK [403] — user='%s' role='ADMIN' attempted to submit feedback (blocked)",
-                payload.get("sub"),
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="ADMIN role is not permitted to submit feedback.",
-            )
+async def submit_llm_feedback(
+    feedback: FeedbackSubmission,
+    session_id: str = Query(default=CURRENT_SESSION_ID),
+    authorization: str = Header(default=None),
+):
     """
-FUNCTION:
-    submit_llm_feedback
+    FUNCTION:
+        submit_llm_feedback
 
-DESCRIPTION:
-    Handles submission of user feedback related to LLM-generated analysis for a
-    specific transaction. The function logs the feedback, stores it in a local
-    JSONL file for auditability, and keeps a copy in the active session for
-    immediate availability in the UI or further processing.
+    DESCRIPTION:
+        Handles submission of user feedback related to LLM-generated analysis for a
+        specific transaction. The function logs the feedback, stores it in a local
+        JSONL file for auditability, and keeps a copy in the active session for
+        immediate availability in the UI or further processing.
 
-USAGE:
-    result = await submit_llm_feedback(
-        feedback=FeedbackSubmission(...),
-        session_id="12345"
-    )
+    USAGE:
+        result = await submit_llm_feedback(
+            feedback=FeedbackSubmission(...),
+            session_id="12345"
+        )
 
-PARAMETERS:
-    feedback (FeedbackSubmission):
-        Pydantic model containing all feedback fields submitted by the user,
-        including transaction ID, rating, alternative cause, comments,
-        user identity, model version, and the original LLM response.
+    PARAMETERS:
+        feedback (FeedbackSubmission):
+            Pydantic model containing all feedback fields submitted by the user,
+            including transaction ID, rating, alternative cause, comments,
+            user identity, model version, and the original LLM response.
 
-    session_id (str):
-        Unique session identifier used to store and organize feedback within
-        session storage. Defaults to the current active session.
+        session_id (str):
+            Unique session identifier used to store and organize feedback within
+            session storage. Defaults to the current active session.
 
-RETURNS:
-    dict:
-        {
-            "status": "success",
-            "message": "Thank you <name>! Your feedback has been recorded.",
-            "timestamp": "<YYYY-MM-DD HH:MM:SS>"
-        }
+        authorization (str):
+            Bearer token from the Authorization header. Required — requests
+            without a valid token are rejected with 401.
 
-        - `status`: Indicates whether the feedback submission was successful.
-        - `message`: User-friendly confirmation message.
-        - `timestamp`: Server-generated timestamp of the feedback record.
+    RETURNS:
+        dict:
+            {
+                "status": "success",
+                "message": "Thank you <name>! Your feedback has been recorded.",
+                "timestamp": "<YYYY-MM-DD HH:MM:SS>"
+            }
 
-SIDE EFFECTS:
-    - Appends feedback as a JSON line in `llm_feedback.json`
-    - Stores feedback in session under `feedback_data` list
-    - Creates session if missing
+    SIDE EFFECTS:
+        - Appends feedback as a JSON line in `llm_feedback.json`
+        - Stores feedback in session under `feedback_data` list
 
-RAISES:
-    HTTPException 500:
-        - Raised when unexpected failures occur while processing or storing
-          the feedback (e.g., file write errors, session update failures).
-"""
+    RAISES:
+        HTTPException 401: Missing or invalid/expired JWT.
+        HTTPException 403: Role not permitted to submit feedback (ADMIN blocked).
+        HTTPException 429: Feedback already submitted for this transaction.
+        HTTPException 500: Unexpected failure during storage.
+
+    SECURITY:
+        - JWT is mandatory; there is no unauthenticated fallback path.
+        - Role and username are derived exclusively from the verified JWT payload.
+        - feedback.user_name from the request body is NOT trusted for auth decisions.
+        - No DB role lookup fallback — prevents body-injection bypass.
+    """
+
+    # ── Step 1: Token is mandatory — reject immediately if absent ──────────────
+    if not authorization or not authorization.startswith("Bearer "):
+        logger.warning("FEEDBACK [401] — missing or malformed Authorization header")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "status": "error",
+                "code": 401,
+                "error": "Unauthorized",
+                "message": "Authentication token missing. Please log in to submit feedback.",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # ── Step 2: Decode and validate JWT — decode_access_token raises 401 if bad ─
+    token = authorization.split(" ", 1)[1]
+    payload = decode_access_token(token)
+
+    # ── Step 3: Ensure required claims are present in the token ────────────────
+    jwt_role     = payload.get("role" or "").strip()
+    jwt_username = payload.get("sub" or "").strip()
+
+    if not jwt_role or not jwt_username:
+        logger.warning(
+            "FEEDBACK [401] — JWT missing required claims: role='%s' sub='%s'",
+            jwt_role, jwt_username,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "status": "error",
+                "code": 401,
+                "error": "Unauthorized",
+                "message": "Malformed token. Please log in again.",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # ── Step 4: Role-based access control — no DB fallback ─────────────────────
+    jwt_role_upper = jwt_role.upper()
+
+    if jwt_role_upper == "ADMIN":
+        logger.warning(
+            "FEEDBACK [403] — user='%s' role='ADMIN' attempted to submit feedback (blocked)",
+            jwt_username,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ADMIN role is not permitted to submit feedback.",
+        )
+
+    if jwt_role_upper not in ("USER", "DEV_MODE"):
+        logger.warning(
+            "FEEDBACK [403] — user='%s' role='%s' is not an allowed feedback role",
+            jwt_username, jwt_role_upper,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only users with USER or DEV_MODE roles can submit feedback.",
+        )
+
+    # ── Step 5: Use verified identity from JWT, not from request body ──────────
+    # jwt_username is the authoritative user identity for all storage operations.
+    # feedback.user_name is kept only for the display message below.
+    verified_username = jwt_username
 
     session_id = _resolve_session_id(session_id)
     try:
-        logger.info(f" Submitting feedback for transaction: {feedback.transaction_id}")
-        logger.debug(f"Feedback payload: {feedback.dict()}")
-        
-        # Create feedback record
+        logger.info(
+            "Submitting feedback — txn: %s  user: %s  role: %s",
+            feedback.transaction_id, verified_username, jwt_role_upper,
+        )
+        logger.debug("Feedback payload: %s", feedback.dict())
+
+        # ── Build feedback record ───────────────────────────────────────────────
+        now = datetime.now()
         feedback_record = {
-            "transaction_id": feedback.transaction_id,
-            "rating": feedback.rating,
-            "alternative_cause": feedback.alternative_cause,
-            "comment": feedback.comment,
-            "user_name": feedback.user_name,
-            "user_email": feedback.user_email,
-            "model_version": feedback.model_version,
+            "transaction_id":       feedback.transaction_id,
+            "rating":               feedback.rating,
+            "alternative_cause":    feedback.alternative_cause,
+            "comment":              feedback.comment,
+            "user_name":            verified_username,          # from JWT, not body
+            "user_email":           feedback.user_email,
+            "model_version":        feedback.model_version,
             "original_llm_response": feedback.original_llm_response,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "submission_date": datetime.now().strftime("%Y-%m-%d"),
-            "submission_time": datetime.now().strftime("%H:%M:%S"),
-            "session_id": session_id
+            "timestamp":            now.strftime("%Y-%m-%d %H:%M:%S"),
+            "submission_date":      now.strftime("%Y-%m-%d"),
+            "submission_time":      now.strftime("%H:%M:%S"),
+            "session_id":           session_id,
         }
-        
-        # Save to file (append mode)
+
+        # ── Persist to audit file ───────────────────────────────────────────────
         feedback_file = Path("llm_feedback.json")
-        
         try:
             with open(feedback_file, "a") as f:
                 f.write(json.dumps(feedback_record) + "\n")
-            logger.info(f" Feedback saved to file: {feedback_file}")
+            logger.info("Feedback saved to file: %s", feedback_file)
         except Exception as e:
-            logger.error(f" Could not save feedback to file {feedback_file}: {str(e)}")
+            logger.error("Could not save feedback to file %s: %s", feedback_file, e)
 
-        # Only USER and DEV_MODE roles can store feedback in database
-        role = (_jwt_role or get_user_role(feedback.user_name) or "").upper()
-        if role not in ("USER", "DEV_MODE"):
-            raise HTTPException(
-                status_code=403,
-                detail="Only users with USER or DEV_MODE roles can submit feedback."
-            )
-
-        # Store feedback in database
+        # ── Persist to database ─────────────────────────────────────────────────
         result = store_feedback(
             transaction_id    = feedback.transaction_id,
-            user_name         = feedback.user_name,
+            user_name         = verified_username,              # from JWT, not body
             rating            = feedback.rating,
             alternative_cause = feedback.alternative_cause,
             comment           = feedback.comment,
-            model_version     = feedback.model_version
+            model_version     = feedback.model_version,
         )
 
         if result == "LIMIT_REACHED":
             raise HTTPException(
                 status_code=429,
-                detail="You have already submitted feedback for this transaction."
+                detail="You have already submitted feedback for this transaction.",
             )
 
-        # Also store in session for immediate retrieval
-        # if not session_service.session_exists(session_id):
-        #     session_service.create_session(session_id)
-        #     logger.debug(f"Created new session: {session_id}")
-        
+        # ── Store in session for immediate UI retrieval ─────────────────────────
         session_data = session_service.get_session(session_id)
-        
-        if 'feedback_data' not in session_data:
-            session_data['feedback_data'] = []
-        
-        session_data['feedback_data'].append(feedback_record)
-        session_service.update_session(session_id, 'feedback_data', session_data['feedback_data'])
-        logger.info(f" Feedback stored in session for session_id: {session_id}")
-        
+        if "feedback_data" not in session_data:
+            session_data["feedback_data"] = []
+        session_data["feedback_data"].append(feedback_record)
+        session_service.update_session(session_id, "feedback_data", session_data["feedback_data"])
+        logger.info("Feedback stored in session: %s", session_id)
+
         return {
-            "status": "success",
-            "message": f"Thank you {feedback.user_name}! Your feedback has been recorded.",
-            "timestamp": feedback_record['timestamp']
+            "status":    "success",
+            "message":   f"Thank you {verified_username}! Your feedback has been recorded.",
+            "timestamp": feedback_record["timestamp"],
         }
+
     except HTTPException:
         raise
-        
+
     except Exception as e:
-        logger.exception(f"Failed to submit feedback for transaction {feedback.transaction_id}: {str(e)}")
+        logger.exception(
+            "Failed to submit feedback for transaction %s: %s",
+            feedback.transaction_id, e,
+        )
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to submit feedback: {str(e)}"
+            detail=f"Failed to submit feedback: {str(e)}",
         )
-
-
 
 @router.get("/get-feedback/{transaction_id}")
 async def get_feedback(transaction_id: str,session_id: str = Query(default=None)):

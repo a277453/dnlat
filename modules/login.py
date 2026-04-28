@@ -72,8 +72,8 @@ DB_CONFIG = {
 # UAT / DEV CREDENTIALS
 # ============================================
 UAT_CREDENTIALS = {
-    "username": os.getenv("DN_UAT_USERNAME","DN_UAT_USERNAME_1"),
-    "password": os.getenv("DN_UAT_PASSWORD","DN_UAT_PASSWORD_1")
+    "username": os.getenv("DN_UAT_USERNAME_1", "DN_UAT_USERNAME_2"),
+    "password": os.getenv("DN_UAT_PASSWORD_1", "DN_UAT_PASSWORD_2")
 }
 # ============================================
 # DEV MODE CONFIG
@@ -474,7 +474,7 @@ def authenticate_user_backend(username: str, password: str) -> dict | None:
                 if (username.strip() == env_user and password == env_pass):
 
                     logger.warning(
-                        " DEV MODE LOGIN — bypassing DB for user '%s'",
+                        " DEV MODE LOGIN, bypassing DB for user '%s'",
                         username.strip()
                     )
 
@@ -490,7 +490,7 @@ def authenticate_user_backend(username: str, password: str) -> dict | None:
                 password == os.getenv("DN_UAT_PASSWORD")):
 
             logger.warning(
-                " DEV MODE LOGIN — bypassing DB for user '%s'",
+                " DEV MODE LOGIN , bypassing DB for user '%s'",
                 username.strip()
             )
 

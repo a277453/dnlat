@@ -1,7 +1,7 @@
 from uuid import uuid4
 import traceback
 from modules.login import decode_access_token
-from datetime import date
+from datetime import date, datetime
 import base64 as _b64
 import base64
 from pydantic import BaseModel
@@ -42,7 +42,7 @@ import pandas as pd
 from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal
 from modules.journal_parser import match_journal_file, mask_ej_log
 from modules.ui_journal_processor  import UIJournalProcessor, parse_ui_journal, parse_ui_journal_from_string
-from datetime import datetime
+from datetime import datetime, date
 from collections import defaultdict
 import re
 import zipfile
@@ -61,6 +61,10 @@ import logging
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from modules.flat_file_generator import FlatFileMerger
+from api.chunk_service import assemble_and_process, cancel_upload, save_chunk
+from fastapi import APIRouter, File, Form, UploadFile
+from typing import Optional
 
 logger.info("Logger initialized at startup")
 
@@ -91,6 +95,7 @@ async def require_elevated_role(
     Returns 403 if role is not in ALLOWED_ROLES (i.e. role == USER).
     Both responses are logged to the terminal.
     """
+
     if not authorization or not authorization.startswith("Bearer "):
         logger.warning(
             "RBAC [401] — missing Authorization header on elevated endpoint"
@@ -479,6 +484,27 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
         t_cat_end = time.perf_counter()
         logger.debug(f"CATEGORIZATION + ACU EXTRACTION TIME: {t_cat_end - t_cat_start:.4f} s")
+
+        # ── FLAT FILE MERGER ──────────────────────────────────────────────────
+        # Runs after categorization while file_categories still holds full paths.
+        # Normal run (buffer only, inspect via /read-log):
+        FlatFileMerger.run(
+            customer_paths=file_categories.get('customer_journals', []),
+            ui_paths=file_categories.get('ui_journals', []),
+            llm_paths=file_categories.get('journal_llm_files', []),
+        )
+
+        #to-do: add a query param to trigger writing the merged files to disk for verification, and to inspect the logs to confirm correct files were merged. This will be removed after verification is complete.
+        # With physical file written to disk for verification:
+        # FlatFileMerger.run(
+        #     customer_paths=file_categories.get('customer_journals', []),
+        #     ui_paths=file_categories.get('ui_journals', []),
+        #     llm_paths=file_categories.get('journal_llm_files', []),
+        #     write_to_disk=True,
+        #     output_dir=Path("merged_output"),
+        #  )
+
+        
 
         # ------------------ IN-MEMORY FILE LOAD ------------------
         # Read every relevant branch's file contents from Temp into session memory.
@@ -2607,49 +2633,44 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                     
                                     # print(f" Mapped {len(screen_info)} unique screens to time ranges")
                                     
-                                    # Build detailed flow for unique screens
+                                    # FIX: Build the flow by consecutively deduplicating all_events.
+                                    # This preserves each screen's ACTUAL occurrence timestamp in
+                                    # sequence order, so screens visited multiple times (e.g. back-
+                                    # navigation to DMMainMenu) each get their own correct timestamp
+                                    # rather than always referencing the global first occurrence.
+                                    # This prevents negative durations caused by the old screen_info
+                                    # dict approach which keyed by name and lost positional context.
+                                    deduped_events = []
+                                    for (screen, t) in all_events:
+                                        if not deduped_events or deduped_events[-1][0] != screen:
+                                            deduped_events.append((screen, t))
+
                                     ui_flow_details = []
-                                    
-                                    for i, screen_name in enumerate(unique_screens):
-                                        info = screen_info.get(screen_name)
-                                        
-                                        if not info:
-                                            ui_flow_details.append({
-                                                'screen': screen_name,
-                                                'timestamp': '',
-                                                'duration': None
-                                            })
-                                            continue
-                                        
-                                        first_time = info['first_time']
-                                        
-                                        # Calculate duration: from first occurrence of THIS screen
-                                        # to first occurrence of NEXT screen
+                                    for i, (screen_name, time_val) in enumerate(deduped_events):
                                         duration = None
-                                        if i < len(unique_screens) - 1:
-                                            next_screen = unique_screens[i + 1]
-                                            next_info = screen_info.get(next_screen)
-                                            
-                                            if next_info and next_info['first_time']:
+                                        if i < len(deduped_events) - 1:
+                                            next_time = deduped_events[i + 1][1]
+                                            if time_val and next_time:
                                                 try:
                                                     dt1 = datetime.combine(date.today(), first_time)
                                                     dt2 = datetime.combine(date.today(), next_info['first_time'])
                                                     duration = (dt2 - dt1).total_seconds()
-                                                except Exception as e:
+                                                except Exception:
                                                     duration = None
-                                        
+
                                         ui_flow_details.append({
                                             'screen': screen_name,
-                                            'timestamp': str(first_time) if first_time else '',
+                                            'timestamp': str(time_val) if time_val else '',
                                             'duration': duration
                                         })
+                                    
                                     
                                     if ui_flow_details and len(ui_flow_details) > 0:
                                         ui_flow_screens = ui_flow_details
                                         has_flow = True
                                         
                                         with_duration = sum(1 for s in ui_flow_details if s['duration'] is not None)
-                                        # print(f" Created detailed flow: {len(ui_flow_details)} unique screens, {with_duration} with durations")
+                                        logger.info(f" Created detailed flow: {len(ui_flow_details)} unique screens, {with_duration} with durations")
                                         
                                         # Debug: print all screens
                                         # for i, screen in enumerate(ui_flow_details):
@@ -3158,150 +3179,208 @@ class FeedbackSubmission(BaseModel):
     original_llm_response: str
 
 @router.post("/submit-llm-feedback")
-async def submit_llm_feedback(feedback: FeedbackSubmission, session_id: str = Query(default=CURRENT_SESSION_ID), authorization: str = Header(default=None)):
-    if authorization and authorization.startswith("Bearer "):
-        payload = decode_access_token(authorization.split(" ", 1)[1])
-        if payload.get("role") == "ADMIN":
-            logger.warning(
-                "FEEDBACK [403] — user='%s' role='ADMIN' attempted to submit feedback (blocked)",
-                payload.get("sub"),
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="ADMIN role is not permitted to submit feedback.",
-            )
+async def submit_llm_feedback(
+    feedback: FeedbackSubmission,
+    session_id: str = Query(default=CURRENT_SESSION_ID),
+    authorization: str = Header(default=None),
+):
     """
-FUNCTION:
-    submit_llm_feedback
+    FUNCTION:
+        submit_llm_feedback
 
-DESCRIPTION:
-    Handles submission of user feedback related to LLM-generated analysis for a
-    specific transaction. The function logs the feedback, stores it in a local
-    JSONL file for auditability, and keeps a copy in the active session for
-    immediate availability in the UI or further processing.
+    DESCRIPTION:
+        Handles submission of user feedback related to LLM-generated analysis for a
+        specific transaction. The function logs the feedback, stores it in a local
+        JSONL file for auditability, and keeps a copy in the active session for
+        immediate availability in the UI or further processing.
 
-USAGE:
-    result = await submit_llm_feedback(
-        feedback=FeedbackSubmission(...),
-        session_id="12345"
-    )
+    USAGE:
+        result = await submit_llm_feedback(
+            feedback=FeedbackSubmission(...),
+            session_id="12345"
+        )
 
-PARAMETERS:
-    feedback (FeedbackSubmission):
-        Pydantic model containing all feedback fields submitted by the user,
-        including transaction ID, rating, alternative cause, comments,
-        user identity, model version, and the original LLM response.
+    PARAMETERS:
+        feedback (FeedbackSubmission):
+            Pydantic model containing all feedback fields submitted by the user,
+            including transaction ID, rating, alternative cause, comments,
+            user identity, model version, and the original LLM response.
 
-    session_id (str):
-        Unique session identifier used to store and organize feedback within
-        session storage. Defaults to the current active session.
+        session_id (str):
+            Unique session identifier used to store and organize feedback within
+            session storage. Defaults to the current active session.
 
-RETURNS:
-    dict:
-        {
-            "status": "success",
-            "message": "Thank you <name>! Your feedback has been recorded.",
-            "timestamp": "<YYYY-MM-DD HH:MM:SS>"
-        }
+        authorization (str):
+            Bearer token from the Authorization header. Required — requests
+            without a valid token are rejected with 401.
 
-        - `status`: Indicates whether the feedback submission was successful.
-        - `message`: User-friendly confirmation message.
-        - `timestamp`: Server-generated timestamp of the feedback record.
+    RETURNS:
+        dict:
+            {
+                "status": "success",
+                "message": "Thank you <name>! Your feedback has been recorded.",
+                "timestamp": "<YYYY-MM-DD HH:MM:SS>"
+            }
 
-SIDE EFFECTS:
-    - Appends feedback as a JSON line in `llm_feedback.json`
-    - Stores feedback in session under `feedback_data` list
-    - Creates session if missing
+    SIDE EFFECTS:
+        - Appends feedback as a JSON line in `llm_feedback.json`
+        - Stores feedback in session under `feedback_data` list
 
-RAISES:
-    HTTPException 500:
-        - Raised when unexpected failures occur while processing or storing
-          the feedback (e.g., file write errors, session update failures).
-"""
+    RAISES:
+        HTTPException 401: Missing or invalid/expired JWT.
+        HTTPException 403: Role not permitted to submit feedback (ADMIN blocked).
+        HTTPException 429: Feedback already submitted for this transaction.
+        HTTPException 500: Unexpected failure during storage.
+
+    SECURITY:
+        - JWT is mandatory; there is no unauthenticated fallback path.
+        - Role and username are derived exclusively from the verified JWT payload.
+        - feedback.user_name from the request body is NOT trusted for auth decisions.
+        - No DB role lookup fallback — prevents body-injection bypass.
+    """
+
+    # ── Step 1: Token is mandatory — reject immediately if absent ──────────────
+    if not authorization or not authorization.startswith("Bearer "):
+        logger.warning("FEEDBACK [401] — missing or malformed Authorization header")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "status": "error",
+                "code": 401,
+                "error": "Unauthorized",
+                "message": "Authentication token missing. Please log in to submit feedback.",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # ── Step 2: Decode and validate JWT — decode_access_token raises 401 if bad ─
+    token = authorization.split(" ", 1)[1]
+    payload = decode_access_token(token)
+
+    # ── Step 3: Ensure required claims are present in the token ────────────────
+    jwt_role     = payload.get("role" or "").strip()
+    jwt_username = payload.get("sub" or "").strip()
+
+    if not jwt_role or not jwt_username:
+        logger.warning(
+            "FEEDBACK [401] — JWT missing required claims: role='%s' sub='%s'",
+            jwt_role, jwt_username,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "status": "error",
+                "code": 401,
+                "error": "Unauthorized",
+                "message": "Malformed token. Please log in again.",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # ── Step 4: Role-based access control — no DB fallback ─────────────────────
+    jwt_role_upper = jwt_role.upper()
+
+    if jwt_role_upper == "ADMIN":
+        logger.warning(
+            "FEEDBACK [403] — user='%s' role='ADMIN' attempted to submit feedback (blocked)",
+            jwt_username,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ADMIN role is not permitted to submit feedback.",
+        )
+
+    if jwt_role_upper not in ("USER", "DEV_MODE"):
+        logger.warning(
+            "FEEDBACK [403] — user='%s' role='%s' is not an allowed feedback role",
+            jwt_username, jwt_role_upper,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only users with USER or DEV_MODE roles can submit feedback.",
+        )
+
+    # ── Step 5: Use verified identity from JWT, not from request body ──────────
+    # jwt_username is the authoritative user identity for all storage operations.
+    # feedback.user_name is kept only for the display message below.
+    verified_username = jwt_username
 
     session_id = _resolve_session_id(session_id)
     try:
-        logger.info(f" Submitting feedback for transaction: {feedback.transaction_id}")
-        logger.debug(f"Feedback payload: {feedback.dict()}")
-        
-        # Create feedback record
+        logger.info(
+            "Submitting feedback — txn: %s  user: %s  role: %s",
+            feedback.transaction_id, verified_username, jwt_role_upper,
+        )
+        logger.debug("Feedback payload: %s", feedback.dict())
+
+        # ── Build feedback record ───────────────────────────────────────────────
+        now = datetime.now()
         feedback_record = {
-            "transaction_id": feedback.transaction_id,
-            "rating": feedback.rating,
-            "alternative_cause": feedback.alternative_cause,
-            "comment": feedback.comment,
-            "user_name": feedback.user_name,
-            "user_email": feedback.user_email,
-            "model_version": feedback.model_version,
+            "transaction_id":       feedback.transaction_id,
+            "rating":               feedback.rating,
+            "alternative_cause":    feedback.alternative_cause,
+            "comment":              feedback.comment,
+            "user_name":            verified_username,          # from JWT, not body
+            "user_email":           feedback.user_email,
+            "model_version":        feedback.model_version,
             "original_llm_response": feedback.original_llm_response,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "submission_date": datetime.now().strftime("%Y-%m-%d"),
-            "submission_time": datetime.now().strftime("%H:%M:%S"),
-            "session_id": session_id
+            "timestamp":            now.strftime("%Y-%m-%d %H:%M:%S"),
+            "submission_date":      now.strftime("%Y-%m-%d"),
+            "submission_time":      now.strftime("%H:%M:%S"),
+            "session_id":           session_id,
         }
-        
-        # Save to file (append mode)
+
+        # ── Persist to audit file ───────────────────────────────────────────────
         feedback_file = Path("llm_feedback.json")
-        
         try:
             with open(feedback_file, "a") as f:
                 f.write(json.dumps(feedback_record) + "\n")
-            logger.info(f" Feedback saved to file: {feedback_file}")
+            logger.info("Feedback saved to file: %s", feedback_file)
         except Exception as e:
-            logger.error(f" Could not save feedback to file {feedback_file}: {str(e)}")
+            logger.error("Could not save feedback to file %s: %s", feedback_file, e)
 
-        # Only USER role can store feedback in database
-        role = get_user_role(feedback.user_name)
-        if role != "USER":
-            raise HTTPException(
-                status_code=403,
-                detail="Only users with USER role can submit feedback."
-            )
-
-        # Store feedback in database
+        # ── Persist to database ─────────────────────────────────────────────────
         result = store_feedback(
             transaction_id    = feedback.transaction_id,
-            user_name         = feedback.user_name,
+            user_name         = verified_username,              # from JWT, not body
             rating            = feedback.rating,
             alternative_cause = feedback.alternative_cause,
             comment           = feedback.comment,
-            model_version     = feedback.model_version
+            model_version     = feedback.model_version,
         )
 
         if result == "LIMIT_REACHED":
             raise HTTPException(
                 status_code=429,
-                detail="You have already submitted feedback for this transaction."
+                detail="You have already submitted feedback for this transaction.",
             )
 
-        # Also store in session for immediate retrieval
-        # if not session_service.session_exists(session_id):
-        #     session_service.create_session(session_id)
-        #     logger.debug(f"Created new session: {session_id}")
-        
+        # ── Store in session for immediate UI retrieval ─────────────────────────
         session_data = session_service.get_session(session_id)
-        
-        if 'feedback_data' not in session_data:
-            session_data['feedback_data'] = []
-        
-        session_data['feedback_data'].append(feedback_record)
-        session_service.update_session(session_id, 'feedback_data', session_data['feedback_data'])
-        logger.info(f" Feedback stored in session for session_id: {session_id}")
-        
+        if "feedback_data" not in session_data:
+            session_data["feedback_data"] = []
+        session_data["feedback_data"].append(feedback_record)
+        session_service.update_session(session_id, "feedback_data", session_data["feedback_data"])
+        logger.info("Feedback stored in session: %s", session_id)
+
         return {
-            "status": "success",
-            "message": f"Thank you {feedback.user_name}! Your feedback has been recorded.",
-            "timestamp": feedback_record['timestamp']
+            "status":    "success",
+            "message":   f"Thank you {verified_username}! Your feedback has been recorded.",
+            "timestamp": feedback_record["timestamp"],
         }
-        
+
+    except HTTPException:
+        raise
+
     except Exception as e:
-        logger.exception(f"Failed to submit feedback for transaction {feedback.transaction_id}: {str(e)}")
+        logger.exception(
+            "Failed to submit feedback for transaction %s: %s",
+            feedback.transaction_id, e,
+        )
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to submit feedback: {str(e)}"
+            detail=f"Failed to submit feedback: {str(e)}",
         )
-
-
 
 @router.get("/get-feedback/{transaction_id}")
 async def get_feedback(transaction_id: str,session_id: str = Query(default=None)):
@@ -4010,3 +4089,32 @@ async def auth_initialize_db():
     except Exception as e:
         logger.exception("DB bootstrap failed: %s", e)
         raise HTTPException(status_code=500, detail=f"DB bootstrap failed: {e}")
+
+@router.post("/upload-chunk")
+async def upload_chunk(
+    upload_id:    str        = Form(..., description="Client UUID for this upload session"),
+    chunk_index:  int        = Form(..., description="0-based chunk index"),
+    total_chunks: int        = Form(..., description="Total number of chunks"),
+    filename:     str        = Form(..., description="Original ZIP filename"),
+    chunk:        UploadFile = File(...,  description="Binary data of this chunk"),
+):
+    """Receive one chunk and stage it on disk."""
+    data = await chunk.read()
+    return save_chunk(upload_id, chunk_index, total_chunks, filename, data)
+
+
+@router.post("/finalize-upload")
+async def finalize_upload(
+    upload_id:    str           = Form(..., description="UUID used while uploading chunks"),
+    filename:     str           = Form(..., description="Original ZIP filename"),
+    total_chunks: int           = Form(..., description="Total number of expected chunks"),
+    mode:         Optional[str] = Form(None, description="Optional processing mode"),
+):
+    """Assemble all staged chunks and run the extraction pipeline."""
+    return await assemble_and_process(upload_id, total_chunks, mode)
+
+
+@router.delete("/cancel-upload/{upload_id}")
+async def cancel_upload_endpoint(upload_id: str):
+    """Delete staged chunks for an aborted upload."""
+    return cancel_upload(upload_id)

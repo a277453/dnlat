@@ -1125,7 +1125,11 @@ def show_register_page():
                         st.session_state.page = "login"
                         st.rerun()
                     else:
-                        st.error(response.json().get("detail", "Registration failed."))
+                        try:
+                            error_msg = response.json().get("detail", "Registration failed. Please try again.")
+                        except ValueError:
+                            error_msg = response.text or "Registration failed. Please try again."
+                        st.error(error_msg)
 
                 except requests.exceptions.ConnectionError:
                     st.error("Service temporarily unavailable. Please try again later.")
@@ -3656,7 +3660,7 @@ def render_ui_flow_individual():
                     st.error(f"  {error_detail}")
                     
             except requests.exceptions.Timeout:
-                st.error("⏱  Request timeout. Please try again.")
+                st.error("Request timeout. Please try again.")
             except requests.exceptions.ConnectionError:
                 st.error("  Connection error. Ensure the API server is running on Backend:8000.")
             except Exception as e:
@@ -3665,7 +3669,7 @@ def render_ui_flow_individual():
                     st.code(traceback.format_exc())
     
     except requests.exceptions.Timeout:
-        st.error("⏱  Request timeout. Please try again.")
+        st.error("Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
@@ -4414,7 +4418,7 @@ RAISES:
         try:
             sources_response = requests.get(
                 f"{API_BASE_URL}/get-transactions-with-sources",
-                timeout=30,
+                timeout=300,
                 headers=get_auth_headers()
             )
             
@@ -4439,7 +4443,7 @@ RAISES:
                     analyze_response = requests.post(
                         f"{API_BASE_URL}/analyze-customer-journals",
                         headers=get_auth_headers(),
-                        timeout=120
+                        timeout=300
                     )
                     
                     if analyze_response.status_code in (401, 403):
@@ -4460,7 +4464,7 @@ RAISES:
         # STEP 3: Get source files and transactions
         sources_response = requests.get(
             f"{API_BASE_URL}/get-transactions-with-sources",
-            timeout=30,
+            timeout=300,
             headers=get_auth_headers()
         )
         
@@ -4633,7 +4637,7 @@ RAISES:
                         f"{API_BASE_URL}/analyze-transaction-llm",
                         cache_enabled=True,
                         json={"transaction_id": selected_txn_id,"employee_code": st.session_state.employee_code},
-                        timeout=120
+                        timeout=300
                     )
                     
                     if response.status_code == 200:
@@ -4814,15 +4818,15 @@ RAISES:
                 
                 with col1:
                     _role = st.session_state.get("role", "USER")
-                    _admin_blocked = _role == "ADMIN"
+                    _can_give_feedback = _role in ("USER", "DEV_MODE")
                     can_submit = questions_answered > 0
 
-                    if _admin_blocked:
-                        st.info(" ADMIN role cannot submit feedback.")
+                    if not _can_give_feedback:
+                        st.info(f" {_role} role cannot submit feedback.")
 
                     if st.button("Submit Feedback", 
                             key=f"{feedback_key_prefix}_submit",
-                            disabled=not can_submit or _admin_blocked,
+                            disabled=not can_submit or not _can_give_feedback,
                             type="primary",
                             use_container_width=True):
                         
@@ -4849,7 +4853,7 @@ RAISES:
                                         f"{API_BASE_URL}/submit-llm-feedback",
                                         json=feedback_data,
                                         headers=get_auth_headers(),
-                                        timeout=30
+                                        timeout=300
                                     )
                                     
                                     if response.status_code == 200:
@@ -4918,7 +4922,11 @@ RAISES:
                 key="db_employee_code"
             )
 
-        if st.button(" Retrieve from DB", key="retrieve_db_btn", use_container_width=True):
+        _col1, _col2 = st.columns([1, 3])
+        with _col1:
+            _retrieve_db_clicked = st.button(" Retrieve from DB", key="retrieve_db_btn", use_container_width=True)
+        if _retrieve_db_clicked:
+
             if not db_txn_id.strip():
                 st.warning("Please enter a Transaction ID.")
             else:
@@ -4929,7 +4937,7 @@ RAISES:
                             "transaction_id": db_txn_id.strip(),
                             "employee_code":  db_employee_code.strip(),
                         },
-                        timeout=10,
+                        timeout=300,
                         headers=get_auth_headers()
                     )
                     if response.status_code == 200:
@@ -4956,7 +4964,10 @@ RAISES:
             key="fb_txn_id"
         )
 
-        if st.button(" Retrieve Feedback", key="retrieve_feedback_btn", use_container_width=True):
+        _fb_col1, _fb_col2 = st.columns([1, 3])
+        with _fb_col1:
+            _retrieve_fb_clicked = st.button(" Retrieve Feedback", key="retrieve_feedback_btn", use_container_width=True)
+        if _retrieve_fb_clicked:
             if not fb_txn_id.strip():
                 st.warning("Please enter a Transaction ID.")
             else:
@@ -4967,7 +4978,7 @@ RAISES:
                             "transaction_id": fb_txn_id.strip(),
                             "user_name":      st.session_state.get("username")
                         },
-                        timeout=10,
+                        timeout=300,
                         headers=get_auth_headers()
                     )
                     if response.status_code == 200:

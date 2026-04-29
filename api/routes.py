@@ -1,4 +1,11 @@
 from uuid import uuid4
+import traceback
+from modules.login import decode_access_token
+from datetime import date, datetime
+import base64 as _b64
+import base64
+from pydantic import BaseModel
+from datetime import datetime, time as dt_time
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query, status, Depends
 from modules.extraction import ZipExtractionService
 from modules.categorization import CategorizationService
@@ -14,6 +21,13 @@ from modules.schemas import (
     TransactionVisualizationRequest
 	
 )
+from admin_setup import create_dn_diagnostics_database, initialize_admin_table
+from modules.login import create_login_history_table, create_reset_tokens_table
+from modules.analysis import (
+        create_userresponse_database,
+        create_analysis_table,
+        create_feedback_table,
+    )
 
 from modules.login import decode_access_token
 from modules.extraction import extract_from_directory, extract_from_zip_bytes
@@ -48,6 +62,10 @@ import logging
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
+from modules.flat_file_generator import FlatFileMerger
+from api.chunk_service import assemble_and_process, cancel_upload, save_chunk
+from fastapi import APIRouter, File, Form, UploadFile
+from typing import Optional
 
 logger.info("Logger initialized at startup")
 
@@ -72,7 +90,6 @@ async def require_elevated_role(
     Returns 403 if role is not in ALLOWED_ROLES (i.e. role == USER).
     Both responses are logged to the terminal.
     """
-    from modules.login import decode_access_token
 
     if not authorization or not authorization.startswith("Bearer "):
         logger.warning(
@@ -258,7 +275,6 @@ async def debug_zip_members(file: UploadFile = File(...)):
         }
         
     except Exception as e:
-        import traceback
         logger.error(f"Unexpected error in /debug-zip-members: {e}")  
         logger.debug(traceback.format_exc()) 
         return {
@@ -335,7 +351,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
     Step 1: Receive and validate ZIP file upload
     """
     logger.info(" Received request to process ZIP file")
-    if not file.filename.endswith('.zip'):
+    if not file.filename.lower().endswith('.zip'):
         logger.error(" Invalid file type - only ZIP allowed")
         raise HTTPException(
             status_code=400,
@@ -447,6 +463,27 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         t_cat_end = time.perf_counter()
         logger.debug(f"CATEGORIZATION + ACU EXTRACTION TIME: {t_cat_end - t_cat_start:.4f} s")
 
+        # ── FLAT FILE MERGER ──────────────────────────────────────────────────
+        # Runs after categorization while file_categories still holds full paths.
+        # Normal run (buffer only, inspect via /read-log):
+        FlatFileMerger.run(
+            customer_paths=file_categories.get('customer_journals', []),
+            ui_paths=file_categories.get('ui_journals', []),
+            llm_paths=file_categories.get('journal_llm_files', []),
+        )
+
+        #to-do: add a query param to trigger writing the merged files to disk for verification, and to inspect the logs to confirm correct files were merged. This will be removed after verification is complete.
+        # With physical file written to disk for verification:
+        # FlatFileMerger.run(
+        #     customer_paths=file_categories.get('customer_journals', []),
+        #     ui_paths=file_categories.get('ui_journals', []),
+        #     llm_paths=file_categories.get('journal_llm_files', []),
+        #     write_to_disk=True,
+        #     output_dir=Path("merged_output"),
+        #  )
+
+        
+
         # ------------------ IN-MEMORY FILE LOAD ------------------
         # Read every relevant branch's file contents from Temp into session memory.
         # After this block succeeds the run folder is deleted.
@@ -468,7 +505,6 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
         # --- REGISTRY ---
         # Base64-encode bytes before storing so the session remains JSON-serialisable.
-        import base64 as _b64
         registry_contents: dict = {}
         for path_str in file_categories.get('registry_files', []):
             p = Path(path_str)
@@ -609,7 +645,6 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
     except HTTPException:
         raise   
     except Exception as e:
-        import traceback
         logger.error(f" ERROR in process_zip:{e}", exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -653,7 +688,7 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
     """
     logger.info(f" Received request: /extract-files/ for file: {file.filename}")  
     try:
-        if not file.filename.endswith('.zip'):
+        if not file.filename.lower().endswith('.zip'):
             logger.error(f"Invalid file type uploaded: {file.filename}")  
             raise HTTPException(
                 status_code=400,
@@ -712,7 +747,6 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
         logger.error(f"Unexpected error during ACU extraction for file {file.filename}: {e}")  
         logger.debug(traceback.format_exc())  
         raise HTTPException(
@@ -727,27 +761,14 @@ async def extract_registry_from_zip(file: UploadFile = File(...), session_id: st
         extract_registry_from_zip
 
     DESCRIPTION:
-        Lightweight endpoint that scans an uploaded ZIP archive and extracts
-        ONLY registry-related files without performing full package processing.
-        This avoids the overhead of ACU extraction, categorization, session
-        creation, and disk writes that the full /process-zip pipeline incurs.
+        Extracts ONLY registry-related files from an uploaded ZIP archive.
 
-        A file is treated as a registry file when ANY of these conditions holds:
-            1. Its extension is .reg
-            2. Its name contains 'reg' and its extension is .txt  (e.g. reg.txt,
-               machine_reg.txt)
-            3. It lives inside a folder whose name contains 'registry' or 'reg'
-               and has one of these extensions: .reg .txt .ini .cfg .conf
-
-        The returned contents are base64-encoded raw bytes so the caller can
-        decode them with any supported encoding without a second API round-trip.
-
-    USAGE:
-        result = await extract_registry_from_zip(file=some_zip_file)
+        Uses the same ZipExtractionService + CategorizationService pipeline as
+        /process-zip so that both Package A (main upload) and Package B (compare
+        upload) identify registry files with identical logic.  
 
     PARAMETERS:
-        file (UploadFile) : The ZIP file uploaded via mu
-        ltipart/form-data.
+        file (UploadFile) : ZIP file uploaded via multipart/form-data.
 
     RETURNS:
         dict :
@@ -769,45 +790,33 @@ async def extract_registry_from_zip(file: UploadFile = File(...), session_id: st
         raise HTTPException(status_code=400, detail="Only ZIP files are accepted")
 
     try:
-        import base64
+        
 
         zip_bytes = await file.read()
         logger.info(f"Read {len(zip_bytes)} bytes from {file.filename}")
 
-        # Registry-file detection rules (mirrors categorization.py logic)
-        REGISTRY_EXTENSIONS     = {'.reg', 'reg.txt'}
-        REGISTRY_FOLDER_MARKERS = {'registry', 'reg'}
+        # ------------------------------------------------------------------
+        # Step 1: Extract ZIP using the same ZipExtractionService used by
+        # /process-zip.  This routes every file into branch folders (REGISTRY/,
+        # ACU/, TRC/, …) using _classify_to_branch() — identical logic to what
+        # builds Package A's registry_contents in the session.
+        # ------------------------------------------------------------------
+        extraction_service = ZipExtractionService()
+        try:
+            extract_path, _, _ = extraction_service.extract_zip(zip_bytes)
+        except Exception as e:
+            logger.error(f"ZIP extraction failed: {e}")
+            raise HTTPException(status_code=400, detail=f"ZIP extraction failed: {str(e)}")
 
-        def _is_registry_file(zip_member_name: str) -> bool:
-            """Return True when the ZIP member looks like a registry file."""
-            norm        = zip_member_name.replace('\\\\', '/')
-            parts       = [p.lower() for p in norm.split('/')]
-            fname       = parts[-1] if parts else ''
-            ext         = os.path.splitext(fname)[1]
-            name_no_ext = os.path.splitext(fname)[0]
-
-            # Rule 1 – plain .reg file anywhere in the archive
-            if ext == '.reg':
-                return True
-
-            # Rule 2 – .txt file whose name contains 'reg'
-            if ext == '.txt' and 'reg' in name_no_ext:
-                return True
-
-            # Rule 3 – file inside a folder that contains 'registry' or 'reg'
-            parent_parts = parts[:-1]
-            in_registry_folder = any(
-                marker in part
-                for part in parent_parts
-                for marker in REGISTRY_FOLDER_MARKERS
-            )
-            if in_registry_folder and ext in REGISTRY_EXTENSIONS:
-                return True
-
-            return False
+        # ------------------------------------------------------------------
+        # Step 2: Read every file that landed in the REGISTRY/ branch folder.
+        # CategorizationService is not needed here — anything in REGISTRY/ is
+        # already a registry file by construction.
+        # ------------------------------------------------------------------
+        registry_branch = extract_path / "REGISTRY"
+        registry_contents: dict = {}
 
         def _dedup_key(basename: str, existing: dict) -> str:
-            """Return a unique key by appending a counter when needed."""
             key = basename
             counter = 1
             while key in existing:
@@ -816,42 +825,27 @@ async def extract_registry_from_zip(file: UploadFile = File(...), session_id: st
                 counter += 1
             return key
 
-        registry_contents: dict = {}
+        if registry_branch.exists():
+            for reg_file in registry_branch.iterdir():
+                if not reg_file.is_file():
+                    continue
+                try:
+                    key = _dedup_key(reg_file.name, registry_contents)
+                    registry_contents[key] = _b64.b64encode(reg_file.read_bytes()).decode('utf-8')
+                    logger.info(f"Loaded registry file: {reg_file.name} -> key={key}")
+                except Exception as e:
+                    logger.warning(f"Could not read registry file {reg_file.name}: {e}")
+        else:
+            logger.warning(f"REGISTRY branch folder not found at {registry_branch}")
 
+        # ------------------------------------------------------------------
+        # Step 3: Clean up the temp extraction folder
+        # ------------------------------------------------------------------
         try:
-            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-                for info in zf.infolist():
-                    if info.is_dir():
-                        continue
-                    member_name = info.filename
-                    if _is_registry_file(member_name):
-                        try:
-                            raw = zf.read(member_name)
-                            basename = os.path.basename(member_name.replace('\\\\', '/'))
-                            key = _dedup_key(basename, registry_contents)
-                            registry_contents[key] = base64.b64encode(raw).decode('utf-8')
-                            logger.info(f"Extracted registry file: {member_name} -> key={key}")
-                        except Exception as e:
-                            logger.warning(f"Could not read {member_name} from ZIP: {e}")
-                    elif member_name.lower().endswith('.zip'):
-                        # Also scan one level of nested ZIPs
-                        try:
-                            inner_bytes = zf.read(member_name)
-                            with zipfile.ZipFile(io.BytesIO(inner_bytes)) as inner_zf:
-                                for inner_info in inner_zf.infolist():
-                                    if inner_info.is_dir():
-                                        continue
-                                    if _is_registry_file(inner_info.filename):
-                                        raw = inner_zf.read(inner_info.filename)
-                                        basename = os.path.basename(inner_info.filename.replace('\\\\', '/'))
-                                        key = _dedup_key(basename, registry_contents)
-                                        registry_contents[key] = base64.b64encode(raw).decode('utf-8')
-                                        logger.info(f"Extracted registry file from nested ZIP [{member_name}]: {inner_info.filename} -> key={key}")
-                        except Exception as e:
-                            logger.warning(f"Could not open nested ZIP {member_name}: {e}")
-
-        except zipfile.BadZipFile as e:
-            raise HTTPException(status_code=400, detail=f"Invalid or corrupt ZIP file: {e}")
+            shutil.rmtree(extract_path, ignore_errors=True)
+            logger.info(f"Cleaned up temp folder: {extract_path}")
+        except Exception as e:
+            logger.warning(f"Could not clean up temp folder {extract_path}: {e}")
 
         count = len(registry_contents)
         logger.info(f"Registry extraction complete: {count} file(s) found in {file.filename}")
@@ -916,7 +910,6 @@ RAISES:
 
         
         # Convert bytes to base64 for JSON serialization
-        import base64
         raw_contents = session_data.get('registry_contents', {})
         encoded_contents = {}
         for filename, content in raw_contents.items():
@@ -1496,7 +1489,6 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
 
             except Exception as e:
                 logger.error(f"Error processing {journal_filename}: {str(e)}")
-                import traceback
                 traceback.print_exc()
                 continue
 
@@ -1581,7 +1573,6 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
         raise
     except Exception as e:
         logger.error(f"Analysis failed: {str(e)}")
-        import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
@@ -1667,7 +1658,6 @@ async def get_transactions_with_sources(session_id: str = Query(default=None)):
     
     except Exception as e:
         logger.error(f"Unexpected error retrieving transactions: {str(e)}")
-        import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
@@ -1771,7 +1761,6 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
     
     except Exception as e:
         logger.error(f"Unexpected error while filtering transactions: {str(e)}")
-        import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
@@ -1879,7 +1868,6 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
     
     except Exception as e:
         logger.error(f"Unexpected error while generating statistics: {str(e)}")
-        import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
@@ -2648,8 +2636,6 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                     raise Exception("No filtered events")
                                     
                             except Exception as e:
-                                # print(f" Enhancement failed: {e}")
-                                import traceback
                                 traceback.print_exc()
                                 
                                 # Fallback
@@ -2971,14 +2957,12 @@ RAISES:
         raise
     except Exception as e:
         logger.error(f"Unexpected failure: {str(e)}")
-        import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate consolidated flow: {str(e)}"
         )
     
-from pydantic import BaseModel
 
 
 class TransactionAnalysisRequest(BaseModel):
@@ -3396,84 +3380,159 @@ async def submit_llm_feedback(feedback: FeedbackSubmission, session_id: str = Qu
                 detail="ADMIN role is not permitted to submit feedback.",
             )
     """
-FUNCTION:
-    submit_llm_feedback
+    FUNCTION:
+        submit_llm_feedback
 
-DESCRIPTION:
-    Handles submission of user feedback related to LLM-generated analysis for a
-    specific transaction. The function logs the feedback, stores it in a local
-    JSONL file for auditability, and keeps a copy in the active session for
-    immediate availability in the UI or further processing.
+    DESCRIPTION:
+        Handles submission of user feedback related to LLM-generated analysis for a
+        specific transaction. The function logs the feedback, stores it in a local
+        JSONL file for auditability, and keeps a copy in the active session for
+        immediate availability in the UI or further processing.
 
-USAGE:
-    result = await submit_llm_feedback(
-        feedback=FeedbackSubmission(...),
-        session_id="12345"
-    )
+    USAGE:
+        result = await submit_llm_feedback(
+            feedback=FeedbackSubmission(...),
+            session_id="12345"
+        )
 
-PARAMETERS:
-    feedback (FeedbackSubmission):
-        Pydantic model containing all feedback fields submitted by the user,
-        including transaction ID, rating, alternative cause, comments,
-        user identity, model version, and the original LLM response.
+    PARAMETERS:
+        feedback (FeedbackSubmission):
+            Pydantic model containing all feedback fields submitted by the user,
+            including transaction ID, rating, alternative cause, comments,
+            user identity, model version, and the original LLM response.
 
-    session_id (str):
-        Unique session identifier used to store and organize feedback within
-        session storage. Defaults to the current active session.
+        session_id (str):
+            Unique session identifier used to store and organize feedback within
+            session storage. Defaults to the current active session.
 
-RETURNS:
-    dict:
-        {
-            "status": "success",
-            "message": "Thank you <name>! Your feedback has been recorded.",
-            "timestamp": "<YYYY-MM-DD HH:MM:SS>"
-        }
+        authorization (str):
+            Bearer token from the Authorization header. Required — requests
+            without a valid token are rejected with 401.
 
-        - `status`: Indicates whether the feedback submission was successful.
-        - `message`: User-friendly confirmation message.
-        - `timestamp`: Server-generated timestamp of the feedback record.
+    RETURNS:
+        dict:
+            {
+                "status": "success",
+                "message": "Thank you <name>! Your feedback has been recorded.",
+                "timestamp": "<YYYY-MM-DD HH:MM:SS>"
+            }
 
-SIDE EFFECTS:
-    - Appends feedback as a JSON line in `llm_feedback.json`
-    - Stores feedback in session under `feedback_data` list
-    - Creates session if missing
+    SIDE EFFECTS:
+        - Appends feedback as a JSON line in `llm_feedback.json`
+        - Stores feedback in session under `feedback_data` list
 
-RAISES:
-    HTTPException 500:
-        - Raised when unexpected failures occur while processing or storing
-          the feedback (e.g., file write errors, session update failures).
-"""
+    RAISES:
+        HTTPException 401: Missing or invalid/expired JWT.
+        HTTPException 403: Role not permitted to submit feedback (ADMIN blocked).
+        HTTPException 429: Feedback already submitted for this transaction.
+        HTTPException 500: Unexpected failure during storage.
+
+    SECURITY:
+        - JWT is mandatory; there is no unauthenticated fallback path.
+        - Role and username are derived exclusively from the verified JWT payload.
+        - feedback.user_name from the request body is NOT trusted for auth decisions.
+        - No DB role lookup fallback — prevents body-injection bypass.
+    """
+
+    # ── Step 1: Token is mandatory — reject immediately if absent ──────────────
+    if not authorization or not authorization.startswith("Bearer "):
+        logger.warning("FEEDBACK [401] — missing or malformed Authorization header")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "status": "error",
+                "code": 401,
+                "error": "Unauthorized",
+                "message": "Authentication token missing. Please log in to submit feedback.",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # ── Step 2: Decode and validate JWT — decode_access_token raises 401 if bad ─
+    token = authorization.split(" ", 1)[1]
+    payload = decode_access_token(token)
+
+    # ── Step 3: Ensure required claims are present in the token ────────────────
+    jwt_role     = payload.get("role" or "").strip()
+    jwt_username = payload.get("sub" or "").strip()
+
+    if not jwt_role or not jwt_username:
+        logger.warning(
+            "FEEDBACK [401] — JWT missing required claims: role='%s' sub='%s'",
+            jwt_role, jwt_username,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "status": "error",
+                "code": 401,
+                "error": "Unauthorized",
+                "message": "Malformed token. Please log in again.",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # ── Step 4: Role-based access control — no DB fallback ─────────────────────
+    jwt_role_upper = jwt_role.upper()
+
+    if jwt_role_upper == "ADMIN":
+        logger.warning(
+            "FEEDBACK [403] — user='%s' role='ADMIN' attempted to submit feedback (blocked)",
+            jwt_username,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ADMIN role is not permitted to submit feedback.",
+        )
+
+    if jwt_role_upper not in ("USER", "DEV_MODE"):
+        logger.warning(
+            "FEEDBACK [403] — user='%s' role='%s' is not an allowed feedback role",
+            jwt_username, jwt_role_upper,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only users with USER or DEV_MODE roles can submit feedback.",
+        )
+
+    # ── Step 5: Use verified identity from JWT, not from request body ──────────
+    # jwt_username is the authoritative user identity for all storage operations.
+    # feedback.user_name is kept only for the display message below.
+    verified_username = jwt_username
 
     session_id = _resolve_session_id(session_id)
     try:
-        logger.info(f" Submitting feedback for transaction: {feedback.transaction_id}")
-        logger.debug(f"Feedback payload: {feedback.dict()}")
-        
-        # Create feedback record
+        logger.info(
+            "Submitting feedback — txn: %s  user: %s  role: %s",
+            feedback.transaction_id, verified_username, jwt_role_upper,
+        )
+        logger.debug("Feedback payload: %s", feedback.dict())
+
+        # ── Build feedback record ───────────────────────────────────────────────
+        now = datetime.now()
         feedback_record = {
-            "transaction_id": feedback.transaction_id,
-            "rating": feedback.rating,
-            "alternative_cause": feedback.alternative_cause,
-            "comment": feedback.comment,
-            "user_name": feedback.user_name,
-            "user_email": feedback.user_email,
-            "model_version": feedback.model_version,
+            "transaction_id":       feedback.transaction_id,
+            "rating":               feedback.rating,
+            "alternative_cause":    feedback.alternative_cause,
+            "comment":              feedback.comment,
+            "user_name":            verified_username,          # from JWT, not body
+            "user_email":           feedback.user_email,
+            "model_version":        feedback.model_version,
             "original_llm_response": feedback.original_llm_response,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "submission_date": datetime.now().strftime("%Y-%m-%d"),
-            "submission_time": datetime.now().strftime("%H:%M:%S"),
-            "session_id": session_id
+            "timestamp":            now.strftime("%Y-%m-%d %H:%M:%S"),
+            "submission_date":      now.strftime("%Y-%m-%d"),
+            "submission_time":      now.strftime("%H:%M:%S"),
+            "session_id":           session_id,
         }
-        
-        # Save to file (append mode)
+
+        # ── Persist to audit file ───────────────────────────────────────────────
         feedback_file = Path("llm_feedback.json")
-        
         try:
             with open(feedback_file, "a") as f:
                 f.write(json.dumps(feedback_record) + "\n")
-            logger.info(f" Feedback saved to file: {feedback_file}")
+            logger.info("Feedback saved to file: %s", feedback_file)
         except Exception as e:
-            logger.error(f" Could not save feedback to file {feedback_file}: {str(e)}")
+            logger.error("Could not save feedback to file %s: %s", feedback_file, e)
 
         # Only USER and DEV_MODE roles can store feedback in database
         role = (_jwt_role or get_user_role(feedback.user_name) or "").upper()
@@ -3486,49 +3545,44 @@ RAISES:
         # Store feedback in database
         result = store_feedback(
             transaction_id    = feedback.transaction_id,
-            user_name         = feedback.user_name,
+            user_name         = verified_username,              # from JWT, not body
             rating            = feedback.rating,
             alternative_cause = feedback.alternative_cause,
             comment           = feedback.comment,
-            model_version     = feedback.model_version
+            model_version     = feedback.model_version,
         )
 
         if result == "LIMIT_REACHED":
             raise HTTPException(
                 status_code=429,
-                detail="You have already submitted feedback for this transaction."
+                detail="You have already submitted feedback for this transaction.",
             )
 
-        # Also store in session for immediate retrieval
-        # if not session_service.session_exists(session_id):
-        #     session_service.create_session(session_id)
-        #     logger.debug(f"Created new session: {session_id}")
-        
+        # ── Store in session for immediate UI retrieval ─────────────────────────
         session_data = session_service.get_session(session_id)
-        
-        if 'feedback_data' not in session_data:
-            session_data['feedback_data'] = []
-        
-        session_data['feedback_data'].append(feedback_record)
-        session_service.update_session(session_id, 'feedback_data', session_data['feedback_data'])
-        logger.info(f" Feedback stored in session for session_id: {session_id}")
-        
+        if "feedback_data" not in session_data:
+            session_data["feedback_data"] = []
+        session_data["feedback_data"].append(feedback_record)
+        session_service.update_session(session_id, "feedback_data", session_data["feedback_data"])
+        logger.info("Feedback stored in session: %s", session_id)
+
         return {
-            "status": "success",
-            "message": f"Thank you {feedback.user_name}! Your feedback has been recorded.",
-            "timestamp": feedback_record['timestamp']
+            "status":    "success",
+            "message":   f"Thank you {verified_username}! Your feedback has been recorded.",
+            "timestamp": feedback_record["timestamp"],
         }
     except HTTPException:
         raise
         
     except Exception as e:
-        logger.exception(f"Failed to submit feedback for transaction {feedback.transaction_id}: {str(e)}")
+        logger.exception(
+            "Failed to submit feedback for transaction %s: %s",
+            feedback.transaction_id, e,
+        )
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to submit feedback: {str(e)}"
+            detail=f"Failed to submit feedback: {str(e)}",
         )
-
-
 
 @router.get("/get-feedback/{transaction_id}")
 async def get_feedback(transaction_id: str,session_id: str = Query(default=None)):
@@ -3940,7 +3994,6 @@ def extract_counter_blocks(trc_file_path: str) -> list:
     
     except Exception as e:
         logger.error(f"Error extracting counter blocks: {e}")
-        import traceback
         traceback.print_exc()
     
     return all_counter_blocks
@@ -4447,7 +4500,6 @@ async def get_counter_data(
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
@@ -5058,13 +5110,7 @@ async def auth_logout(request: LogoutRequest):
 @router.post("/auth/initialize-db")
 async def auth_initialize_db():
     """Bootstrap all required tables. Called once from the FastAPI lifespan handler."""
-    from admin_setup import create_dn_diagnostics_database, initialize_admin_table
-    from modules.login import create_login_history_table, create_reset_tokens_table
-    from modules.analysis import (
-        create_userresponse_database,
-        create_analysis_table,
-        create_feedback_table,
-    )
+    
     try:
         create_dn_diagnostics_database()
         initialize_admin_table()
@@ -5078,3 +5124,32 @@ async def auth_initialize_db():
     except Exception as e:
         logger.exception("DB bootstrap failed: %s", e)
         raise HTTPException(status_code=500, detail=f"DB bootstrap failed: {e}")
+
+@router.post("/upload-chunk")
+async def upload_chunk(
+    upload_id:    str        = Form(..., description="Client UUID for this upload session"),
+    chunk_index:  int        = Form(..., description="0-based chunk index"),
+    total_chunks: int        = Form(..., description="Total number of chunks"),
+    filename:     str        = Form(..., description="Original ZIP filename"),
+    chunk:        UploadFile = File(...,  description="Binary data of this chunk"),
+):
+    """Receive one chunk and stage it on disk."""
+    data = await chunk.read()
+    return save_chunk(upload_id, chunk_index, total_chunks, filename, data)
+
+
+@router.post("/finalize-upload")
+async def finalize_upload(
+    upload_id:    str           = Form(..., description="UUID used while uploading chunks"),
+    filename:     str           = Form(..., description="Original ZIP filename"),
+    total_chunks: int           = Form(..., description="Total number of expected chunks"),
+    mode:         Optional[str] = Form(None, description="Optional processing mode"),
+):
+    """Assemble all staged chunks and run the extraction pipeline."""
+    return await assemble_and_process(upload_id, total_chunks, mode)
+
+
+@router.delete("/cancel-upload/{upload_id}")
+async def cancel_upload_endpoint(upload_id: str):
+    """Delete staged chunks for an aborted upload."""
+    return cancel_upload(upload_id)

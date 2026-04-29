@@ -54,12 +54,13 @@ import time
 
 #  Import our central logger
 from modules.logging_config import logger
+from modules.chat_logger import ChatLogger
 from modules.analysis import store_metadata, store_feedback, get_user_role, get_analysis_records, get_feedback_records
 from modules.login import (verify_reset_identity,generate_reset_token,send_reset_email,validate_reset_token,reset_user_password,is_valid_password,authenticate_user_backend,register_user,is_user_pending_approval,log_login_event,create_access_token)
 
 import logging
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
 from modules.flat_file_generator import FlatFileMerger
 from api.chunk_service import assemble_and_process, cancel_upload, save_chunk
@@ -3116,6 +3117,240 @@ async def analyze_transaction_llm(request: TransactionAnalysisRequest, session_i
         )
 
 
+# ============================================
+# TRANSACTION CHAT ENDPOINT
+# ============================================
+
+class ChatRequest(BaseModel):
+    transaction_id: str
+    question: str
+    analysis_result: str                  # full LLM analysis text from /analyze-transaction-llm
+    history: list[dict] = []              # [{"role": "user"/"assistant", "content": "..."}]
+
+
+@router.post("/chat-transaction")
+async def chat_transaction(
+    request: ChatRequest,
+    session_id: str = Query(default=None),
+    authorization: str = Header(default=None),
+):
+    """
+    FUNCTION:
+        chat_transaction
+
+    DESCRIPTION:
+        Handles a single chat turn for a previously analyzed transaction.
+        Pulls EJ and JRN content from session memory, then delegates to
+        chat_service.chat_turn() which applies the two-layer scope guard
+        and calls the LLM.
+
+    USAGE:
+        POST /chat-transaction?session_id=<id>
+        Body: { "transaction_id": "...", "question": "...",
+                "analysis_result": "...", "history": [...] }
+
+    PARAMETERS:
+        request.transaction_id  : ID of the transaction being discussed.
+        request.question        : The user's follow-up question.
+        request.analysis_result : The full analysis text returned by /analyze-transaction-llm.
+                                  The React frontend holds this in state and sends it each turn.
+        request.history         : Full conversation history so far (role/content pairs).
+                                  The frontend owns history; the backend is stateless for chat.
+        session_id              : Session containing the processed log data.
+
+    RETURNS:
+        { "response": "<assistant reply string>" }
+
+    RAISES:
+        HTTPException:
+            - 404 if session not found
+            - 500 if LLM call fails
+    """
+    from modules.chat_service import chat_turn
+
+    session_id = _resolve_session_id(session_id)
+
+    if not session_service.session_exists(session_id):
+        logger.error("chat_transaction: no session found for session_id=%s", session_id)
+        raise HTTPException(status_code=404, detail="No session found")
+
+    session_data = session_service.get_session(session_id)
+
+    # Pull the same log data that analyze-transaction-llm uses
+    customer_journal_contents = session_data.get('customer_journal_contents', {})
+    ui_journal_contents       = session_data.get('ui_journal_contents', {})
+    journal_llm_contents      = session_data.get('journal_llm_contents', {})
+    all_jrn_contents          = {**ui_journal_contents, **journal_llm_contents}
+
+    # Pull txn_data row for pre-computed facts (duration, timestamps, outcome)
+    txn_data = {}
+    raw_transaction_data = session_data.get('transaction_data')
+    if raw_transaction_data:
+        df = pd.DataFrame(raw_transaction_data)
+        matches = df[df['Transaction ID'] == request.transaction_id]
+        if not matches.empty:
+            txn_data = matches.iloc[0].to_dict()
+
+    logger.info(
+        "chat_transaction: txn=%s question_len=%d history_turns=%d",
+        request.transaction_id,
+        len(request.question),
+        len(request.history),
+    )
+
+    # Extract username from JWT for per-user log attribution
+    _username = "unknown"
+    try:
+        _auth = authorization or ""
+        if _auth.startswith("Bearer "):
+            _username = decode_access_token(_auth.split(" ", 1)[1]).get("sub", "unknown")
+    except Exception:
+        pass
+
+    chat_log = ChatLogger(
+        transaction_id=request.transaction_id,
+        session_id=session_id,
+        username=_username,
+        txn_data=txn_data,
+    )
+    chat_log.log_turn("user", request.question)
+
+    try:
+        response_text = chat_turn(
+            question=request.question,
+            ej_content=customer_journal_contents,
+            jrn_content=all_jrn_contents,
+            analysis_result=request.analysis_result,
+            history=request.history,
+            txn_data=txn_data,
+        )
+        chat_log.log_turn("assistant", response_text)
+        return {"response": response_text}
+
+    except Exception as e:
+        chat_log.log_turn("assistant", f"[ERROR] {str(e)}")
+        logger.exception("chat_transaction: LLM call failed for txn=%s: %s", request.transaction_id, e)
+        raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
+
+
+@router.post("/chat-transaction-stream")
+async def chat_transaction_stream(
+    request: ChatRequest,
+    session_id: str = Query(default=None),
+    authorization: str = Header(default=None),
+):
+    """
+    FUNCTION:
+        chat_transaction_stream
+
+    DESCRIPTION:
+        Streaming variant of /chat-transaction.
+        Returns a text/event-stream response — the React frontend can
+        consume this with the Fetch API (ReadableStream) to render tokens
+        as they arrive, giving a typewriter effect.
+
+        Uses the same two-layer scope guard as the non-streaming endpoint.
+        If the question is rejected, the refusal message is sent as a
+        single chunk and the stream closes.
+
+    USAGE:
+        POST /chat-transaction-stream?session_id=<id>
+        Body: same as /chat-transaction
+
+    RETURNS:
+        text/event-stream — chunks formatted as SSE:
+            data: <token text>\n\n
+        Final message signals end of stream:
+            data: [DONE]\n\n
+
+    RAISES:
+        HTTPException:
+            - 404 if session not found
+            - 500 if Ollama stream fails
+    """
+    from modules.chat_service import chat_turn_stream
+
+    session_id = _resolve_session_id(session_id)
+
+    if not session_service.session_exists(session_id):
+        logger.error("chat_transaction_stream: no session found for session_id=%s", session_id)
+        raise HTTPException(status_code=404, detail="No session found")
+
+    session_data = session_service.get_session(session_id)
+
+    customer_journal_contents = session_data.get('customer_journal_contents', {})
+    ui_journal_contents       = session_data.get('ui_journal_contents', {})
+    journal_llm_contents      = session_data.get('journal_llm_contents', {})
+    all_jrn_contents          = {**ui_journal_contents, **journal_llm_contents}
+
+    # Pull txn_data row for pre-computed facts (duration, timestamps, outcome)
+    txn_data = {}
+    raw_transaction_data = session_data.get('transaction_data')
+    if raw_transaction_data:
+        df = pd.DataFrame(raw_transaction_data)
+        matches = df[df['Transaction ID'] == request.transaction_id]
+        if not matches.empty:
+            txn_data = matches.iloc[0].to_dict()
+
+    logger.info(
+        "chat_transaction_stream: txn=%s question_len=%d history_turns=%d",
+        request.transaction_id,
+        len(request.question),
+        len(request.history),
+    )
+
+    # Extract username from JWT for per-user log attribution
+    _username = "unknown"
+    try:
+        _auth = authorization or ""
+        if _auth.startswith("Bearer "):
+            _username = decode_access_token(_auth.split(" ", 1)[1]).get("sub", "unknown")
+    except Exception:
+        pass
+
+    chat_log = ChatLogger(
+        transaction_id=request.transaction_id,
+        session_id=session_id,
+        username=_username,
+        txn_data=txn_data,
+    )
+    chat_log.log_turn("user", request.question)
+
+    def _sse_generator():
+        collected_reply = []
+        try:
+            for chunk in chat_turn_stream(
+                ej_content=customer_journal_contents,
+                jrn_content=all_jrn_contents,
+                analysis_result=request.analysis_result,
+                history=request.history,
+                question=request.question,
+                txn_data=txn_data,
+            ):
+                collected_reply.append(chunk)
+                yield f"data: {chunk}\n\n"
+        except Exception as e:
+            logger.exception(
+                "chat_transaction_stream: stream error for txn=%s: %s",
+                request.transaction_id, e,
+            )
+            chat_log.log_turn("assistant", f"[ERROR] {str(e)}")
+            yield f"data: [ERROR] Stream failed: {str(e)}\n\n"
+        else:
+            chat_log.log_turn("assistant", "".join(collected_reply))
+        finally:
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _sse_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # disables Nginx response buffering
+        },
+    )
+
+
 # Add this Pydantic model near the top with other models
 class FeedbackSubmission(BaseModel):
     model_config = {'protected_namespaces': ()}
@@ -3130,11 +3365,20 @@ class FeedbackSubmission(BaseModel):
     original_llm_response: str
 
 @router.post("/submit-llm-feedback")
-async def submit_llm_feedback(
-    feedback: FeedbackSubmission,
-    session_id: str = Query(default=CURRENT_SESSION_ID),
-    authorization: str = Header(default=None),
-):
+async def submit_llm_feedback(feedback: FeedbackSubmission, session_id: str = Query(default=CURRENT_SESSION_ID), authorization: str = Header(default=None)):
+    _jwt_role = None
+    if authorization and authorization.startswith("Bearer "):
+        payload = decode_access_token(authorization.split(" ", 1)[1])
+        _jwt_role = payload.get("role", "")
+        if _jwt_role == "ADMIN":
+            logger.warning(
+                "FEEDBACK [403] — user='%s' role='ADMIN' attempted to submit feedback (blocked)",
+                payload.get("sub"),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="ADMIN role is not permitted to submit feedback.",
+            )
     """
     FUNCTION:
         submit_llm_feedback
@@ -3290,7 +3534,15 @@ async def submit_llm_feedback(
         except Exception as e:
             logger.error("Could not save feedback to file %s: %s", feedback_file, e)
 
-        # ── Persist to database ─────────────────────────────────────────────────
+        # Only USER and DEV_MODE roles can store feedback in database
+        role = (_jwt_role or get_user_role(feedback.user_name) or "").upper()
+        if role not in ("USER", "DEV_MODE"):
+            raise HTTPException(
+                status_code=403,
+                detail="Only users with USER or DEV_MODE roles can submit feedback."
+            )
+
+        # Store feedback in database
         result = store_feedback(
             transaction_id    = feedback.transaction_id,
             user_name         = verified_username,              # from JWT, not body
@@ -3319,10 +3571,9 @@ async def submit_llm_feedback(
             "message":   f"Thank you {verified_username}! Your feedback has been recorded.",
             "timestamp": feedback_record["timestamp"],
         }
-
     except HTTPException:
         raise
-
+        
     except Exception as e:
         logger.exception(
             "Failed to submit feedback for transaction %s: %s",

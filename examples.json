@@ -1,0 +1,457 @@
+[
+  {
+    "id": "ex_001",
+    "tags": [
+      "Cash Deposit",
+      "Success"
+    ],
+    "input": {
+      "ts_start": "16:22:49",
+      "ts_end": "16:23:50",
+      "type": "Cash Deposit",
+      "pin_entered": true,
+      "card_returned": true,
+      "status": "Success",
+      "events": [
+        "Customer cancelled"
+      ],
+      "app_state_start": "TRANSACTION (5)",
+      "app_state_end": "OPEN (1)"
+    },
+    "output": "---\nTransaction Summary:\n- ATM ID: Not specified in log\n- Transaction Type: Cash Deposit\n- Status: Success\n- Timestamp: 16:22:49 - 16:23:50\n\n\nWhat Happened:\n- Customer initiated a Cash Deposit transaction.\n- Customer entered PIN successfully.\n- Transaction completed with status: Success.\n- Card was returned to customer.\n- ATM returned to idle state (OPEN).\n\nRoot Cause Analysis:\n- This is a normal successful deposit transaction.\n- No issue detected.\n\nRecommended Actions:\n- No action required.\n\nConfidence Level:\n- High\n---"
+  },
+  {
+    "id": "ex_002",
+    "tags": [
+      "Cash Withdrawal",
+      "Customer Cancelled"
+    ],
+    "input": {
+      "ts_start": "16:24:14",
+      "ts_end": "16:25:16",
+      "type": "Cash Withdrawal",
+      "pin_entered": true,
+      "card_returned": true,
+      "status": "Customer Cancelled",
+      "events": [
+        "Customer cancelled"
+      ],
+      "app_state_start": "TRANSACTION (5)",
+      "app_state_end": "OPEN (1)"
+    },
+    "output": "---\nTransaction Summary:\n- ATM ID: [value from log]\n- Transaction Type: Cash Withdrawal\n- Status: Customer Cancelled\n- Timestamp: 16:24:14 - 16:25:16\n\n\nWhat Happened:\n- [one fact per bullet, chronological order]\n\nRoot Cause Analysis:\n- [log-evidenced reason only, or: Root cause cannot be determined from available log data.]\n- [traceable to a specific log field or event]\n\nRecommended Actions:\n- [one action per bullet]\n\nConfidence Level:\n- High\n---"
+  },
+  {
+    "id": "ex_003",
+    "tags": [
+      "Cash Withdrawal",
+      "Incomplete",
+      "CANCEL_TA",
+      "UNABLE TO PERFORM REQUEST",
+      "TA_EVENT"
+    ],
+    "input": {
+      "ts_start": "12:36:11",
+      "ts_end": "12:38:16",
+      "type": "Cash Withdrawal",
+      "pin_entered": true,
+      "card_returned": true,
+      "status": "Incomplete",
+      "events": [
+        "Host cancelled: UNABLE TO PERFORM REQUEST"
+      ],
+      "protocol_steps": [
+        "TDR_CV(CV)→PROCEED_NEXT",
+        "TDR_PC(PC)→PROCEED_NEXT",
+        "TDR_AA(GA)→CANCEL_TA",
+        "TA_EVENT(GA)→CANCEL_TA",
+        "TDR_SE(GA)→PROCEED_NEXT"
+      ],
+      "card_ejected": true,
+      "response_code": "0",
+      "host_decline_reason": "UNABLE TO PERFORM REQUEST",
+      "app_state_start": "TRANSACTION (5)",
+      "app_state_end": "OPEN (1)"
+    },
+    "output": "---\nTransaction Summary:\n- ATM ID: Not specified in log\n- Transaction Type: Cash Withdrawal\n- Status: Host Cancelled\n- Timestamp: 12:36:11 - 12:38:16\n\n\nWhat Happened:\n- Customer initiated a Cash Withdrawal.\n- Card was verified successfully (TDR_CV→PROCEED_NEXT).\n- Customer entered PIN and PIN check passed (TDR_PC→PROCEED_NEXT).\n- ATM sent authorization request to host (TDR_AA).\n- Host rejected the authorization with UNABLE TO PERFORM REQUEST (TDR_AA→CANCEL_TA).\n- Host confirmed the cancellation (TA_EVENT→CANCEL_TA).\n- Card was ejected and returned to customer.\n- Session ended normally (TDR_SE→PROCEED_NEXT).\n\nRoot Cause Analysis:\n- Host actively declined the authorization at the business logic level.\n- This is not a network failure — the host received and processed the request.\n- Host returned UNABLE TO PERFORM REQUEST — specific issuer-side reason not in log.\n- Root cause beyond host rejection cannot be determined from available log data.\n\nRecommended Actions:\n- Review host-side logs for the rejection reason tied to this transaction UUID.\n- Check if the same card is declined across multiple transactions.\n\nConfidence Level:\n- High\n---"
+  },
+  {
+    "id": "ex_004",
+    "tags": [
+      "Cash Withdrawal",
+      "Unsuccessful",
+      "3246",
+      "3219",
+      "Timeout"
+    ],
+    "input": {
+      "ts_start": "23:14:21",
+      "ts_end": "23:15:22",
+      "type": "Cash Withdrawal",
+      "status": "Unsuccessful",
+      "protocol_steps": [
+        "TDR_CV(CV)→PROCEED_NEXT",
+        "TDR_PC(PC)→PROCEED_NEXT",
+        "TDR_C1(RCMGA)→PROCEED_NEXT",
+        "TDR_SE(RCMGA)→PROCEED_NEXT"
+      ],
+      "customer_actions": [
+        "23:15:01 [3246] Timeout screen displayed on 'DemoAmountSelection'",
+        "23:15:03 [3219] Transaction canceled by customer"
+      ],
+      "card_events": [
+        "23:15:06 [3209] Card ejected and taken"
+      ],
+      "app_state_start": "TRANSACTION (5)",
+      "app_state_end": "OPEN (1)"
+    },
+    "output": "---\nTransaction Summary:\n- ATM ID: Not specified in log\n- Transaction Type: Cash Withdrawal\n- Status: Customer Cancelled (Timeout)\n- Timestamp: 23:14:21 - 23:15:22\n\n\nWhat Happened:\n- Customer initiated a Cash Withdrawal.\n- Card was verified successfully (TDR_CV→PROCEED_NEXT).\n- Customer entered PIN and PIN check passed (TDR_PC→PROCEED_NEXT).\n- Pre-authorization step passed (TDR_C1→PROCEED_NEXT).\n- Timeout screen displayed on amount selection screen at 23:15:01 ([3246]).\n- Customer cancelled the transaction at 23:15:03 ([3219]).\n- Card was ejected and taken by customer at 23:15:06.\n- Session ended normally (TDR_SE→PROCEED_NEXT).\n- ATM returned to idle state (OPEN).\n\nRoot Cause Analysis:\n- Customer did not complete amount entry within the allowed time.\n- Customer inactivity on amount selection screen led to timeout.\n- Root cause for customer inactivity cannot be determined from available log data.\n\nRecommended Actions:\n- No action required. Customer-initiated cancellation due to inactivity.\n\nConfidence Level:\n- High\n---"
+  },
+  {
+    "id": "ex_005",
+    "tags": [
+      "Cash Withdrawal",
+      "Incomplete",
+      "CHAINED",
+      "PINAUTH",
+      "COUT",
+      "RETRACT"
+    ],
+    "input": {
+      "ts_start": "10:38:13",
+      "ts_end": "10:39:24",
+      "type": "Cash Withdrawal",
+      "pin_entered": true,
+      "card_returned": true,
+      "status": "Incomplete",
+      "transaction_chain": [
+        {
+          "function": "PINAUTH/PV",
+          "protocol_steps": [
+            "TDR_PV→PROCEED_NEXT (REPLY NEXT 046 FUNCTION 5)"
+          ],
+          "state": "N",
+          "end_state": "N"
+        },
+        {
+          "function": "COUT/GA",
+          "protocol_steps": [
+            "TDR_GA→INTERACTIVE (6305)",
+            "TDR_GA→PROCEED_NEXT (REPLY NEXT 024 FUNCTION A)"
+          ],
+          "state": "R",
+          "end_state": "E"
+        }
+      ],
+      "card_events": [
+        "10:38:48 [3209] Card successfully presented to customer"
+      ],
+      "retract_occurred": true,
+      "app_state_start": "TRANSACTION (5)",
+      "app_state_end": "OPEN (1)"
+    },
+    "output": "---\nTransaction Summary:\n- ATM ID: [value from log]\n- Transaction Type: Cash Withdrawal (Chained: PINAUTH → COUT)\n- Status: Incomplete — Cash Retracted\n- Timestamp: 10:38:13 - 10:39:24\n\n\nWhat Happened:\n- [one fact per bullet, chronological order]\n\nRoot Cause Analysis:\n- [log-evidenced reason only, or: Root cause cannot be determined from available log data.]\n- [traceable to a specific log field or event]\n\nRecommended Actions:\n- [one action per bullet]\n\nConfidence Level:\n- High\n---"
+  },
+  {
+    "id": "ex_006",
+    "tags": [
+      "Balance Inquiry",
+      "Incomplete",
+      "CHAINED",
+      "PINAUTH",
+      "BAL",
+      "Timeout",
+      "3220"
+    ],
+    "input": {
+      "ts_start": "10:36:48",
+      "ts_end": "10:37:28",
+      "type": "Balance Inquiry",
+      "pin_entered": true,
+      "card_returned": true,
+      "status": "Incomplete",
+      "transaction_chain": [
+        {
+          "function": "PINAUTH/PV",
+          "protocol_steps": [
+            "TDR_PV→PROCEED_NEXT (REPLY NEXT 046 FUNCTION 5)"
+          ],
+          "state": "N",
+          "end_state": "N"
+        },
+        {
+          "function": "BAL/BI",
+          "protocol_steps": [
+            "TDR_BI→INTERACTIVE (6305)",
+            "TDR_BI→PROCEED_NEXT (REPLY NEXT 069 FUNCTION 5)"
+          ],
+          "state": "T",
+          "end_state": "E"
+        }
+      ],
+      "card_events": [
+        "10:37:22 [3209] Card successfully presented to customer"
+      ],
+      "customer_actions": [
+        "10:37:28 [3220] Transaction cancelled. Customer timeout."
+      ],
+      "app_state_start": "TRANSACTION (5)",
+      "app_state_end": "OPEN (1)"
+    },
+    "output": "---\nTransaction Summary:\n- ATM ID: [value from log]\n- Transaction Type: Balance Inquiry (Chained: PINAUTH → BAL/BI)\n- Status: Incomplete — Customer Timeout\n- Timestamp: 10:36:48 - 10:37:28\n\n\nWhat Happened:\n- [one fact per bullet, chronological order]\n\nRoot Cause Analysis:\n- [log-evidenced reason only, or: Root cause cannot be determined from available log data.]\n- [traceable to a specific log field or event]\n\nRecommended Actions:\n- [one action per bullet]\n\nConfidence Level:\n- High\n---"
+  },
+  {
+    "id": "ex_007",
+    "tags": [
+      "Cash Deposit",
+      "Unsuccessful",
+      "CANCEL_TA",
+      "TA_OVERDRAFT",
+      "RETRACT",
+      "3260",
+      "note_discrepancy"
+    ],
+    "input": {
+      "ts_start": "21:11:37",
+      "ts_end": "21:12:45",
+      "type": "Cash Deposit",
+      "pin_entered": true,
+      "card_returned": true,
+      "status": "Unsuccessful",
+      "protocol_steps": [
+        "TDR_CV(CV)→PROCEED_NEXT",
+        "TDR_PC(PC)→PROCEED_NEXT",
+        "TDR_C2(RCMCI)→PROCEED_NEXT",
+        "TDR_PERSONALIZE(RCMCI)→PROCEED_NEXT",
+        "TA_OVERDRAFT(RCMCI)→CANCEL_TA",
+        "TDR_SE(RCMCI)→PROCEED_NEXT"
+      ],
+      "customer_actions": [
+        "21:11:48 [3260] Account selected (*5042) Checking",
+        "21:12:10 [3790] Deposit confirmed by customer"
+      ],
+      "card_events": [
+        "21:12:15 [3209] Card ejected and taken"
+      ],
+      "deposit_notes": {
+        "ej_notes": "1 x 500 INR",
+        "jrn_notes": "1 x 100 INR, 1 x 500 INR",
+        "ej_total": "600.00 INR",
+        "jrn_total": "600.00 INR"
+      },
+      "retract_occurred": true,
+      "retract_notes": "1 x 100 INR, 1 x 500 INR",
+      "app_state_start": "TRANSACTION (5)",
+      "app_state_end": "OPEN (1)"
+    },
+    "output": "---\nTransaction Summary:\n- ATM ID: Not specified in log\n- Transaction Type: Cash Deposit (CIN/CI)\n- Status: Unsuccessful — Cancelled by Host\n- Timestamp: 21:11:37 - 21:12:45\n\n\nWhat Happened:\n- Customer initiated a Cash Deposit transaction.\n- Card was verified successfully (TDR_CV→PROCEED_NEXT).\n- Customer entered PIN and PIN check passed (TDR_PC→PROCEED_NEXT).\n- Pre-authorization steps passed (TDR_C2→PROCEED_NEXT, TDR_PERSONALIZE→PROCEED_NEXT).\n- Customer selected Checking account (*5042) at 21:11:48.\n- Customer confirmed the deposit at 21:12:10.\n- Host rejected at overdraft check (TA_OVERDRAFT→CANCEL_TA).\n- Card ejected and taken at 21:12:15.\n- All deposited cash retracted by the machine (1 x 100 INR, 1 x 500 INR).\n- Session ended normally (TDR_SE→PROCEED_NEXT).\n\nNote Discrepancy:\n- EJ recorded: 1 x 500 INR.\n- JRN recorded: 1 x 100 INR, 1 x 500 INR.\n- Both sources agree on total: 600.00 INR.\n- Reconciliation review recommended for the note count mismatch.\n\nRoot Cause Analysis:\n- Host returned CANCEL_TA at TA_OVERDRAFT check — direct log-evidenced cause.\n- Host rejected deposit at TA_OVERDRAFT policy check (TA_OVERDRAFT→CANCEL_TA).\n- Root cause beyond overdraft rejection cannot be determined from available log data.\n\nRecommended Actions:\n- Review host-side logs for rejection reason tied to this transaction UUID.\n- Verify retract bin confirms 1 x 100 INR and 1 x 500 INR retracted correctly.\n- Investigate note count discrepancy between EJ and JRN.\n\nConfidence Level:\n- High\n---"
+  },
+  {
+    "id": "ex_008",
+    "tags": [
+      "Cash Deposit",
+      "Incomplete",
+      "OFFLINE",
+      "TA_OVERDRAFT",
+      "3680",
+      "3665",
+      "HOSTPROTOCOL",
+      "NOT_OPERATIONAL"
+    ],
+    "input": {
+      "ts_start": "23:35:43",
+      "ts_end": "23:36:58",
+      "type": "Cash Deposit",
+      "pin_entered": true,
+      "card_returned": true,
+      "status": "Incomplete",
+      "protocol_steps": [
+        "TDR_CV(CV)→PROCEED_NEXT",
+        "TDR_PC(PC)→PROCEED_NEXT",
+        "TDR_C2(RCMCI)→PROCEED_NEXT",
+        "TDR_PERSONALIZE(RCMCI)→PROCEED_NEXT",
+        "TA_OVERDRAFT(RCMCI)→OFFLINE (-2)"
+      ],
+      "device_errors": [
+        "HOSTPROTOCOL_3: NOT_OPERATIONAL (2)",
+        "HOSTPROTOCOL_1: NOT_OPERATIONAL (2)",
+        "TRANSACTION_PROCESSING: NOT_OPERATIONAL (2)"
+      ],
+      "events": [
+        "3680 Rollback notes: Rollback successful",
+        "3665 Money withdrawn"
+      ],
+      "customer_actions": [
+        "23:35:56 [3260] Account selected (*5042)",
+        "23:36:19 [3790] Deposit confirmed by customer"
+      ],
+      "card_events": [
+        "23:36:58 [3209] Card ejected and taken"
+      ],
+      "app_state_start": "TRANSACTION (5)",
+      "app_state_end": "OPEN (1)"
+    },
+    "output": "---\nTransaction Summary:\n- ATM ID: [value from log]\n- Transaction Type: Cash Deposit (CIN/CI)\n- Status: Incomplete — Host Went Offline\n- Timestamp: 23:35:43 - 23:36:58\n\n\nWhat Happened:\n- [one fact per bullet, chronological order]\n\nRoot Cause Analysis:\n- [log-evidenced reason only, or: Root cause cannot be determined from available log data.]\n- [traceable to a specific log field or event]\n\nRecommended Actions:\n- [one action per bullet]\n\nConfidence Level:\n- High\n---"
+  },
+  {
+    "id": "ex_009",
+    "tags": [
+      "Balance Inquiry",
+      "RESUBMIT_AUTHORIZATION",
+      "Timeout",
+      "3246",
+      "CLOSED",
+      "TRANSACTION_5_END",
+      "Unsuccessful"
+    ],
+    "input": {
+      "ts_start": "16:55:46",
+      "ts_end": "16:57:24",
+      "type": "Balance Inquiry",
+      "status": "Unsuccessful",
+      "protocol_steps": [
+        "TDR_AA(PV)→PROCEED_NEXT",
+        "TA_EVENT(PV)→PROCEED_NEXT",
+        "TDR_SN(PV)→PROCEED_NEXT",
+        "TDR_AA(BI)→RESUBMIT_AUTHORIZATION",
+        "TA_EVENT(BI)→RESUBMIT_AUTHORIZATION",
+        "TDR_AA(BI)→PROCEED_NEXT",
+        "TA_EVENT(BI)→PROCEED_NEXT",
+        "TDR_SE(BI)→PROCEED_NEXT"
+      ],
+      "app_state_start": "OPEN (1)",
+      "app_state_end": "CLOSED (2)",
+      "host_outcome": "Balance retrieved successfully",
+      "customer_actions": [
+        "16:57:14 [3246] Timeout screen displayed on 'ChinabcorpBalanceSummary'"
+      ],
+      "card_events": [
+        "16:57:18 [3209] Card ejected and taken"
+      ]
+    },
+    "output": "---\nTransaction Summary:\n- ATM ID: [value from log]\n- Transaction Type: Balance Inquiry\n- Status: Incomplete — Customer Timeout\n- Timestamp: 16:55:46 - 16:57:24\n\n\nWhat Happened:\n- Customer initiated a Balance Inquiry.\n- PIN verification passed (TDR_AA(PV)→PROCEED_NEXT).\n- Host requested resubmission of balance authorization (TDR_AA(BI)→RESUBMIT_AUTHORIZATION).\n- Resubmission succeeded — host approved balance inquiry (TDR_AA(BI)→PROCEED_NEXT).\n- Session ended normally (TDR_SE(BI)→PROCEED_NEXT).\n- Timeout screen displayed on balance summary screen at 16:57:14 ([3246]).\n- Card ejected and taken at 16:57:18.\n- ATM entered CLOSED (2) state after transaction — requires investigation.\n\nRoot Cause Analysis:\n- Balance was retrieved successfully at host level.\n- Customer did not interact with the balance summary screen within the timeout window.\n- Customer inactivity on balance summary screen caused timeout ([3246]).\n- Root cause for ATM entering CLOSED (2) state cannot be determined from available log data.\n\nRecommended Actions:\n- No action required for the timeout — customer-side inactivity.\n- Investigate why ATM entered CLOSED (2) state after this transaction.\n\nConfidence Level:\n- Medium (due to abnormal CLOSED end state)\n---"
+  },
+  {
+    "id": "ex_010",
+    "tags": [
+      "Preferences",
+      "Unsuccessful",
+      "3246",
+      "TRANSACTION_5_END",
+      "Timeout"
+    ],
+    "input": {
+      "ts_start": "21:01:35",
+      "ts_end": "21:03:22",
+      "type": "Preferences",
+      "status": "Unsuccessful",
+      "protocol_steps": [
+        "TDR_CV(CV)→PROCEED_NEXT",
+        "TDR_PC(PC)→PROCEED_NEXT",
+        "TDR_C1(PR)→PROCEED_NEXT",
+        "TDR_AA(PR)→PROCEED_NEXT",
+        "TDR_SE(PR)→PROCEED_NEXT"
+      ],
+      "app_state_start": "TRANSACTION (5)",
+      "app_state_end": "TRANSACTION (5)",
+      "customer_actions": [
+        "21:02:12 [3246] Timeout screen displayed on 'DemoPreferencesSelection'",
+        "21:02:38 [3260] Account selected (*1442)"
+      ],
+      "card_events": [
+        "21:03:08 [3209] Card ejected and taken"
+      ]
+    },
+    "output": "---\nTransaction Summary:\n- ATM ID: Not specified in log\n- Transaction Type: Preferences\n- Status: Incomplete — Customer Timeout\n- Timestamp: 21:01:35 - 21:03:22\n\n\nWhat Happened:\n- Customer initiated a Preferences transaction.\n- Card was verified successfully (TDR_CV→PROCEED_NEXT).\n- Customer entered PIN and PIN check passed (TDR_PC→PROCEED_NEXT).\n- Pre-authorization step passed (TDR_C1(PR)→PROCEED_NEXT).\n- Host authorization passed (TDR_AA(PR)→PROCEED_NEXT).\n- Timeout screen displayed on preferences selection screen at 21:02:12 ([3246]).\n- Customer selected account (*1442) at 21:02:38 ([3260]).\n- Card ejected and taken at 21:03:08.\n- Session ended normally (TDR_SE(PR)→PROCEED_NEXT).\n- ATM did not return to idle — app_state_end is TRANSACTION (5). Soft reset may be required.\n\nRoot Cause Analysis:\n- All protocol steps passed successfully — no host or hardware failure.\n- Timeout screen was displayed during preferences selection ([3246]).\n- Customer inactivity on preferences selection screen caused timeout ([3246]).\n- Root cause for ATM remaining in TRANSACTION (5) state cannot be determined from available log data.\n\nRecommended Actions:\n- No host or hardware action required — transaction outcome is customer-side timeout.\n- Investigate why ATM did not return to OPEN (1) state after session end.\n- Consider a soft reset if ATM remains in TRANSACTION (5) state.\n\nConfidence Level:\n- Medium (due to abnormal app_state_end)\n---"
+  },
+  {
+    "id": "ex_011",
+    "tags": [
+      "Cash Withdrawal",
+      "Incomplete",
+      "CHAINED",
+      "RESUBMIT_AUTHORIZATION",
+      "RETRACT",
+      "3962",
+      "3302",
+      "3319",
+      "3306",
+      "3307",
+      "CASH_DISPENSER"
+    ],
+    "input": {
+      "ts_start": "11:15:09",
+      "ts_end": "11:17:13",
+      "type": "Cash Withdrawal",
+      "status": "Incomplete",
+      "transaction_chain": [
+        {
+          "function": "COUT/GA",
+          "protocol_steps": [
+            "TDR_AA(GA)→RESUBMIT_AUTHORIZATION",
+            "TA_EVENT(GA)→RESUBMIT_AUTHORIZATION",
+            "TDR_AA(GA)→PROCEED_NEXT",
+            "TA_EVENT(GA)→PROCEED_NEXT",
+            "TDR_SE(GA)→PROCEED_NEXT"
+          ],
+          "state": "R",
+          "end_state": "E"
+        }
+      ],
+      "events": [
+        "Card ejected and taken by customer",
+        "Dispense OK — cash successfully dispensed to customer slot",
+        "Present timeout — cash not collected within time limit",
+        "Present failed — customer did not collect dispensed cash",
+        "CASH retracted (not card) — Retract counter Old=6 New=7",
+        "DeviceError CASH_DISPENSER nr=114000 class=RETRACT"
+      ],
+      "chip_decision": [
+        "11:15:37 [3962] TC as second cryptogram requested"
+      ],
+      "app_state_start": "TRANSACTION (5)",
+      "app_state_end": "OPEN (1)"
+    },
+    "output": "---\nTransaction Summary:\n- ATM ID: Not specified in log\n- Transaction Type: Cash Withdrawal (Chained: COUT/GA)\n- Status: Incomplete — Cash Retracted (Not Collected)\n- Timestamp: 11:15:09 - 11:17:13\n\n\nWhat Happened:\n- Customer initiated a chained Cash Withdrawal transaction.\n- Host requested resubmission of authorization (TDR_AA(GA)→RESUBMIT_AUTHORIZATION) — account selection screen shown.\n- Resubmission succeeded — host approved the withdrawal (TDR_AA(GA)→PROCEED_NEXT).\n- Host confirmed approval with TC cryptogram (3962) — successful EMV online authorization.\n- Card ejected and taken by customer at 11:15:40.\n- Cash dispensed successfully (3302 — Valuedoc dispense successful).\n- Cash presented to customer slot (3317).\n- Present timeout occurred at 11:16:44 — customer did not collect dispensed cash (3319).\n- Present failed — cash not taken (3306).\n- Cash retracted successfully at 11:17:07 (3307).\n- Retract counter changed from 6 to 7.\n- CASH_DISPENSER RETRACT error logged (114000) — this is a post-retract notification, not a dispense failure.\n- Session ended normally (TDR_SE(GA)→PROCEED_NEXT).\n- ATM returned to idle state (OPEN).\n\nRoot Cause Analysis:\n- Cash was physically dispensed and presented but customer did not collect it within the timeout window.\n- ATM automatically retracted the cash after present timeout expired.\n- Customer did not collect dispensed cash before present timeout (3319).\n- Root cause for customer not collecting cash cannot be determined from available log data.\n\nRecommended Actions:\n- Verify retract bin confirms 100 PHP was retracted and logged correctly.\n- Flag transaction UUID 0016 for reconciliation — cash was dispensed but not received by customer.\n- Check if present timeout is set appropriately for this ATM location.\n\nConfidence Level:\n- High\n---"
+  },
+  {
+    "id": "ex_012",
+    "tags": [
+      "Balance Inquiry",
+      "RESUBMIT_AUTHORIZATION",
+      "TRANSACTION_5_END",
+      "Unsuccessful",
+      "3246",
+      "3219",
+      "GA",
+      "CHAINED_BI_GA"
+    ],
+    "input": {
+      "ts_start": "11:00:56",
+      "ts_end": "11:02:03",
+      "type": "Balance Inquiry",
+      "status": "Unsuccessful",
+      "protocol_steps": [
+        "TDR_SN(PV)→PROCEED_NEXT",
+        "TDR_AA(BI)→RESUBMIT_AUTHORIZATION",
+        "TA_EVENT(BI)→RESUBMIT_AUTHORIZATION",
+        "TDR_AA(BI)→PROCEED_NEXT",
+        "TA_EVENT(BI)→PROCEED_NEXT",
+        "TDR_AA(GA)→RESUBMIT_AUTHORIZATION",
+        "TA_EVENT(GA)→RESUBMIT_AUTHORIZATION",
+        "TDR_SE(GA)→PROCEED_NEXT"
+      ],
+      "app_state_start": "OPEN (1)",
+      "app_state_end": "TRANSACTION (5)",
+      "customer_actions": [
+        "11:01:38 [3246] Timeout screen displayed on 'ChinabcorpBalanceSummary'",
+        "11:01:49 [3259] Print request::The customer select -> YES",
+        "11:01:55 [3219] Transaction canceled by customer"
+      ],
+      "card_events": [
+        "11:01:57 [3209] Card ejected and taken"
+      ]
+    },
+    "output": "---\nTransaction Summary:\n- ATM ID: [value from log]\n- Transaction Type: Balance Inquiry (chained into Cash Withdrawal attempt)\n- Status: Incomplete — Customer Cancelled\n- Timestamp: 11:00:56 - 11:02:03\n\n\nWhat Happened:\n- Customer initiated a Balance Inquiry.\n- PIN verification passed (TDR_SN(PV)→PROCEED_NEXT).\n- Host requested resubmission of balance authorization (TDR_AA(BI)→RESUBMIT_AUTHORIZATION).\n- Resubmission succeeded — host approved balance inquiry (TDR_AA(BI)→PROCEED_NEXT).\n- Timeout screen displayed on balance summary screen at 11:01:38 ([3246]).\n- Customer selected YES for print request at 11:01:49 ([3259]) — ATM chained into a Cash Withdrawal attempt.\n- Host requested resubmission for withdrawal authorization (TDR_AA(GA)→RESUBMIT_AUTHORIZATION).\n- Customer cancelled the transaction at 11:01:55 ([3219]) before withdrawal completed.\n- Card ejected and taken at 11:01:57.\n- Session ended normally (TDR_SE(GA)→PROCEED_NEXT).\n- ATM did not return to idle — app_state_end is TRANSACTION (5). Soft reset may be required.\n\nRoot Cause Analysis:\n- Balance inquiry completed successfully at host level.\n- Customer selected print/YES which triggered a chained withdrawal attempt.\n- Customer cancelled before the chained withdrawal authorization completed.\n- Customer cancelled the chained Cash Withdrawal attempt ([3219]) after balance was retrieved.\n- Root cause for ATM remaining in TRANSACTION (5) state cannot be determined from available log data.\n\nRecommended Actions:\n- No action required for the cancellation — customer-initiated.\n- Investigate why ATM did not return to OPEN (1) state after session end.\n- Consider a soft reset if ATM remains in TRANSACTION (5) state.\n\nConfidence Level:\n- Medium (due to abnormal app_state_end)\n---"
+  }
+]

@@ -262,6 +262,8 @@ async def _run_extraction_pipeline(zip_bytes: bytes, mode: Optional[str]) -> dic
         customer_paths=file_categories.get("customer_journals", []),
         ui_paths=file_categories.get("ui_journals", []),
         llm_paths=file_categories.get("journal_llm_files", []),
+        write_to_disk=True,
+        output_dir=Path(__file__).parent.parent / "merged_output",
     )
 
     # ── 5. Load file contents into memory ────────────────────────────────────

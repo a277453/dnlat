@@ -368,7 +368,7 @@ class FlatFileMerger:
         }
 
         # Resolve output directory once (used only when write_to_disk=True)
-        disk_dir = output_dir or Path('merged_output')
+        disk_dir = output_dir or Path(__file__).parent.parent / "merged_output"
 
         # Merge every category — enum drives the iteration via map()
         def _process(cat: _JournalCategory):

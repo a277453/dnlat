@@ -2653,7 +2653,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
                                             next_time = deduped_events[i + 1][1]
                                             if time_val and next_time:
                                                 try:
-                                                    dt1 = datetime.combine(date.today(), first_time)
+                                                    dt1 = datetime.combine(date.today(), time_val)
                                                     dt2 = datetime.combine(date.today(), next_time)
                                                     duration = (dt2 - dt1).total_seconds()
                                                 except Exception:

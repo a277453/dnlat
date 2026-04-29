@@ -4942,7 +4942,7 @@ RAISES:
 
             # ── CHAT PANEL ────────────────────────────────────────────────
             st.markdown("---")
-            st.markdown("### 💬 Ask About This Transaction")
+            st.markdown("### Ask About This Transaction")
             st.caption("Ask follow-up questions about this transaction. Answers are based on the EJ log and analysis above.")
 
             # Render prior conversation history

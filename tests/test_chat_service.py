@@ -19,6 +19,8 @@ import os
 import types
 import hashlib
 from unittest.mock import MagicMock, patch, call
+import importlib
+import modules.chat_service as cs
 
 import pytest
 
@@ -40,8 +42,6 @@ logging_stub.logger = MagicMock()
 sys.modules["modules.logging_config"] = logging_stub
 
 # Now import the module under test
-import importlib
-import modules.chat_service as cs
 
 # Convenience aliases to private helpers
 _compute_duration   = cs._compute_duration

@@ -12,28 +12,13 @@ from datetime import datetime
 import numpy as np
 from fastapi.logger import logger
 from modules.analysis import create_analysis_table, create_feedback_table, create_userresponse_database
-from modules.chat_service import chat_turn as llm_chat_turn
-from modules.chat_logger import ChatLogger
 from modules.streamlit_logger import logger as frontend_logger
 import time
 from modules.login import create_reset_tokens_table, is_valid_password, is_same_as_old_password
-import re as _re
-from datetime import datetime as _dt
+import re as _re; from datetime import datetime as _dt
 import html
-import traceback
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import hashlib
-import re as _re1
-import re as _re2
-from datetime import datetime as _dt1
-from datetime import datetime as _dt2
-import base64
-import plotly.graph_objects as go
-from collections import defaultdict
 
 
-      
 # Import authentication functions
 from admin_setup import create_dn_diagnostics_database, initialize_admin_table
 from modules.login import (
@@ -743,7 +728,7 @@ inject_theme_css()
 # ============================================
 # GLOBAL VARIABLES
 # ============================================
-API_BASE_URL = "http://backend:8000/api/v1"
+API_BASE_URL = "http://localhost:3000/api/v1"
 
 def get_auth_headers() -> dict:
     """Returns Authorization: Bearer header carrying the JWT issued at login."""
@@ -1532,7 +1517,8 @@ def create_comparison_flow_plotly(txn1_id, txn1_state, txn1_flow_screens, txn1_m
         TypeError  :
             If any parameter is passed with an incorrect data type.
     """
-    
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
     
     # Create subplots: 1 row, 2 columns
     fig = make_subplots(
@@ -1636,6 +1622,8 @@ def init_cache():
 
 def get_cache_key(endpoint: str, **params) -> str:
     """Generate a unique cache key from endpoint and parameters"""
+    import hashlib
+    import json
     
     # Sort parameters for consistent keys
     sorted_params = json.dumps(params, sort_keys=True)
@@ -1955,7 +1943,7 @@ def render_side_by_side_diff(content1: str, content2: str, filename1: str, filen
     with col3:
         hide_identical = st.checkbox(
             " Show Diff Lines Only",
-            value=True,
+            value= True,
             key=f"hide_identical_{filename1}_{filename2}",
             help="show only the lines that differ between the two files"
         )
@@ -2083,7 +2071,7 @@ def render_transaction_stats():
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
                         # Give a moment for the session to update
-                        
+                        import time
                         time.sleep(0.5)
                     else:
                         error_detail = analyze_response.json().get('detail', 'Analysis failed')
@@ -2098,6 +2086,7 @@ def render_transaction_stats():
                     return
                 except Exception as e:
                     st.error(f"  Error during analysis: {str(e)}")
+                    import traceback
                     st.code(traceback.format_exc())
                     return
         
@@ -2373,6 +2362,7 @@ def render_transaction_stats():
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error loading transaction statistics: {str(e)}")
+        import traceback
         with st.expander(" Debug Information"):
             st.code(traceback.format_exc())
 
@@ -2447,7 +2437,7 @@ RAISES:
                     content_b64 = registry_contents[selected_file_name]
                     
                     # Decode base64 to bytes
-                    
+                    import base64
                     content = base64.b64decode(content_b64)
                     
                     # Parse registry file
@@ -2500,6 +2490,7 @@ RAISES:
                 except Exception as e:
                     st.error(f"Error loading file: {str(e)}")
                     logger.exception(f"Error parsing registry file {selected_file_name}")
+                    import traceback
                     with st.expander("  Debug Information"):
                         st.code(traceback.format_exc())
                     
@@ -2510,6 +2501,7 @@ RAISES:
     except Exception as e:
         st.error(f"  Error: {str(e)}")
         logger.exception("Error in render_registry_single")
+        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -2609,6 +2601,7 @@ def render_registry_compare():
                         st.error("  Connection error. Ensure the API server is running.")
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
+                        import traceback
                         with st.expander("  Debug Information"):
                             st.code(traceback.format_exc())
         
@@ -2663,6 +2656,7 @@ def render_registry_compare():
                     with st.spinner("Comparing files..."):
                         try:
                             # Get contents from both packages
+                            import base64
                             
                             content_a_b64 = registry_contents_a[selected_filename]
                             content_b_b64 = registry_contents_b[selected_filename]
@@ -2687,6 +2681,7 @@ def render_registry_compare():
 
                         except Exception as e:
                             st.error(f"Error comparing files: {str(e)}")
+                            import traceback
                             with st.expander("  Debug Information"):
                                 st.code(traceback.format_exc())
 
@@ -2709,6 +2704,7 @@ def render_registry_compare():
     except Exception as e:
         st.error(f"  Error in comparison setup: {str(e)}")
         logger.exception("Error in render_registry_compare")
+        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -2795,6 +2791,7 @@ def render_transaction_comparison():
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
                         st.success(f"  Analysis complete! Found {analyze_data.get('total_transactions', 0)} transactions")
+                        import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -3003,6 +3000,7 @@ def render_transaction_comparison():
                 
                 if txn1_data:
                     try:
+                        import re as _re1; from datetime import datetime as _dt1
                         _src1 = _re1.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt1.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), str(txn1_data.get('Source File', 'Unknown')))
                     except Exception: _src1 = txn1_data.get('Source File', 'Unknown')
                     st.info(
@@ -3046,6 +3044,7 @@ def render_transaction_comparison():
                 
                 if txn2_data:
                     try:
+                        import re as _re2; from datetime import datetime as _dt2
                         _src2 = _re2.sub(r'(\d{4})(\d{2})(\d{2})', lambda m: _dt2.strptime(m.group(), '%Y%m%d').strftime('%d %B %Y'), str(txn2_data.get('Source File', 'Unknown')))
                     except Exception: _src2 = txn2_data.get('Source File', 'Unknown')
                     st.info(
@@ -3326,16 +3325,17 @@ def render_transaction_comparison():
                 st.error("  Connection error. Ensure the API server is running.")
             except Exception as e:
                 st.error(f"  Error during comparison: {str(e)}")
+                import traceback
                 with st.expander("  Debug Information"):
                     st.code(traceback.format_exc())
     
     except requests.exceptions.Timeout:
-        st.error("Request timeout. Please try again.")
+        st.error("⏱  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error in transaction comparison: {str(e)}")
-  
+        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -3421,6 +3421,7 @@ def render_ui_flow_individual():
                     if analyze_response.status_code == 200:
                         analyze_data = analyze_response.json()
                         st.success(f" Analysis complete! Found {analyze_data.get('total_transactions', 0)} transactions")
+                        import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -3436,6 +3437,7 @@ def render_ui_flow_individual():
                     return
                 except Exception as e:
                     st.error(f"  Error during analysis: {str(e)}")
+                    import traceback
                     with st.expander("  Debug Information"):
                         st.code(traceback.format_exc())
                     return
@@ -3667,6 +3669,7 @@ def render_ui_flow_individual():
                 st.error("  Connection error. Ensure the API server is running on Backend:8000.")
             except Exception as e:
                 st.error(f"  Error in UI flow visualization: {str(e)}")
+                import traceback
                 with st.expander("  Debug Information"):
                     st.code(traceback.format_exc())
     
@@ -3676,6 +3679,7 @@ def render_ui_flow_individual():
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error loading UI flow: {str(e)}")
+        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -3741,7 +3745,7 @@ def create_individual_flow_plotly(txn_id, txn_state, flow_screens):
         - The layout adapts its height based on the number of screens.
         - Background is dark-themed to match Streamlit dark mode aesthetics.
     """
-    
+    import plotly.graph_objects as go
     
     if not flow_screens or flow_screens[0] == 'No flow data':
         return None
@@ -3908,7 +3912,8 @@ def create_consolidated_flow_plotly(flow_data):
         - Layout adapts to the number of screens and columns.
         - Hovering over a screen shows sample transactions passing through it.
     """
-    
+    import plotly.graph_objects as go
+    from collections import defaultdict
     
     screens = flow_data['screens']
     transitions = flow_data['transitions']
@@ -4250,7 +4255,8 @@ def render_consolidated_flow():
                         st.error(" Access Denied — your role does not have permission to use this feature.")
                         return
                     if analyze_response.status_code == 200:
-                        st.success("Analysis complete!")
+                        st.success("✓ Analysis complete!")
+                        import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -4374,16 +4380,18 @@ def render_consolidated_flow():
                         st.error(f"  {error_detail}")
                         
                 except requests.exceptions.Timeout:
-                    st.error("Request timeout. Please try again.")
+                    st.error("⏱  Request timeout. Please try again.")
                 except requests.exceptions.ConnectionError:
-                    st.error("Connection error. Ensure the API server is running.")
+                    st.error("  Connection error. Ensure the API server is running.")
                 except Exception as e:
                     st.error(f"  Error: {str(e)}")
+                    import traceback
                     with st.expander("  Debug Information"):
                         st.code(traceback.format_exc())
     
     except Exception as e:
         st.error(f"  Error: {str(e)}")
+        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -4452,7 +4460,8 @@ RAISES:
                         st.error(" Access Denied — your role does not have permission to use this feature.")
                         return
                     if analyze_response.status_code == 200:
-                        st.success(" Analysis complete!")
+                        st.success("  Analysis complete!")
+                        import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -4586,8 +4595,10 @@ RAISES:
             # Format source file date (e.g. 20250423 -> 23 April 2025)
             _src = selected_txn_data['Source File']
             try:
+                import re as _re
                 _match = _re.search(r'(\d{4})(\d{2})(\d{2})', _src)
                 if _match:
+                    from datetime import datetime as _dt
                     _readable = _dt.strptime(_match.group(), '%Y%m%d').strftime('%d %B %Y')
                     _src = _re.sub(r'\d{8}', _readable, _src)
             except Exception:
@@ -4612,21 +4623,11 @@ RAISES:
             st.session_state.current_analysis_txn = None
         if 'analysis_result' not in st.session_state:
             st.session_state.analysis_result = None
-
-        # ── Chat session state ────────────────────────────────────────────
-        if 'chat_history' not in st.session_state:
-            st.session_state.chat_history = []
-        if 'chat_context' not in st.session_state:
-            st.session_state.chat_context = {}
-        # ─────────────────────────────────────────────────────────────────
-
+        
         # Check if we need to clear previous analysis
         if st.session_state.current_analysis_txn != selected_txn_id:
             st.session_state.analysis_result = None
             st.session_state.current_analysis_txn = selected_txn_id
-            # Reset chat whenever the selected transaction changes
-            st.session_state.chat_history = []
-            st.session_state.chat_context = {}
         
         col1, col2 = st.columns([1, 3])
         
@@ -4654,27 +4655,6 @@ RAISES:
                     
                     if response.status_code == 200:
                         st.session_state.analysis_result = response.json()
-                        _analysis_text = st.session_state.analysis_result.get("analysis", "")
-                        # Seed chat history with the analysis as the opening exchange.
-                        # User bubble = the action taken; assistant bubble = the analysis result.
-                        # All subsequent user questions appear below this naturally.
-                        st.session_state.chat_history = [
-                            {
-                                "role":    "user",
-                                "content": f"Analyze transaction: {selected_txn_id}",
-                            },
-                            {
-                                "role":    "assistant",
-                                "content": _analysis_text,
-                            },
-                        ]
-                        st.session_state.chat_context = {
-                            "ej":             transaction_log,
-                            "jrn":            "",
-                            "analysis":       _analysis_text,
-                            "txn_data":       selected_txn_data.to_dict(),
-                            "transaction_id": selected_txn_id,
-                        }
                         st.rerun()
                     else:
                         error_detail = response.json().get('detail', 'Analysis failed')
@@ -4903,6 +4883,7 @@ RAISES:
                                             if key in st.session_state:
                                                 del st.session_state[key]
                                         
+                                        import time
                                         time.sleep(1)
                                         st.rerun()
                                     else:
@@ -4926,57 +4907,11 @@ RAISES:
                                 del st.session_state[key]
                         st.rerun()
 
-            # ── CHAT PANEL ────────────────────────────────────────────────
-            st.markdown("---")
-            st.markdown("### Ask About This Transaction")
-            st.caption("Ask follow-up questions about this transaction. Answers are based on the EJ log and analysis above.")
 
-            # Render prior conversation history
-            for _msg in st.session_state.chat_history:
-                with st.chat_message(_msg["role"]):
-                    st.markdown(_msg["content"])
-
-            # Chat input — appears at bottom of panel
-            _question = st.chat_input("Ask a follow-up question about this transaction...")
-            if _question:
-                # Show user message immediately
-                st.session_state.chat_history.append({"role": "user", "content": _question})
-                with st.chat_message("user"):
-                    st.markdown(_question)
-
-                # Call LLM and show reply
-                with st.chat_message("assistant"):
-                    with st.spinner("Thinking..."):
-                        try:
-                            _ctx      = st.session_state.chat_context
-                            _username = getattr(st.session_state, "username", "unknown") or "unknown"
-                            _txn_id   = _ctx.get("transaction_id", "unknown")
-                            _chat_log = ChatLogger(
-                                transaction_id=_txn_id,
-                                username=_username,
-                                txn_data=_ctx.get("txn_data", {}),
-                            )
-                            _chat_log.log_turn("user", _question)
-                            _reply = llm_chat_turn(
-                                ej_content      = _ctx.get("ej", ""),
-                                jrn_content     = _ctx.get("jrn", ""),
-                                analysis_result = _ctx.get("analysis", ""),
-                                history         = st.session_state.chat_history[:-1],
-                                question        = _question,
-                                txn_data        = _ctx.get("txn_data", {}),
-                            )
-                            _chat_log.log_turn("assistant", _reply)
-                            st.markdown(_reply)
-                            st.session_state.chat_history.append({"role": "assistant", "content": _reply})
-                        except Exception as _chat_err:
-                            _err_msg = f"Chat error: {str(_chat_err)}"
-                            st.error(_err_msg)
-                            st.session_state.chat_history.append({"role": "assistant", "content": _err_msg})
-            # ── END CHAT PANEL ────────────────────────────────────────────
-
-
+    
     except Exception as e:
         st.error(f"  Error: {str(e)}")
+        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -5105,7 +5040,7 @@ RAISES:
         st.error(" Access Denied — your role does not have permission to use this feature.")
         return
 
-    st.markdown("#### Counters Analysis ")
+    st.markdown("####   Counters Analysis ")
     
     need_analysis = False
     
@@ -5132,7 +5067,7 @@ RAISES:
         
         # Perform analysis if needed
         if need_analysis:
-            st.info(" Customer journals need to be analyzed first...")
+            st.info("  Customer journals need to be analyzed first...")
             
             with st.spinner("Analyzing customer journals..."):
                 try:
@@ -5147,6 +5082,7 @@ RAISES:
                         return
                     if analyze_response.status_code == 200:
                         st.success("  Analysis complete!")
+                        import time
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -5200,14 +5136,14 @@ RAISES:
                 )
                 
                 if matching_sources_response.status_code in (401, 403):
-                    st.error("Access Denied — your role does not have permission to use this feature.")
+                    st.error(" Access Denied — your role does not have permission to use this feature.")
                     return
                 if matching_sources_response.status_code == 200:
                     matching_data = matching_sources_response.json()
                     filtered_sources = matching_data.get('matching_sources', [])
                     
                     if not filtered_sources:
-                        st.warning("No source files found that match TRC trace files")
+                        st.warning("  No source files found that match TRC trace files")
                         return
                     
                     available_sources = filtered_sources
@@ -5294,10 +5230,9 @@ RAISES:
 
         selected_txn_id = transaction_options[selected_display]
         selected_txn_data = source_transactions[source_transactions['Transaction ID'] == selected_txn_id].iloc[0]
-        selected_txn_type = str(selected_txn_data.get('Transaction Type', ''))
-
+        
         st.markdown("---")
-
+        
         # Call API to get counter data
         with st.spinner("Loading counter data..."):
             try:
@@ -5311,45 +5246,16 @@ RAISES:
                     },
                     timeout=60
                 )
-
+                
                 if response.status_code in (401, 403):
                     st.error(" Access Denied — your role does not have permission to use this feature.")
                     return
                 if response.status_code == 200:
                     counter_data = response.json()
-
-                    # ── 1. First Counter ──────────────────────────────────────────
-
-                    first_date = counter_data['first_counter']['date']
-                    first_time = counter_data['first_counter']['timestamp']
                     
-                    try:
-                        if len(first_date) == 6:
-                            dt = datetime.strptime(first_date, '%y%m%d')
-                            formatted_first_date = dt.strftime('%d %B %Y')
-                        else:
-                            formatted_first_date = first_date
-                    except:
-                        formatted_first_date = first_date
+                    # Display START counter (static - first counter in file)
+                    from datetime import datetime
                     
-                    st.markdown(f"####   First Counter - {formatted_first_date} {first_time}")
-                    st.caption("This counter represents the first transaction in the source file.")
-                    
-                    first_df = pd.DataFrame(counter_data['first_counter']['counter_data'])
-
-                    # Get column descriptions
-                    col_descriptions = counter_data.get('column_descriptions', {})
-
-                    # Create column config with tooltips
-                    column_config = {}
-                    for col in first_df.columns:
-                        if col in col_descriptions:
-                            column_config[col] = st.column_config.TextColumn(col, help=col_descriptions[col], width="small")
-                    render_themed_table(first_df)
-                    
-                    st.markdown("---")
-
-                    # ── 2. Start Counter ─────────────────────────────────────────
                     start_date = counter_data['start_counter']['date']
                     start_time = counter_data['start_counter']['timestamp']
                     
@@ -5362,25 +5268,70 @@ RAISES:
                             formatted_start_date = start_date
                     except:
                         formatted_start_date = start_date
-
-
-                    st.markdown(f"####   Start Counter - {formatted_start_date} {start_time}")
-                    st.caption("This counter represents the last counter block recorded before the selected transaction started.")
+                    
+                    st.markdown(f"####   First Counter - {formatted_start_date} {start_time}")
+                    st.caption("This counter represents the first transaction in the source file")
+                    
                     start_df = pd.DataFrame(counter_data['start_counter']['counter_data'])
+
+                    # Get column descriptions
                     col_descriptions = counter_data.get('column_descriptions', {})
+
+                    # Create column config with tooltips
                     column_config = {}
                     for col in start_df.columns:
                         if col in col_descriptions:
-                            column_config[col] = st.column_config.TextColumn(col, help=col_descriptions[col], width="small")
+                            column_config[col] = st.column_config.TextColumn(
+                                col,
+                                help=col_descriptions[col],
+                                width="small"
+                            )
+
                     render_themed_table(start_df)
-
+                    
                     st.markdown("---")
+                    
+                    # Display first counter
+                    first_date = counter_data['first_counter']['date']
+                    first_time = counter_data['first_counter']['timestamp']
+                    
+                    # Format date as "DD Month YYYY"
+                    try:
+                        if len(first_date) == 6:  # YYMMDD format
+                            dt = datetime.strptime(first_date, '%y%m%d')
+                            formatted_first_date = dt.strftime('%d %B %Y')
+                        else:
+                            formatted_first_date = first_date
+                    except:
+                        formatted_first_date = first_date
+                    
+                    st.markdown(f"####   Start Counter - {formatted_first_date} {first_time}")
+                    st.caption("This counter represents the first transaction from in the TRCTrace file based on the selected Transaction")
+                    
+                    first_df = pd.DataFrame(counter_data['first_counter']['counter_data'])
 
-                    # ── 3. Counter per Transaction table ─────────────────────────
-                    st.markdown("#### Counter per Transaction")
+                    # Get column descriptions
+                    col_descriptions = counter_data.get('column_descriptions', {})
+
+                    # Create column config with tooltips
+                    column_config = {}
+                    for col in first_df.columns:
+                        if col in col_descriptions:
+                            column_config[col] = st.column_config.TextColumn(
+                                col,
+                                help=col_descriptions[col],
+                                width="small"
+                            )
+
+                    render_themed_table(first_df)
+                    
+                    st.markdown("---")
+                    
+                    st.markdown("####   Counter per Transaction")
 
                     if 'counter_per_transaction' in counter_data and counter_data['counter_per_transaction']:
                         txn_table_data = []
+                        
                         for txn_entry in counter_data['counter_per_transaction']:
                             txn_table_data.append({
                                 'Date Timestamp': txn_entry['date_timestamp'],
@@ -5391,9 +5342,20 @@ RAISES:
                                 'Counter Summary': txn_entry['counter_summary'],
                                 'Comment': txn_entry['comment']
                             })
-
+                        
                         txn_df = pd.DataFrame(txn_table_data)
-
+                        
+                        # Create column config with tooltips for transaction table
+                        txn_column_config = {
+                            'Date Timestamp': st.column_config.TextColumn('Date Timestamp', help='Transaction date and time'),
+                            'Transaction ID': st.column_config.TextColumn('Transaction ID', help='Unique transaction identifier'),
+                            'Transaction Type': st.column_config.TextColumn('Transaction Type', help='Type of transaction (Cash Deposit or Cash Withdrawal)'),
+                            'Transaction Summary with Result': st.column_config.TextColumn('Transaction Summary with Result', help='Success or failure status'),
+                            'Count': st.column_config.TextColumn('Count', help='Denomination and count information'),
+                            'Counter Summary': st.column_config.TextColumn('Counter Summary', help='Click to view detailed counter data'),
+                            'Comment': st.column_config.TextColumn('Comment', help='Additional notes')
+                        }
+                        
                         # Build themed HTML table with colour-coded summary column
                         dark = is_dark()
                         bg_hdr  = "#1a1a1a" if dark else "#f0f2f6"
@@ -5478,137 +5440,155 @@ RAISES:
                                     selected_row = r
                                     break
 
-                        # ── 5. Radio buttons + comparison table (only after a row is chosen) ──
+                        # Get selected row (mirrors original logic)
                         if selected_row is not None:
                             if selected_row['Counter Summary'] == 'View Counters':
-                                # ── 6. Compare radio buttons (shown only after row is selected) ──
-                                # Use the transaction from the "Select transaction to view counters" dropdown
-                                view_txn_id   = selected_row['Transaction ID']
-                                view_txn_type = str(selected_row.get('Transaction Type', ''))
-                                if view_txn_type in ('Cash Withdrawal', 'Cash Deposit'):
                                     st.markdown("---")
-                                    st.markdown("#### Counter Comparison")
+                                    st.markdown(f"####  Counters for Transaction: {selected_row['Transaction ID']}")
+                                    st.caption(f"Time: {selected_row['Date Timestamp']}")
+                                    
 
-                                    compare_mode_label = st.radio(
-                                        "Select comparison mode",
-                                        options=["Compare from First Transaction", "Compare from Previous Transaction"],
-                                        index=0,
-                                        horizontal=True,
-                                        key="counter_compare_mode_radio"
-                                    )
-                                    compare_mode_api = "first" if compare_mode_label == "Compare from First Transaction" else "previous"
-
-                                    cmp_cache_key = f"cmp_{view_txn_id}_{selected_source}_{compare_mode_api}"
-                                    if st.session_state.get("_cmp_cache_key") != cmp_cache_key:
-                                        st.session_state["_cmp_cache_key"] = cmp_cache_key
-                                        st.session_state["_cmp_result"] = None
-
-                                    if st.session_state.get("_cmp_result") is None:
-                                        with st.spinner("Computing comparison\u2026"):
-                                            try:
-                                                cmp_response = requests.post(
-                                                    f"{API_BASE_URL}/get-counter-comparison",
-                                                    headers=get_auth_headers(),
-                                                    json={
-                                                        "transaction_id": view_txn_id,
-                                                        "source_file":    selected_source,
-                                                        "compare_mode":   compare_mode_api,
-                                                    },
-                                                    timeout=60,
+                                    
+                                    # Extract time from date_timestamp (format: "DD Month YYYY HH:MM:SS")
+                                    date_timestamp = selected_row['Date Timestamp']
+                                    try:
+                                        # Parse the full datetime
+                                        txn_datetime = datetime.strptime(date_timestamp, '%d %B %Y %H:%M:%S')
+                                        txn_time = txn_datetime.time()
+                                        
+                                        # Filter blocks that match this transaction time (within reasonable range)
+                                        # Allow ±30 seconds margin
+                                        margin_seconds = 30
+                                        
+                                        logical_counters = []
+                                        
+                                        if 'all_blocks' in counter_data:
+                                            for block in counter_data['all_blocks']:
+                                                block_time_str = block.get('time')
+                                                
+                                                if block_time_str:
+                                                    # Parse block time string to time object
+                                                    # block_time comes from API as string (e.g., "11:38:38")
+                                                    try:
+                                                        block_time = datetime.strptime(str(block_time_str), '%H:%M:%S').time()
+                                                    except ValueError:
+                                                        # Try with milliseconds format
+                                                        try:
+                                                            block_time = datetime.strptime(str(block_time_str), '%H:%M:%S.%f').time()
+                                                        except ValueError:
+                                                            continue  # Skip if time format is invalid
+                                                    
+                                                    # Convert both to datetime for comparison
+                                                    block_datetime = datetime.combine(datetime.today(), block_time)
+                                                    txn_datetime_today = datetime.combine(datetime.today(), txn_time)
+                                                    
+                                                    # Calculate time difference in seconds
+                                                    time_diff = abs((block_datetime - txn_datetime_today).total_seconds())
+                                                    
+                                                    # Only include blocks within margin
+                                                    if time_diff <= margin_seconds:
+                                                        for counter in block.get('data', []):
+                                                            if counter.get('Record_Type') == 'Logical':
+                                                                
+                                                                logical_counters.append({
+                                                                    'Name (PName)': counter.get('UnitName', ''),
+                                                                    'Value (Val)': counter.get('Val', ''),
+                                                                    'Cur': counter.get('Cur', ''),
+                                                                    'Ini': counter.get('Ini', ''),
+                                                                    'Retr': counter.get('Retr', ''),
+                                                                    'Disp': counter.get('Disp', ''),
+                                                                    'RCNT (Reject Count)': counter.get('RCnt', ''),
+                                                                    'Pres': counter.get('Pres', ''),
+                                                                    'Cnt': counter.get('Cnt', ''),
+                                                                    'Status (St)': counter.get('St', ''),
+                                                                    'NrPCU': counter.get('No', '')
+                                                                })
+                                    
+                                    except ValueError as e:
+                                        st.error(f"Error parsing transaction time: {e}")
+                                        logical_counters = []
+                                    
+                                    if logical_counters:
+                                        counter_display_df = pd.DataFrame(logical_counters)
+                                        
+                                        # Remove duplicates based on all columns
+                                        counter_display_df = counter_display_df.drop_duplicates()
+                                        
+                                        # Get column descriptions
+                                        col_descriptions = counter_data.get('column_descriptions', {})
+                                        
+                                        # Column config with descriptions
+                                        detail_column_config = {}
+                                        for col in counter_display_df.columns:
+                                            # Map display column names to description keys
+                                            col_key_map = {
+                                                'Name (PName)': 'UnitName',
+                                                'Value (Val)': 'Val',
+                                                'Cur': 'Cur',
+                                                'Ini': 'Ini',
+                                                'Retr': 'Retr',
+                                                'Disp': 'Disp',
+                                                'RCNT (Reject Count)': 'RCnt',
+                                                'Pres': 'Pres',
+                                                'Cnt': 'Cnt',
+                                                'Status (St)': 'St',
+                                                'NrPCU': 'HWsens'
+                                            }
+                                            
+                                            desc_key = col_key_map.get(col, col)
+                                            if desc_key in col_descriptions:
+                                                detail_column_config[col] = st.column_config.TextColumn(
+                                                    col,
+                                                    help=col_descriptions[desc_key],
+                                                    width="small"
                                                 )
-                                                if cmp_response.status_code in (401, 403):
-                                                    st.error("Access Denied — your role does not have permission to use this feature.")
-                                                    st.session_state["_cmp_result"] = {}
-                                                elif cmp_response.status_code == 200:
-                                                    st.session_state["_cmp_result"] = cmp_response.json()
-                                                else:
-                                                    detail = cmp_response.json().get('detail', 'Comparison failed')
-                                                    st.error(f"  {detail}")
-                                                    st.session_state["_cmp_result"] = {}
-                                            except requests.exceptions.Timeout:
-                                                st.error("  Request timeout while computing comparison.")
-                                                st.session_state["_cmp_result"] = {}
-                                            except requests.exceptions.ConnectionError:
-                                                st.error("  Connection error while computing comparison.")
-                                                st.session_state["_cmp_result"] = {}
-                                            except Exception as e:
-                                                st.error(f"  Error computing comparison: {e}")
-                                                st.session_state["_cmp_result"] = {}
-
-                                    cmp_data = st.session_state.get("_cmp_result") or {}
-
-                                    if cmp_data.get("no_counter_available"):
-                                        st.warning(
-                                            "No counter data available for this transaction. "
-                                            + cmp_data.get("no_counter_reason", "")
-                                        )
-                                    elif cmp_data and cmp_data.get("rows"):
-                                        dark  = is_dark()
-                                        c_inc = "#16a34a"
-                                        c_dec = "#dc2626"
-                                        c_neu = "#e0e0e0" if dark else "#1e2a35"
-                                        cmp_table_rows = []
-                                        for cmp_row in cmp_data["rows"]:
-                                            delta_val = cmp_row.get("delta", 0)
-                                            if delta_val > 0:
-                                                change_html = f"<span style='color:{c_inc}; font-weight:700;'>&#9650; +{delta_val}</span>"
-                                            elif delta_val < 0:
-                                                change_html = f"<span style='color:{c_dec}; font-weight:700;'>&#9660; {delta_val}</span>"
-                                            else:
-                                                change_html = f"<span style='color:{c_neu};'>● —</span>"
-                                            cmp_table_rows.append({
-                                                "No":           cmp_row.get("No",    ""),
-                                                "Ty":           cmp_row.get("Ty",    ""),
-                                                "ID":           cmp_row.get("ID",    ""),
-                                                "Cur":          cmp_row.get("Cur",   ""),
-                                                "Value":        cmp_row.get("Val",   ""),
-                                                "Ini":          cmp_row.get("Ini",   ""),
-                                                "PName":        cmp_row.get("PName", ""),
-                                                "Original Cnt": cmp_row.get("baseline_cnt", ""),
-                                                "Current Cnt":  cmp_row.get("second_cnt",   ""),
-                                                "Change":       change_html,
-                                            })
-                                        cmp_df = pd.DataFrame(cmp_table_rows)
-                                        render_themed_table(cmp_df)
-                                    elif cmp_data is not None and "rows" in cmp_data:
-                                        reason = cmp_data.get("no_counter_reason", "")
-                                        if reason:
-                                            st.warning("No counter data available. " + reason)
-                                        else:
-                                            st.info(
-                                                "No counter change detected for this transaction. "
-                                                "Either no further counter blocks exist in the TRC file after this "
-                                                "transaction, or no Cnt values changed between the baseline and the next block."
-                                            )
-
-                                st.markdown("---")
-
+                                        
+                                        render_themed_table(counter_display_df)
+                                        
+                                        st.caption(f"Showing {len(counter_display_df)} unique counter record(s)")
+                                        
+                                        if st.button("✕ Close Counters View", key="close_counters"):
+                                            st.session_state["counter_txn_select"] = txn_options[0]
+                                            st.rerun()
+                                    else:
+                                        st.info("No logical counters found for this transaction timeframe")
                     else:
                         st.info("No transaction data available")
-
+                    
                     st.markdown("---")
-
-                    # ── 7. Last Counter ───────────────────────────────────────────
+                    
+                    # Display last counter
                     last_date = counter_data['last_counter']['date']
                     last_time = counter_data['last_counter']['timestamp']
+                    
+                    # Format date as "DD Month YYYY"
                     try:
-                        if len(last_date) == 6:
+                        if len(last_date) == 6:  # YYMMDD format
                             dt = datetime.strptime(last_date, '%y%m%d')
                             formatted_last_date = dt.strftime('%d %B %Y')
                         else:
                             formatted_last_date = last_date
                     except:
                         formatted_last_date = last_date
-
+                    
                     st.markdown(f"####   Last Counter - {formatted_last_date} {last_time}")
                     st.caption("This counter represents the last transaction in the source file")
 
                     last_df = pd.DataFrame(counter_data['last_counter']['counter_data'])
+
+                    # Get column descriptions
                     col_descriptions = counter_data.get('column_descriptions', {})
+
+                    # Create column config with tooltips
                     column_config = {}
                     for col in last_df.columns:
                         if col in col_descriptions:
-                            column_config[col] = st.column_config.TextColumn(col, help=col_descriptions[col], width="small")
+                            column_config[col] = st.column_config.TextColumn(
+                                col,
+                                help=col_descriptions[col],
+                                width="small"
+                            )
+
                     render_themed_table(last_df)
                 
                 else:
@@ -5621,11 +5601,13 @@ RAISES:
                 st.error("  Connection error. Ensure the API server is running.")
             except Exception as e:
                 st.error(f"  Error: {str(e)}")
+                import traceback
                 with st.expander("  Debug Information"):
                     st.code(traceback.format_exc())
     
     except Exception as e:
         st.error(f"  Error: {str(e)}")
+        import traceback
         with st.expander("  Debug Information"):
             st.code(traceback.format_exc())
 
@@ -5759,6 +5741,7 @@ def render_acu_single_parse(): # MODIFIED
                     
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
+                        import traceback
                         with st.expander("  Debug Info"):
                             st.code(traceback.format_exc())
         else:
@@ -5862,7 +5845,7 @@ RAISES:
     comp_data = st.session_state.acu_compare_data
     
     # Source A is now automatically loaded from the main processed ZIP
-    st.markdown("#### Source A (Main Package)")
+    st.markdown("####   Source A (Main Package)")
     if not comp_data.get('files1'):
         with st.spinner("Loading ACU files from main package for Source A..."):
             try:
@@ -5884,7 +5867,7 @@ RAISES:
                         comp_data['files1'] = {k: v for k, v in all_files.items() if not k.startswith('__xsd__')}
                         #st.write("  DEBUG: Filtered XML files for Source A:", comp_data['files1'])  # DEBUG ADDED
                         comp_data['files1_all'] = all_files
-                        st.success(f"**Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
+                        st.success(f"  **Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
                         st.rerun()
                     else:
                         comp_data['files1'] = None
@@ -5896,15 +5879,16 @@ RAISES:
             except Exception as e:
                 st.error(f"Error loading Source A: {e}")
     else:
-        st.success(f"**Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
+        st.success(f"✓ **Source A:** Main Package loaded ({len(comp_data['files1'])} XML files)")
     
     st.markdown("---")
     
     # Source B
-    st.markdown("####  Source B")
+    # Source B
+    st.markdown("####   Source B")
     
     if comp_data.get('files2'):
-        st.success(f"**Source B:** {comp_data.get('zip2_name')} ({len(comp_data['files2'])} XML files)")
+        st.success(f"  **Source B:** {comp_data.get('zip2_name')} ({len(comp_data['files2'])} XML files)")
         if st.button("Replace Source B", key="acu_replace_b"):
             comp_data['zip2_name'] = None
             comp_data['files2'] = None
@@ -5955,6 +5939,7 @@ RAISES:
                     st.error("  Connection error. Check if API server is running.")
                 except Exception as e:
                     st.error(f"  Error: {str(e)}")
+                    import traceback
                     with st.expander("  Debug Info"):
                         st.code(traceback.format_exc())
     

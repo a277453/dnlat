@@ -25,106 +25,6 @@ logger.info("Extraction service initialized")
 CD_SIG = b'PK\x01\x02'
 LH_SIG = b'PK\x03\x04'
 
-# Top-level folder names that identify a main (non-shell) diagnostic ZIP.
-MAIN_ZIP_MARKER_FOLDERS: set = {"customer", "journal", "diebold", "error", "vcp-pro"}
-
-
-def is_main_zip(zip_bytes: bytes) -> bool:
-    """
-    FUNCTION: is_main_zip
-
-    DESCRIPTION:
-        Determines whether a ZIP archive is the *main* diagnostic ZIP by
-        inspecting only the top-level folder names in its central directory.
-        No member data is ever decompressed; only the namelist is read.
-
-        A ZIP is considered a main ZIP when every folder name in
-        MAIN_ZIP_MARKER_FOLDERS appears as a top-level entry.
-
-    PARAMETERS:
-        zip_bytes (bytes) : Raw bytes of the ZIP to inspect.
-
-    RETURNS:
-        bool : True if the ZIP is a main ZIP, False otherwise (including on
-               any error opening the archive).
-    """
-    try:
-        with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
-            top_level_folders = set()
-            for name in zf.namelist():
-                norm = name.replace('\\', '/').lstrip('/')
-                first_part = norm.split('/')[0].lower()
-                if first_part:
-                    top_level_folders.add(first_part)
-            return MAIN_ZIP_MARKER_FOLDERS.issubset(top_level_folders)
-    except Exception as e:
-        logger.warning(f"is_main_zip: could not inspect ZIP: {e}")
-        return False
-
-
-def resolve_main_zips(zip_content: bytes) -> List[bytes]:
-    """
-    FUNCTION: resolve_main_zips
-
-    DESCRIPTION:
-        Given raw bytes of a user-uploaded ZIP, returns a list of raw ZIP
-        byte-strings where each entry is a confirmed main diagnostic ZIP.
-
-        Logic:
-          1. If the uploaded ZIP itself is a main ZIP, return it as a
-             single-item list — fast path, zero overhead for normal uploads.
-          2. Otherwise treat it as a shell ZIP: iterate every nested .zip
-             member, read its bytes only to run is_main_zip on it, and
-             collect those that pass.  Non-main nested ZIPs are never
-             decompressed beyond reading their namelist.
-          3. If no main ZIP is found inside the shell, return the original
-             bytes so the caller surfaces an error naturally.
-
-    PARAMETERS:
-        zip_content (bytes) : Raw bytes of the user-uploaded ZIP.
-
-    RETURNS:
-        List[bytes] : One or more confirmed main ZIP byte-strings.
-    """
-    # Fast path — already the main ZIP
-    if is_main_zip(zip_content):
-        logger.info("resolve_main_zips: uploaded ZIP is a main ZIP.")
-        return [zip_content]
-
-    logger.info("resolve_main_zips: uploaded ZIP is a shell — scanning nested ZIPs.")
-    main_zips: List[bytes] = []
-
-    try:
-        with zipfile.ZipFile(io.BytesIO(zip_content), 'r') as shell_zf:
-            nested_zip_members = [
-                name for name in shell_zf.namelist()
-                if not name.endswith('/')
-                and os.path.basename(name.replace('\\', '/')).lower().endswith('.zip')
-            ]
-            logger.info(f"resolve_main_zips: {len(nested_zip_members)} nested ZIP(s) to inspect.")
-            for member in nested_zip_members:
-                base = os.path.basename(member.replace('\\', '/'))
-                try:
-                    nested_bytes = shell_zf.read(member)
-                    if is_main_zip(nested_bytes):
-                        logger.info(f"  [SHELL] '{base}' identified as main ZIP.")
-                        main_zips.append(nested_bytes)
-                    else:
-                        logger.info(f"  [SHELL] '{base}' is not a main ZIP — skipping.")
-                except Exception as e:
-                    logger.warning(f"  [SHELL] Could not inspect '{base}': {e} — skipping.")
-    except zipfile.BadZipFile as e:
-        logger.error(f"resolve_main_zips: uploaded ZIP is not valid: {e}")
-    except Exception as e:
-        logger.error(f"resolve_main_zips: unexpected error: {e}", exc_info=True)
-
-    if main_zips:
-        logger.info(f"resolve_main_zips: found {len(main_zips)} main ZIP(s) in shell.")
-        return main_zips
-
-    logger.warning("resolve_main_zips: no main ZIP found in shell — falling back to original bytes.")
-    return [zip_content]
-
 
 class ZipExtractionService:
     """
@@ -416,15 +316,7 @@ class ZipExtractionService:
                 return zlib.decompress(compressed, -zlib.MAX_WBITS)
             raise ValueError(f"Unsupported compress type {zinfo.compress_type} for '{filename}'")
 
-    def _is_main_zip(self, zip_bytes: bytes) -> bool:
-        """Thin wrapper — delegates to the module-level is_main_zip()."""
-        return is_main_zip(zip_bytes)
-
-    def _resolve_main_zips(self, zip_content: bytes) -> List[bytes]:
-        """Thin wrapper — delegates to the module-level resolve_main_zips()."""
-        return resolve_main_zips(zip_content)
-
-    def extract_zip(self, zip_content: bytes) -> Tuple[Path, int, List[bytes]]:
+    def extract_zip(self, zip_content: bytes) -> Tuple[Path, int, Optional[bytes]]:
         """
         FUNCTION: extract_zip
 
@@ -455,14 +347,13 @@ class ZipExtractionService:
             zip_content (bytes) : Raw bytes of the uploaded ZIP archive.
 
         RETURNS:
-            Tuple[Path, int, List[bytes]] :
-                - Path        : Path to the run directory (e.g. .../dn_extracts/dn_20240101_120000/).
-                - int         : Total number of files found in the top-level ZIP (for logging).
-                - List[bytes] : Raw decompressed bytes for every acu.zip found in the archive
-                                (empty list if none were present). A list is returned instead of
-                                a single Optional[bytes] so that packages containing duplicate
-                                acu.zip files are fully handled — callers must loop over every
-                                entry and merge the results.
+            Tuple[Path, int, Optional[bytes]] :
+                - Path         : Path to the run directory (e.g. .../dn_extracts/dn_20240101_120000/).
+                - int          : Total number of files found in the top-level ZIP (for logging).
+                - Optional[bytes] : Raw decompressed bytes of acu.zip if it was present,
+                                    otherwise None. Returned so the caller can pass them
+                                    directly to extract_from_zip_bytes(), avoiding a second
+                                    decompress of the same nested archive.
 
         RAISES:
             ValueError : If zip_content is empty, not a valid ZIP, or yields no files.
@@ -470,12 +361,6 @@ class ZipExtractionService:
         """
         if not zip_content:
             raise ValueError("Empty ZIP file")
-
-        # --- Resolve the actual main ZIP(s) from the uploaded content ---
-        # If the user uploaded a shell ZIP, _resolve_main_zips identifies the
-        # main ZIP(s) nested inside it without extracting anything to disk.
-        # Each returned bytes object is a confirmed main ZIP.
-        main_zip_candidates = self._resolve_main_zips(zip_content)
 
         # --- Create ONE timestamped run folder inside dn_extracts ---
         timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -494,119 +379,98 @@ class ZipExtractionService:
 
         logger.info(f"DN folder created: {dn_folder}")
 
-        # Branch-level counters for summary logging (accumulated across all main ZIPs)
+        # Branch-level counters for summary logging
         branch_counts: Dict[str, int] = {b: 0 for b in branch_dirs}
 
-        # Accumulators for multi-main-zip case
-        total_files_in_zip = 0
-        all_nested_zip_bytes: Dict[str, bytes] = {}
-        total_extracted = 0
-
         try:
-            for main_zip_index, current_zip_content in enumerate(main_zip_candidates):
-                logger.info(f"Processing main ZIP {main_zip_index + 1}/{len(main_zip_candidates)}")
+            with zipfile.ZipFile(io.BytesIO(zip_content), 'r') as zf:
+                all_entries = zf.namelist()
+                logger.info(f"ZIP contains {len(all_entries)} entries (dirs + files)")
 
-                with zipfile.ZipFile(io.BytesIO(current_zip_content), 'r') as zf:
-                    all_entries = zf.namelist()
-                    logger.info(f"ZIP contains {len(all_entries)} entries (dirs + files)")
+                files_only = [e for e in all_entries if not e.endswith('/')]
+                total_files_in_zip = len(files_only)
+                logger.info(f"Processing {total_files_in_zip} file entries")
 
-                    files_only = [e for e in all_entries if not e.endswith('/')]
-                    total_files_in_zip += len(files_only)
-                    logger.info(f"Processing {len(files_only)} file entries from main ZIP {main_zip_index + 1}")
+                nested_zip_bytes: Dict[str, bytes] = {}   # name -> raw bytes, for later
+                extracted = 0
 
-                    nested_zip_bytes: Dict[str, bytes] = {}   # name -> raw bytes, for later
-                    extracted = 0
+                for filename in files_only:
+                    try:
+                        # Determine branch before reading data (cheap)
+                        norm = filename.replace('\\', '/').lower()
+                        base = os.path.basename(norm)
 
-                    for filename in files_only:
-                        try:
-                            # Determine branch before reading data (cheap)
-                            norm = filename.replace('\\', '/').lower()
-                            base = os.path.basename(norm)
-
-                            # Skip junk files regardless of branch
-                            if any(skip in norm for skip in self.skip_patterns):
-                                logger.debug(f"Skipping junk: {filename}")
-                                continue
-                            if base.startswith('.'):
-                                logger.debug(f"Skipping hidden: {filename}")
-                                continue
-
-                            # Nested ZIPs: check the name BEFORE reading any bytes.
-                            # This way non-acu.zip files are never decompressed at all.
-                            if base.endswith('.zip'):
-                                if base == 'acu.zip':
-                                    try:
-                                        file_data = self._safe_read_member(zf, filename)
-                                        nested_zip_bytes[filename] = file_data
-                                        logger.info(f"Acu.zip found.")
-                                    except Exception as read_err:
-                                        logger.warning(f"Could not read acu.zip: {read_err}")
-                                else:
-                                    logger.info(f"  [NESTED ZIP] '{base}' skipped.")
-                                continue  # never write any zip to disk
-
-                            branch = self._classify_to_branch(filename)
-
-                            #Dhruvi - TO-Do: Skipped reading files in EXTRA for now. can be implemented later is needed.
-                            if branch == self.BRANCH_EXTRA:
-                                continue
-
-                            # Read the member bytes
-                            try:
-                                file_data = self._safe_read_member(zf, filename)
-                            except Exception as read_err:
-                                logger.warning(f"Could not read '{filename}': {read_err}")
-                                continue
-
-                            dest_dir  = branch_dirs[branch]
-                            dest_file = dest_dir / os.path.basename(filename.replace('\\', '/'))
-
-                            # Avoid silent overwrites when two members share a basename
-                            if dest_file.exists():
-                                stem, suf = os.path.splitext(dest_file.name)
-                                i = 1
-                                while dest_file.exists():
-                                    dest_file = dest_dir / f"{stem}_{i}{suf}"
-                                    i += 1
-
-                            with open(dest_file, 'wb') as fout:
-                                fout.write(file_data)
-
-                            branch_counts[branch] += 1
-                            extracted += 1
-
-                        except Exception as e:
-                            logger.warning(f"Skipping '{filename}': {e}")
+                        # Skip junk files regardless of branch
+                        if any(skip in norm for skip in self.skip_patterns):
+                            logger.debug(f"Skipping junk: {filename}")
+                            continue
+                        if base.startswith('.'):
+                            logger.debug(f"Skipping hidden: {filename}")
                             continue
 
-                logger.info(f"Extracted {extracted} files from main ZIP {main_zip_index + 1}. Branch summary so far: {branch_counts}")
-                total_extracted += extracted
+                        # Nested ZIPs: check the name BEFORE reading any bytes.
+                        # This way non-acu.zip files are never decompressed at all.
+                        if base.endswith('.zip'):
+                            if base == 'acu.zip':
+                                try:
+                                    file_data = self._safe_read_member(zf, filename)
+                                    nested_zip_bytes[filename] = file_data
+                                    logger.info(f"Acu.zip found.")
+                                except Exception as read_err:
+                                    logger.warning(f"Could not read acu.zip: {read_err}")
+                            else:
+                                logger.info(f"  [NESTED ZIP] '{base}' skipped.")
+                            continue  # never write any zip to disk
 
-                # Merge nested_zip_bytes (acu.zip) into the global accumulator.
-                # Disambiguate keys if multiple main ZIPs each have an acu.zip.
-                for nz_name, nz_bytes in nested_zip_bytes.items():
-                    unique_key = f"main{main_zip_index + 1}/{nz_name}" if nz_name in all_nested_zip_bytes else nz_name
-                    all_nested_zip_bytes[unique_key] = nz_bytes
+                        branch = self._classify_to_branch(filename)
 
-            # --- End of per-main-ZIP loop ---
+						#Dhruvi - TO-Do: Skipped reading files in EXTRA for now. can be implemented later is needed.
+                        if branch == self.BRANCH_EXTRA:
+                            continue
+                        # Read the member bytes
+                        try:
+                            file_data = self._safe_read_member(zf, filename)
+                        except Exception as read_err:
+                            logger.warning(f"Could not read '{filename}': {read_err}")
+                            continue
 
-            if total_extracted == 0:
-                raise ValueError("Failed to extract any files from ZIP")
+                      
+                        dest_dir  = branch_dirs[branch]
+                        dest_file = dest_dir / os.path.basename(filename.replace('\\', '/'))
 
-            logger.info(f"Total extracted across all main ZIPs: {total_extracted}. Branch summary: {branch_counts}")
+                        # Avoid silent overwrites when two members share a basename
+                        if dest_file.exists():
+                            stem, suf = os.path.splitext(dest_file.name)
+                            i = 1
+                            while dest_file.exists():
+                                dest_file = dest_dir / f"{stem}_{i}{suf}"
+                                i += 1
 
-            # --- Expand acu.zip nested ZIP(s) into branch folders ---
-            self._extract_nested_zips_to_branches(all_nested_zip_bytes, branch_dirs)
+                        with open(dest_file, 'wb') as fout:
+                            fout.write(file_data)
 
-            # Final file count
-            all_files_after = [p for p in dn_folder.rglob('*') if p.is_file()]
-            logger.info(f"Total files in run folder after nested ZIP expansion: {len(all_files_after)}")
+                        branch_counts[branch] += 1
+                        extracted += 1
 
-            # Return the folder path, the top-level file count, and the raw acu.zip bytes as list
-            # (empty list if acu.zip was not present). Done to avoid re-opening the main ZIP for
-            # counting and to avoid re-decompressing acu.zip for the ACU extraction pass.
-            acu_zip_bytes_list = list(all_nested_zip_bytes.values()) if all_nested_zip_bytes else []
-            return dn_folder, total_files_in_zip, acu_zip_bytes_list
+                    except Exception as e:
+                        logger.warning(f"Skipping '{filename}': {e}")
+                        continue
+                
+                logger.info(f"Extracted {extracted} files into run folder. Branch summary: {branch_counts}")
+                
+                if extracted == 0:
+                    raise ValueError("Failed to extract any files from ZIP")
+
+                # --- Expand first-level nested ZIPs into branch folders ---
+                self._extract_nested_zips_to_branches(nested_zip_bytes, branch_dirs)
+
+                # Final file count
+                all_files_after = [p for p in dn_folder.rglob('*') if p.is_file()]
+                logger.info(f"Total files in run folder after nested ZIP expansion: {len(all_files_after)}")
+
+                # Return the folder path, the top-level file count, and the raw acu.zip bytes (None if acu.zip was not present). Done to avoid re-opening the main ZIP for counting and to avoid re-decompressing acu.zip for the ACU extraction pass.
+                acu_zip_bytes = next(iter(nested_zip_bytes.values()), None) if nested_zip_bytes else None
+                return dn_folder, total_files_in_zip, acu_zip_bytes
 
         except zipfile.BadZipFile:
             shutil.rmtree(dn_folder, ignore_errors=True)

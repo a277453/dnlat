@@ -213,14 +213,13 @@ def extract_from_zip_bytes(zip_bytes: bytes, logs: List[str], target_prefixes=('
 					logger.debug(f"Processed {entry_count} files so far...")
 					
 				if is_nested_zip:
-					if base_lower == 'acu.zip':
-						logger.info(f"Found nested acu.zip at {norm_fname}, extracting recursively.")
-						nested_found = extract_from_zip_bytes(file_bytes, logs, target_prefixes=target_prefixes)
-						for k, v in nested_found.items():
-							if k not in found:
-								found[k] = v
-					else:
-						logger.info(f"Skipping non-acu nested zip: {norm_fname}")
+					logger.info(f"Found nested zip entry {norm_fname}, attempting in-memory extraction.")
+
+					nested_found = extract_from_zip_bytes(file_bytes, logs, target_prefixes=target_prefixes)
+					# Add files from nested zip, ensuring keys are just basenames to avoid long paths
+					for k, v in nested_found.items():
+						if k not in found: # Avoid overwriting
+							found[k] = v
 				elif is_target_xsd:
 					# Store XSD content with special prefix for easy matching
 					# Key format: __xsd__<basename_without_extension>
@@ -242,7 +241,7 @@ def extract_from_zip_bytes(zip_bytes: bytes, logs: List[str], target_prefixes=('
 					logger.info(f"Extracted XML: {norm_fname} (size={len(text)} chars)")
 
 
-			pos += 4
+			pos = fname_end + extra_len + comment_len
 
 		except Exception as e:
 			# logs.append(f"Error parsing CD entry at {pos}: {e}")

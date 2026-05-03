@@ -235,16 +235,16 @@ export default function MainApp() {
           <div className="fade-in">
             <div className="section-heading mb-16">📁 Detected Files</div>
             <div className="grid-auto mb-20">
-              {Object.entries(CATEGORY_DISPLAY).map(([key, { label, icon }]) => (
+              {Object.entries(CATEGORY_DISPLAY).map(([key, { label }]) => (
                 <MetricCard
                   key={key}
-                  label={`${icon} ${label}`}
+                  label={`${label}`}
                   value={categories[key]?.count ?? 0}
                   accent={(categories[key]?.count ?? 0) > 0 ? 'var(--accent)' : undefined}
                 />
               ))}
               <MetricCard
-                label="⏱ Process Time"
+                label="Process Time"
                 value={procTime != null ? `${procTime}s` : '—'}
               />
             </div>

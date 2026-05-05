@@ -292,9 +292,52 @@ async def debug_zip_members(file: UploadFile = File(...)):
             "traceback": traceback.format_exc()
         }
 
-# Simple session ID for now (use UUID in production)
+# CURRENT_SESSION_ID is set per-upload inside process_zip_file.
+# Initialised to a placeholder so _resolve_session_id never crashes before
+# the first upload has taken place.
 global CURRENT_SESSION_ID
-CURRENT_SESSION_ID = str(uuid4())
+CURRENT_SESSION_ID = ""
+
+# ---------------------------------------------------------------------------
+# Session-ID builder
+# ---------------------------------------------------------------------------
+_EMP_CODE_BY_ROLE = {
+    "DEV_MODE": "1234",
+    "ADMIN":    "0000",
+}
+
+def _build_session_id(authorization: str | None) -> tuple[str, str]:
+    """
+    Build a new session ID of the form  <timestamp>e<emp_code>.
+
+    Resolution order for emp_code:
+      1. Role is DEV_MODE  → hardcoded "1234"
+      2. Role is ADMIN     → hardcoded "0000"
+      3. Any other role    → employee_code claim from the JWT payload
+      4. No / invalid JWT  → fallback "0000" (should not reach production)
+
+    Returns:
+        (session_id, emp_code_suffix)   e.g. ("20260504153022e1234", "e1234")
+    """
+    emp_code = "0000"          # safe fallback
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            token   = authorization.split(" ", 1)[1]
+            payload = decode_access_token(token)
+            role    = payload.get("role", "")
+            if role in _EMP_CODE_BY_ROLE:
+                emp_code = _EMP_CODE_BY_ROLE[role]
+            else:
+                # Regular user — read employee_code from their JWT claim
+                emp_code = str(payload.get("emp", "0000"))
+        except Exception:
+            logger.warning("_build_session_id: could not decode JWT — using fallback emp_code")
+
+    timestamp  = datetime.now().strftime("%Y%m%d%H%M%S")
+    suffix     = f"e{emp_code}"
+    session_id = f"{timestamp}{suffix}"
+    logger.info(f"_build_session_id → {session_id}")
+    return session_id, suffix
 
 # ── Session-ID resolver ───────────────────────────────────────────────────────
 _SESSION_SENTINELS = {"current_session", "CURRENT_SESSION_ID", "", None}
@@ -331,7 +374,11 @@ def get_processed_files_dir() -> str:
 
 
 @router.post("/process-zip", response_model=FileCategorizationResponse)
-async def process_zip_file(file: UploadFile = File(..., description="ZIP file to process"),mode: Optional[str] = Query(None, description="Processing mode (e.g., 'registry' to optimize for registry files)")):
+async def process_zip_file(
+    file: UploadFile = File(..., description="ZIP file to process"),
+    mode: Optional[str] = Query(None, description="Processing mode (e.g., 'registry' to optimize for registry files)"),
+    authorization: str = Header(default=None),
+):
     """
     FUNCTION:
         process_zip_file
@@ -614,6 +661,16 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         
         # ------------------ SESSION CREATION------------------
         logger.info("Creating/updating session")
+
+        # Build a fresh session ID: <timestamp>e<emp_code>
+        # Then purge any previous session for this employee (same "e<emp_code>" suffix)
+        # before creating the new one, so stale data never lingers across re-uploads.
+        global CURRENT_SESSION_ID
+        new_session_id, emp_suffix = _build_session_id(authorization)
+        purged = session_service.cleanup_sessions_by_suffix(emp_suffix)
+        if purged:
+            logger.info(f"Purged {purged} old session(s) with suffix '{emp_suffix}' before new upload")
+        CURRENT_SESSION_ID = new_session_id
 
         set_processed_files_dir(None)
         session_service.create_session(CURRENT_SESSION_ID, file_categories, None)

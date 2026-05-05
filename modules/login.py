@@ -590,6 +590,8 @@ def user_exists(email: str, employee_code: str) -> bool:
     """
     try:
         conn = get_db_connection()
+        if conn is None:
+            raise Exception("Database connection failed")
         with conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -605,7 +607,7 @@ def user_exists(email: str, employee_code: str) -> bool:
         raise
 
     finally:
-        if 'conn' in locals():
+        if 'conn' in locals() and conn is not None:
             conn.close()
 
 def register_user(email, name, password, employee_code, role="USER") -> tuple[bool, str]:

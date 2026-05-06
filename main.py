@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -37,9 +40,39 @@ async def lifespan(app: FastAPI):
     logger.info(" Ready to accept requests")
     logger.info("=" * 60)
 
+    # ── Start log_monitor as a background process ──────────────────
+    _monitor_proc = None
+    try:
+        _base        = Path(__file__).resolve().parent
+        _monitor_py  = _base / "modules" / "log_monitor.py"
+        _log_path    = _base / "modules" / "app.log"
+        _out_path    = _base / "modules" / "critical_errors.log"
+
+
+        _monitor_proc = subprocess.Popen(
+            [sys.executable, str(_monitor_py),
+             "--log", str(_log_path),
+             "--out", str(_out_path)],
+            # Keep stderr visible in the uvicorn terminal so failures surface
+            stdout=subprocess.DEVNULL,
+            stderr=None,
+        )
+        print(f"[lifespan] log_monitor started (pid={_monitor_proc.pid})", flush=True)
+    except Exception as e:
+        print(f"[lifespan] ERROR — could not start log_monitor: {e}", flush=True)
+    # ───────────────────────────────────────────────────────────────
+
     yield  # Application runs after this
 
-    # Actions to perform on shutdown
+    # ── Shutdown ───────────────────────────────────────────────────
+    if _monitor_proc and _monitor_proc.poll() is None:
+        _monitor_proc.terminate()
+        try:
+            _monitor_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _monitor_proc.kill()
+        print(f"[lifespan] log_monitor stopped (pid={_monitor_proc.pid})", flush=True)
+
     logger.info("=" * 60)
     logger.info("API shutting down...")
     logger.info("=" * 60)
@@ -334,5 +367,3 @@ async def health_check():
 
 # Export the set_processed_files_dir function so routes.py can use it
 __all__ = ['app', 'set_processed_files_dir', 'get_processed_files_dir']
-
-

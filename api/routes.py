@@ -301,10 +301,67 @@ CURRENT_SESSION_ID = ""
 # ---------------------------------------------------------------------------
 # Session-ID builder
 # ---------------------------------------------------------------------------
-_EMP_CODE_BY_ROLE = {
-    "DEV_MODE": "1234",
-    "ADMIN":    "0000",
-}
+_EMP_CODE_DEV_MODE = "1234"   # hardcoded only for DEV_MODE
+
+def _fetch_emp_code_from_db(username: str) -> str | None:
+    """
+    Look up the employee_code column for *username* in the Users table.
+
+    Returns the code as a string on success, or None when:
+      - the DB is unreachable
+      - the employee_code column has been renamed / deleted
+      - any other unexpected DB error
+
+    Callers must handle the None case and fall back to "undefined".
+    """
+    try:
+        from modules.login import get_db_connection  # lightweight import
+        conn = get_db_connection()
+        if conn is None:
+            logger.error(
+                "_fetch_emp_code_from_db: DB connection returned None — "
+                "cannot retrieve employee_code for user '%s'", username
+            )
+            return None
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT employee_code FROM Users WHERE username = %s", (username,)
+            )
+            row = cursor.fetchone()
+            if row is None:
+                logger.warning(
+                    "_fetch_emp_code_from_db: no row found for username '%s'", username
+                )
+                return None
+            return str(row[0])
+        except Exception as col_err:
+            # Catches column-not-found, table-not-found, driver errors, etc.
+            logger.error(
+                "_fetch_emp_code_from_db: DB query failed for user '%s' — "
+                "employee_code column may be renamed or deleted. Error: %s",
+                username, col_err,
+            )
+            return None
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    except ImportError as imp_err:
+        logger.error(
+            "_fetch_emp_code_from_db: could not import get_db_connection — %s", imp_err
+        )
+        return None
+    except Exception as outer_err:
+        logger.error(
+            "_fetch_emp_code_from_db: unexpected error for user '%s' — %s",
+            username, outer_err,
+        )
+        return None
+
 
 def _build_session_id(authorization: str | None) -> tuple[str, str]:
     """
@@ -312,31 +369,59 @@ def _build_session_id(authorization: str | None) -> tuple[str, str]:
 
     Resolution order for emp_code:
       1. Role is DEV_MODE  → hardcoded "1234"
-      2. Role is ADMIN     → hardcoded "0000"
+      2. Role is ADMIN     → employee_code fetched from DB (keyed on JWT 'sub')
+                             Falls back to timestamp+"undefined" if the column
+                             is missing/unreachable; access is still granted and
+                             an error is written to the log.
       3. Any other role    → employee_code claim from the JWT payload
       4. No / invalid JWT  → fallback "0000" (should not reach production)
 
     Returns:
         (session_id, emp_code_suffix)   e.g. ("20260504153022e1234", "e1234")
     """
-    emp_code = "0000"          # safe fallback
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+
+    emp_code: str   
+
     if authorization and authorization.startswith("Bearer "):
         try:
             token   = authorization.split(" ", 1)[1]
             payload = decode_access_token(token)
             role    = payload.get("role", "")
-            if role in _EMP_CODE_BY_ROLE:
-                emp_code = _EMP_CODE_BY_ROLE[role]
+
+            if role == "DEV_MODE":
+                emp_code = _EMP_CODE_DEV_MODE
+
+            elif role == "ADMIN":
+                username = payload.get("sub", "")
+                db_code  = _fetch_emp_code_from_db(username)
+                if db_code is not None:
+                    emp_code = db_code
+                else:
+                    # DB unavailable or column missing — grant access with a degraded session ID and a clear log entry.
+                    logger.error(
+                        "_build_session_id: employee_code could not be retrieved "
+                        "from DB for ADMIN user '%s' and session ID will use "
+                        "'undefined' suffix. Check DB connectivity and schema.",
+                        username,
+                    )
+                    suffix     = "undefined"
+                    session_id = f"{timestamp}{suffix}"
+                    logger.info("_build_session_id → %s (degraded)", session_id)
+                    return session_id, suffix
+
             else:
                 # Regular user — read employee_code from their JWT claim
                 emp_code = str(payload.get("emp", "0000"))
-        except Exception:
-            logger.warning("_build_session_id: could not decode JWT — using fallback emp_code")
 
-    timestamp  = datetime.now().strftime("%Y%m%d%H%M%S")
+        except Exception:
+            logger.warning(
+                "_build_session_id: could not decode JWT so using fallback emp_code"
+            )
+
     suffix     = f"e{emp_code}"
     session_id = f"{timestamp}{suffix}"
-    logger.info(f"_build_session_id → {session_id}")
+    logger.info("_build_session_id → %s", session_id)
     return session_id, suffix
 
 # ── Session-ID resolver ───────────────────────────────────────────────────────
@@ -4313,18 +4398,20 @@ async def auth_login(request: LoginRequest):
     if user:
         log_login_event(username=user["username"], action="login")
         logger.info("Login successful: user=%s role=%s", user["username"], user.get("role"))
-        token = create_access_token(
-            username=user["username"],
-            role=user.get("role", "USER"),
-            employee_code=user.get("employee_code", ""),
-        )
-        return LoginResponse(
-            username=user["username"],
-            name=user.get("name"),
-            employee_code=user.get("employee_code", ""),
-            role=user.get("role", "USER"),
-            session_token=token,
-        )
+    
+    role = user.get("role", "USER").upper()   # normalise here
+    token = create_access_token(
+        username=user["username"],
+        role=role,
+        employee_code=user.get("employee_code", ""),
+    )
+    return LoginResponse(
+        username=user["username"],
+        name=user.get("name"),
+        employee_code=user.get("employee_code", ""),
+        role=role,
+        session_token=token,
+    )
 
     if is_user_pending_approval(request.username.strip(), request.password):
         raise HTTPException(

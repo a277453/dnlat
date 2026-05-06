@@ -6037,6 +6037,227 @@ RAISES:
 # MAIN APPLICATION UI
 # ============================================
 
+def render_error_summary():
+    """
+    Renders the Error Summary tab.
+    Calls GET /error-summary, displays severity counts and a filterable table.
+    """
+    st.markdown("## Error Summary")
+    st.caption("Errors classified from TRCERROR.PRN and TRCTRACE.PRN by severity level.")
+
+    # ── Theme & colour tokens ─────────────────────────────────────────────────
+    dark = is_dark()
+    _sev_colours = {
+        "P1": ("#ff4b4b", "#2d0000"),
+        "P2": ("#ffa500", "#2d1800"),
+        "P3": ("#ffd700", "#2d2600"),
+        "P5": ("#888888", "#1e1e1e"),
+    }
+    _sev_labels = {
+        "P1": "P1 — Critical / Exception",
+        "P2": "P2 — Error / Reboot",
+        "P3": "P3 — Warning",
+        "P5": "P5 — Verbose",
+    }
+    _sev_row_colours = {
+        "P1": ("#3d0000", "#ffd5d5"),
+        "P2": ("#3d2000", "#ffe8cc"),
+        "P3": ("#3d3500", "#fff8cc"),
+        "P5": ("#2a2a2a", "#ebebeb"),
+    }
+    _sev_text_light = {
+        "P1": "#b30000",
+        "P2": "#a05000",
+        "P3": "#806600",
+        "P5": "#555555",
+    }
+
+    # ── Severity legend ───────────────────────────────────────────────────────
+    leg_cols = st.columns(4)
+    for i, (sev, (fg, bg_dark)) in enumerate(_sev_colours.items()):
+        if dark:
+            bg   = bg_dark
+            text = fg
+        else:
+            bg   = _sev_row_colours[sev][1]
+            text = _sev_text_light[sev]
+        with leg_cols[i]:
+            st.markdown(
+                f"<div style='background:{bg}; border-left:4px solid {fg}; "
+                f"padding:8px 12px; border-radius:6px; color:{text}; "
+                f"font-weight:600; font-size:13px;'>{_sev_labels[sev]}</div>",
+                unsafe_allow_html=True
+            )
+
+    st.markdown("")
+
+    # ── Controls row ─────────────────────────────────────────────────────────
+    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 2, 1])
+    with ctrl_col1:
+        skip_p5 = st.checkbox("Hide P5 verbose entries", value=True, key="err_skip_p5")
+    with ctrl_col2:
+        filter_sev = st.multiselect(
+            "Filter by severity",
+            options=["P1", "P2", "P3", "P5"],
+            default=["P1", "P2", "P3"],
+            key="err_sev_filter"
+        )
+    with ctrl_col3:
+        refresh = st.button("Refresh", key="err_refresh", use_container_width=True)
+
+    # ── Fetch data ────────────────────────────────────────────────────────────
+    _cache_key = f"error_summary_data_skip{skip_p5}"
+    if _cache_key not in st.session_state or refresh:
+        with st.spinner("Analysing TRC log files…"):
+            try:
+                resp = requests.get(
+                    f"{API_BASE_URL}/error-summary",
+                    params={"skip_p5": str(skip_p5).lower()},
+                    headers=get_auth_headers(),
+                    timeout=120,
+                )
+                if resp.status_code == 200:
+                    st.session_state[_cache_key] = resp.json()
+                elif resp.status_code == 404:
+                    st.warning("Session not found. Please re-upload the ZIP file.")
+                    return
+                else:
+                    st.error(f"API error {resp.status_code}: {resp.json().get('detail', 'Unknown error')}")
+                    return
+            except requests.exceptions.Timeout:
+                st.error("Request timed out. TRC files may be very large — try enabling 'Hide P5 verbose entries'.")
+                return
+            except Exception as e:
+                st.error(f"Error fetching error summary: {e}")
+                return
+
+    data = st.session_state.get(_cache_key)
+    if not data:
+        return
+
+    summary = data.get("summary", [])
+    sev_counts = data.get("severity_counts", {})
+    total = data.get("total_unique_errors", 0)
+
+    # ── Severity count metrics ────────────────────────────────────────────────
+    st.markdown("### Severity Counts")
+    m_cols = st.columns(5)
+    with m_cols[0]:
+        st.metric("Total Unique Errors", total)
+    for i, sev in enumerate(["P1", "P2", "P3", "P5"]):
+        with m_cols[i + 1]:
+            st.metric(_sev_labels[sev].split("—")[0].strip(), sev_counts.get(sev, 0))
+
+    st.markdown("---")
+
+    # ── Filter rows ───────────────────────────────────────────────────────────
+    if filter_sev:
+        filtered = [r for r in summary if r["severity"] in filter_sev]
+    else:
+        filtered = summary
+
+    if not filtered:
+        st.info("No errors match the selected severity filters.")
+        return
+
+    st.markdown("### Error Table")
+    st.caption(f"{len(filtered)} rows")
+
+    # ── Build pandas DataFrame ────────────────────────────────────────────────
+    import pandas as pd
+
+    df = pd.DataFrame([
+        {
+            "Severity":     row["severity"],
+            "Count":        row["count"],
+            "Trace/StCode": row["trace"],
+            "Source":       row["source"],
+            "Message":      ("⚡ " + row["message"]) if row.get("type_error", "").strip() else row["message"],
+            "TypeError":    row.get("type_error", "").replace("\n", " | ") if row.get("type_error", "").strip() else "—",
+            "File":         row["source_file"],
+        }
+        for row in filtered
+    ])
+
+    # ── Render using render_themed_table logic with severity row colours ──────
+    bg_header    = "#1a1a1a" if dark else "#f0f2f6"
+    text_header  = "#ffffff"  if dark else "#0d1117"
+    text_cell    = "#e0e0e0"  if dark else "#1e2a35"
+    border_inner = "#2a2a2a"  if dark else "#d1d9e0"
+    border_outer = "#2a2a2a"  if dark else "#b0bec5"
+    header_sep   = "#404040"  if dark else "#b0bec5"
+    scrollbar_thumb = "#404040" if dark else "#b0bec5"
+    scrollbar_track = "#1a1a1a" if dark else "#f0f2f6"
+
+    headers_html = "".join(
+        f"<th style='padding:10px 14px; text-align:left; font-weight:600; "
+        f"font-size:0.78rem; color:{text_header}; background:{bg_header}; "
+        f"border-bottom:2px solid {header_sep}; white-space:nowrap; "
+        f"letter-spacing:0.3px; position:sticky; top:0; z-index:1;'>{col}</th>"
+        for col in df.columns
+    )
+
+    rows_html = ""
+    for i, (_, row) in enumerate(df.iterrows()):
+        sev = row["Severity"]
+        dark_bg, light_bg = _sev_row_colours.get(sev, ("#2a2a2a", "#f5f5f5"))
+        row_bg   = dark_bg  if dark else light_bg
+        hover_bg = "#1f1f1f" if dark else "#e8e8e8"
+
+        cells = "".join(
+            f"<td style='padding:10px 14px; color:{text_cell}; "
+            f"border-bottom:1px solid {border_inner}; font-size:0.875rem; "
+            f"white-space:nowrap; overflow:hidden; text-overflow:ellipsis; "
+            f"max-width:300px;' title='{str(val)}'>{str(val)}</td>"
+            for val in row
+        )
+        rows_html += (
+            f"<tr style='background:{row_bg};' "
+            f"onmouseover=\"this.style.background='{hover_bg}'\" "
+            f"onmouseout=\"this.style.background='{row_bg}'\">"
+            f"{cells}</tr>"
+        )
+
+    table_html = (
+        f"<div style='border:1px solid {border_outer}; border-radius:8px; "
+        f"overflow:hidden; width:100%;'>"
+        f"<div style='max-height:600px; overflow-y:auto; overflow-x:auto; "
+        f"scrollbar-width:thin; scrollbar-color:{scrollbar_thumb} {scrollbar_track};'>"
+        f"<table style='width:100%; border-collapse:collapse; "
+        f"font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;'>"
+        f"<thead><tr>{headers_html}</tr></thead>"
+        f"<tbody>{rows_html}</tbody>"
+        f"</table></div></div>"
+    )
+    st.markdown(table_html, unsafe_allow_html=True)
+
+    # ── TypeError expandable section ─────────────────────────────────────────
+    import html as _html_mod
+    def _escape(text: str) -> str:
+        return _html_mod.escape(str(text or ""))
+
+    _txt = "#e0e0e0" if dark else "#1e2a35"
+    type_error_rows = [r for r in filtered if r.get("type_error", "").strip()]
+    if type_error_rows:
+        st.markdown("")
+        with st.expander(f"⚡ JavaScript TypeErrors ({len(type_error_rows)} entries)", expanded=False):
+            for row in type_error_rows:
+                _fg, _bg_d = _sev_colours.get(row["severity"], ("#888", "#1e1e1e"))
+                _bg   = _bg_d if dark else _sev_row_colours.get(row["severity"], ("", "#f5f5f5"))[1]
+                _ftxt = _fg   if dark else _sev_text_light.get(row["severity"], "#333")
+                st.markdown(
+                    f"<div style='background:{_bg}; border-left:3px solid {_fg}; "
+                    f"padding:10px 14px; border-radius:6px; margin-bottom:8px;'>"
+                    f"<div style='color:{_ftxt}; font-weight:700; font-size:12px; margin-bottom:4px;'>"
+                    f"{_escape(row['source'])} — {_escape(row['trace'])} (×{row['count']})"
+                    f"</div>"
+                    f"<pre style='margin:0; color:{_txt}; font-size:11px; "
+                    f"white-space:pre-wrap; word-break:break-word;'>"
+                    f"{_escape(row['type_error'])}</pre></div>",
+                    unsafe_allow_html=True
+                )
+
+
 def show_main_app():
     """
     Display main application UI (shown after login)
@@ -6417,6 +6638,12 @@ def show_main_app():
                 "description": "Compare ACU configuration files from two ZIP archives",
                 "status": "ready",
                 "requires": ["acu_files"]  #fixed
+            },
+            "error_summary": {
+                "name": "Error Summary",
+                "description": "Classify and summarise errors from TRC log files by severity (P1–P5)",
+                "status": "ready",
+                "requires": ["trc_error", "trc_trace"]
             }
         }
 
@@ -6519,6 +6746,8 @@ def show_main_app():
                     render_acu_single_parse()
                 elif selected_func_id == "acu_compare":
                     render_acu_compare()
+                elif selected_func_id == "error_summary":
+                    render_error_summary()
 
     st.markdown("---")
     st.markdown("""

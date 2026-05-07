@@ -42,3 +42,5 @@ config\.env
 # IDE / Editor specific
 .vscode/
 .idea/d
+\postman
+.postman

@@ -55,6 +55,9 @@ import time
 #  Import our central logger
 from modules.logging_config import logger
 from modules.chat_logger import ChatLogger
+from modules.error_classifier import ErrorClassifierService
+
+_error_classifier_service = ErrorClassifierService()
 from modules.analysis import store_metadata, store_feedback, get_user_role, get_analysis_records, get_feedback_records
 from modules.login import (verify_reset_identity,generate_reset_token,send_reset_email,validate_reset_token,reset_user_password,is_valid_password,authenticate_user_backend,register_user,is_user_pending_approval,log_login_event,create_access_token)
 
@@ -816,6 +819,111 @@ async def process_zip_file(
             detail=f"Error processing ZIP file: {str(e)}"
         )
 
+
+@router.get("/error-summary")
+async def get_error_summary(
+    session_id: Optional[str] = Query(default=None),
+    skip_p5: bool = Query(default=False, description="Exclude P5 verbose/trace entries from results"),
+):
+    """
+    FUNCTION:
+        get_error_summary
+
+    DESCRIPTION:
+        Parses TRCERROR.PRN and TRCTRACE.PRN from the current session's
+        extracted ZIP contents and returns a classified error summary table.
+        Errors are categorised by severity:
+            P1 — Critical / Exception
+            P2 — Error / Reboot
+            P3 — Warning
+            P5 — Verbose / Trace
+
+    USAGE:
+        GET /error-summary
+        GET /error-summary?skip_p5=true
+        GET /error-summary?session_id=<id>
+
+    PARAMETERS:
+        session_id (str)  : Optional. Session to read PRN content from.
+                            Defaults to CURRENT_SESSION_ID.
+        skip_p5 (bool)    : Optional. If true, P5 verbose entries are excluded.
+                            Default: false.
+
+    RETURNS:
+        dict :
+            {
+                "session_id"           : str,
+                "total_unique_errors"  : int,
+                "severity_counts"      : { "P1": int, "P2": int, "P3": int, "P5": int },
+                "summary"              : [
+                    {
+                        "no"          : int,
+                        "trace"       : str,
+                        "severity"    : str,
+                        "sev_label"   : str,
+                        "source"      : str,
+                        "message"     : str,
+                        "type_error"  : str,
+                        "count"       : int,
+                        "source_file" : str
+                    },
+                    ...
+                ]
+            }
+
+    RAISES:
+        404 : Session not found.
+        500 : Unexpected server error.
+    """
+    session_id = _resolve_session_id(session_id)
+
+    try:
+        if not session_service.session_exists(session_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Session '{session_id}' not found."
+            )
+
+        session_data = session_service.get_session(session_id)
+
+        has_trcerror = bool(session_data.get("trc_error_contents"))
+        has_trctrace = bool(session_data.get("trc_trace_contents"))
+
+        if not has_trcerror and not has_trctrace:
+            return {
+                "session_id": session_id,
+                "total_unique_errors": 0,
+                "severity_counts": {"P1": 0, "P2": 0, "P3": 0, "P5": 0},
+                "summary": [],
+                "message": "No PRN files found in session. Upload a ZIP containing TRCERROR.PRN or TRCTRACE.PRN.",
+            }
+
+        rows = _error_classifier_service.classify_from_session(
+            session_data, skip_p5=skip_p5
+        )
+
+        p1 = sum(1 for r in rows if r["severity"] == "P1")
+        p2 = sum(1 for r in rows if r["severity"] == "P2")
+        p3 = sum(1 for r in rows if r["severity"] == "P3")
+        p5 = sum(1 for r in rows if r["severity"] == "P5")
+
+        logger.info(
+            f"[/error-summary] session={session_id} "
+            f"rows={len(rows)} P1={p1} P2={p2} P3={p3} P5={p5}"
+        )
+
+        return {
+            "session_id": session_id,
+            "total_unique_errors": len(rows),
+            "severity_counts": {"P1": p1, "P2": p2, "P3": p3, "P5": p5},
+            "summary": rows,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"[/error-summary] Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/extract-files/")

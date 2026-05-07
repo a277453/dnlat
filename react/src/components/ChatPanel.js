@@ -5,7 +5,7 @@
  * non-streaming endpoint for simplicity; swap to SSE if needed.
  */
 import React, { useState, useRef, useEffect } from 'react';
-import api from '../../utils/api';
+import api from '../utils/api';
 
 function ChatMessage({ role, content }) {
   const isUser = role === 'user';

@@ -6378,7 +6378,7 @@ def render_ndc_decoder():
     </style>
     """, unsafe_allow_html=True)
 
-    st.markdown("## 📡 NDC Message Decoder")
+    st.markdown("## NDC Message Decoder")
     st.caption(
         "Decode raw CCProtFW1 NDC protocol messages — paste lines directly "
         "or upload a `.jrn` log file to extract all messages automatically."

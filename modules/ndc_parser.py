@@ -54,6 +54,7 @@ MESSAGE_CLASS_MAP = {
     "22": ("Go Next State / Acknowledge",              "HOST→ATM"),
     "24": ("Send PIN / Cancel",                        "HOST→ATM"),
     "30": ("Go In Service / Screen Load",              "HOST→ATM"),
+    "31": ("FIT Data Load",                            "HOST→ATM"),
     "80": ("EMV / Encryption Config Download",         "HOST→ATM"),
     "83": ("Supervisor Reply",                         "HOST→ATM"),
     "84": ("Go Out of Service (Supervisor)",           "HOST→ATM"),
@@ -985,6 +986,79 @@ def _decode_30(f: list, msg: NdcMessage) -> None:
             msg.fields.append(("…", f"({len(data_fields)-5} more fields)"))
 
 
+def _decode_31_fit(f: list, msg: NdcMessage) -> None:
+    """FIT Data Load  (HOST→ATM)
+
+    Spec: Table 10-7 — FIT Data Load
+    Downloads Financial Institution Tables (FITs) to the terminal.
+    Up to 1000 FITs can be stored; each FIT controls PIN encryption,
+    PIN verification, and indirect next-state processing for a card range.
+
+    Layout:
+        [0]  b+c   "3" + response_flag (optional, ignored by terminal)
+        [1]  d     LUNO (3 chars, optional, ignored by terminal)
+        [2]  e     Message Sequence Number (3 chars, optional, ignored)
+        [3]  f+g   Sub-class "1" + Identifier "5" packed = "15"
+        [4]  h     FIT Number (3 chars, 000–999, defines search order)
+        [5]  i     FIT Data (var, up to 41 three-char decimal entries, 000–255)
+        [6]  j     FIT Number (3 chars) — repeated per Table Note 13
+        [7]  k     FIT Data (var) — repeated per Table Note 13
+        ...        Fields j+k repeat until protocol length limit
+        [-2] FS    Field Separator (only if MAC present — Table Note 14)
+        [-1] l     MAC Data (8 chars, 0-9 A-F, only if auth flags set)
+    """
+    resp_flag = f[0][1:] if len(f[0]) > 1 else ""
+    luno      = f[1].strip() if len(f) > 1 else ""
+    seq       = f[2].strip() if len(f) > 2 else ""
+    subclass  = f[3].strip() if len(f) > 3 else ""
+
+    if luno: msg.fields.append(("LUNO",              luno))
+    if seq:  msg.fields.append(("Sequence Number",   seq))
+
+    # Verify subclass+identifier = "15"
+    if subclass != "15":
+        msg.fields.append(("Sub-class/Identifier", subclass))
+    else:
+        msg.fields.append(("Type", "Customisation Data — FIT Data"))
+
+    # FIT entries: field[4]=FIT_num, field[5]=FIT_data, repeated
+    # Last field may be MAC (8 hex chars) if message auth is enabled
+    fit_fields = f[4:]
+
+    # Detect trailing MAC: last field = 8 hex chars with no FIT num before it
+    mac = ""
+    if fit_fields and re.match(r"^[0-9A-Fa-f]{8}$", fit_fields[-1].strip()):
+        mac = fit_fields[-1].strip()
+        fit_fields = fit_fields[:-1]
+
+    # Parse FIT num+data pairs
+    fit_count = 0
+    i = 0
+    while i < len(fit_fields) - 1:
+        fit_num  = fit_fields[i].strip()
+        fit_data = fit_fields[i+1].strip()
+        i += 2
+
+        if not fit_num: continue
+
+        # FIT data = series of 3-char decimal entries (000-255)
+        # Each entry is a control word for PIN/next-state processing
+        entries = [fit_data[j:j+3] for j in range(0, len(fit_data), 3)
+                   if fit_data[j:j+3]]
+        entry_count = len(entries)
+        entry_preview = ", ".join(entries[:6])
+        if entry_count > 6:
+            entry_preview += f"… (+{entry_count-6} more)"
+
+        msg.fields.append((f"FIT {fit_num}",
+                           f"{entry_count} entries: {entry_preview}"))
+        fit_count += 1
+
+    msg.fields.append(("FIT Tables Loaded", str(fit_count)))
+    if mac:
+        msg.fields.append(("MAC Data", mac))
+
+
 def _decode_80(f: list, msg: NdcMessage) -> None:
     luno    = f[1].strip() if len(f) > 1 else ""
     subtype = f[2].strip() if len(f) > 2 else ""
@@ -1236,6 +1310,7 @@ def decode_message(raw: str) -> NdcMessage:
         elif cls == "10":                       _decode_10(fields, msg)
         elif cls == "12":                       _decode_12(fields, msg)
         elif cls == "30":                       _decode_30(fields, msg)
+        elif cls == "31":                       _decode_31_fit(fields, msg)
         elif cls == "80":                       _decode_80(fields, msg)
         elif cls == "23":                       _decode_23(fields, msg)
         elif cls == "6":                        _decode_6_ej(fields, msg)

@@ -41,45 +41,68 @@ from pathlib import Path
 # Patterns that QUALIFY a line as a major error worth capturing
 # ---------------------------------------------------------------------------
 MAJOR_PATTERNS = [
-    # DB connectivity & schema
+    # ── DB connectivity & schema ──────────────────────────────────────────
     re.compile(r"DB connection returned None", re.IGNORECASE),
+    re.compile(r"Database connection failed", re.IGNORECASE),
+    re.compile(r"DB connection failed", re.IGNORECASE),
     re.compile(r"employee_code could not be retrieved from DB", re.IGNORECASE),
     re.compile(r"employee_code column may be renamed or deleted", re.IGNORECASE),
     re.compile(r"could not import get_db_connection", re.IGNORECASE),
     re.compile(r"DB bootstrap failed", re.IGNORECASE),
     re.compile(r"DB query failed", re.IGNORECASE),
+    re.compile(r"Failed to create login_history table due to DB connection failure", re.IGNORECASE),
+    re.compile(r"create_reset_tokens_table: DB connection failed", re.IGNORECASE),
+    re.compile(r"generate_reset_token: DB connection failed", re.IGNORECASE),
+    re.compile(r"reset_user_password: DB connection failed", re.IGNORECASE),
+    re.compile(r"verify_reset_identity: DB connection failed", re.IGNORECASE),
+    re.compile(r"Login event not logged.*DB connection failed", re.IGNORECASE),
     re.compile(r"database.*error|error.*database", re.IGNORECASE),
     re.compile(r"connection.*refused|refused.*connection", re.IGNORECASE),
     re.compile(r"OperationalError|ProgrammingError|InterfaceError", re.IGNORECASE),
 
-    # Auth / RBAC / JWT
-    re.compile(r"RBAC \[40[13]\]", re.IGNORECASE),           # 401 and 403
+    # ── Auth / RBAC / JWT ─────────────────────────────────────────────────
+    re.compile(r"RBAC \[40[13]\]", re.IGNORECASE),
+    re.compile(r"MIDDLEWARE \[401\]", re.IGNORECASE),
+    re.compile(r"FEEDBACK \[401\]", re.IGNORECASE),
     re.compile(r"Authentication token missing", re.IGNORECASE),
+    re.compile(r"JWT decode failed", re.IGNORECASE),
     re.compile(r"could not decode JWT", re.IGNORECASE),
     re.compile(r"invalid.*token|token.*invalid|token.*expired", re.IGNORECASE),
+    re.compile(r"invalid/expired token", re.IGNORECASE),
     re.compile(r"unauthorized|unauthenticated", re.IGNORECASE),
     re.compile(r"Login.*fail|fail.*login", re.IGNORECASE),
+    re.compile(r"Login verification failed", re.IGNORECASE),
+    re.compile(r"authenticate_user_backend.*failed", re.IGNORECASE),
 
-    # Session degradation (our custom fallback)
+    # ── Password reset / identity security ───────────────────────────────
+    re.compile(r"Reset identity verification failed", re.IGNORECASE),
+    re.compile(r"validate_reset_token:.*invalid.*expired.*used", re.IGNORECASE),
+    re.compile(r"reset_password_endpoint: reset failed", re.IGNORECASE),
+    re.compile(r"User registration failed", re.IGNORECASE),
+
+    # ── Session degradation ───────────────────────────────────────────────
     re.compile(r"session ID will use.*undefined.*suffix", re.IGNORECASE),
     re.compile(r"_build_session_id.*degraded", re.IGNORECASE),
 
-    # LLM / Ollama
+    # ── LLM / Ollama ──────────────────────────────────────────────────────
     re.compile(r"Ollama is not installed", re.IGNORECASE),
     re.compile(r"LLM.*fail|fail.*LLM", re.IGNORECASE),
     re.compile(r"LLM call failed", re.IGNORECASE),
+    re.compile(r"chat_transaction.*LLM call failed", re.IGNORECASE),
 
-    # Top-level pipeline crashes
-    re.compile(r"DB bootstrap failed", re.IGNORECASE),
+    # ── Top-level pipeline crashes ────────────────────────────────────────
     re.compile(r"Analysis failed for transaction", re.IGNORECASE),
     re.compile(r"Visualization failed", re.IGNORECASE),
     re.compile(r"Unexpected failure", re.IGNORECASE),
+    re.compile(r"Unexpected error in /", re.IGNORECASE),
+    re.compile(r"chat_transaction.*no session found", re.IGNORECASE),
+    re.compile(r"chat_transaction_stream.*no session found", re.IGNORECASE),
 
-    # Unhandled exceptions (logger.exception always emits "ERROR" + traceback)
+    # ── Unhandled exceptions & tracebacks ────────────────────────────────
     re.compile(r"Traceback \(most recent call last\)", re.IGNORECASE),
     re.compile(r"Exception|Critical", re.IGNORECASE),
 
-    # HTTP 500
+    # ── HTTP 500 ──────────────────────────────────────────────────────────
     re.compile(r"\b500\b"),
 ]
 
@@ -110,6 +133,10 @@ EXCLUDE_PATTERNS = [
     re.compile(r"No processed ZIP found for session", re.IGNORECASE),
     re.compile(r"No file categories found for session", re.IGNORECASE),
     re.compile(r"Log file does not exist", re.IGNORECASE),
+    re.compile(r"Unexpected error in /error-summary", re.IGNORECASE),
+    re.compile(r"Unexpected error in /extract-registry", re.IGNORECASE),
+    re.compile(r"Unexpected error in /.*acu", re.IGNORECASE),
+    re.compile(r"ZIP extraction failed", re.IGNORECASE),
 ]
 
 # ---------------------------------------------------------------------------
@@ -118,10 +145,22 @@ EXCLUDE_PATTERNS = [
 EXCLUDED_LEVELS = {"DEBUG", "INFO", "WARNING"}
 
 # WARNING lines that are security signals — override the level exclusion
+# These are logged as WARNING in the codebase but are genuinely critical
 WARNING_OVERRIDE_PATTERNS = [
+    # RBAC / auth middleware
     re.compile(r"RBAC \[40[13]\]", re.IGNORECASE),
+    re.compile(r"MIDDLEWARE \[401\]", re.IGNORECASE),
+    re.compile(r"FEEDBACK \[401\]", re.IGNORECASE),
+    # JWT
+    re.compile(r"JWT decode failed", re.IGNORECASE),
     re.compile(r"could not decode JWT", re.IGNORECASE),
+    re.compile(r"invalid/expired token", re.IGNORECASE),
+    # Session degradation
     re.compile(r"session ID will use.*undefined", re.IGNORECASE),
+    # Password reset / identity
+    re.compile(r"Reset identity verification failed", re.IGNORECASE),
+    re.compile(r"validate_reset_token:.*invalid", re.IGNORECASE),
+    re.compile(r"reset_password_endpoint: reset failed", re.IGNORECASE),
 ]
 
 
@@ -162,7 +201,7 @@ def tail_and_monitor(log_path: Path, out_path: Path, poll_interval: float):
     - Major errors are also appended to *out_path*.
     """
     print(f"[log_monitor] Watching : {log_path}")
-    print(f"[log_monitor] Errors   : {out_path}")
+    print(f"[log_monitor] Errors  : {out_path}")
     print(f"[log_monitor] Poll     : {poll_interval}s")
     print("-" * 72)
 

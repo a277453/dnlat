@@ -367,3 +367,16 @@ async def health_check():
 
 # Export the set_processed_files_dir function so routes.py can use it
 __all__ = ['app', 'set_processed_files_dir', 'get_processed_files_dir']
+
+# ============================================
+# RELOAD EXCLUSIONS (prevents log file changes from triggering uvicorn --reload restarts)
+# ============================================
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+        reload_excludes=["*.log", "modules/critical_errors.log"],
+    )

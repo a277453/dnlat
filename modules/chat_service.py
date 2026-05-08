@@ -23,6 +23,7 @@ import ollama
 import os
 
 from modules.logging_config import logger
+from modules.ndc_parser import decode_message, extract_messages_from_jrn, NdcMessage
 
 MODEL_NAME = os.getenv("OLLAMA_MODEL", "llama3_log_analyzer")
 
@@ -122,6 +123,110 @@ _ONTOPIC_PATTERNS = re.compile(
     r')\b',
     re.IGNORECASE,
 )
+
+
+# ── NDC decode intent detection ───────────────────────────────────────────────
+# Matches questions that semantically ask to decode/show/explain the raw NDC
+# protocol messages in the log — without requiring any exact phrase.
+_NDC_INTENT_PATTERNS = re.compile(
+    r'\b('
+    # Explicit decode/parse/show requests on raw/protocol/hex/NDC/CCProtFW data
+    r'(decode|parse|interpret|read|show|explain|break\s*down|translate|decipher)'
+    r'\s+(the\s+)?(raw|ndc|protocol|ccprot|hex|binary|1c|\\1c|field).*?(message|log|data|line|frame)?|'
+    # "what do/does the raw messages mean/contain/say"
+    r'what\s+(do|does|are|is|did)\s+(the\s+)?raw\s+(messages?|log|data|lines?)|'
+    # Direct references to NDC or CCProtFW1 protocol
+    r'ndc\s+(message|log|data|protocol|frame|field|raw)|'
+    r'ccprot(fw1?)?\s*(message|log|raw)?|'
+    r'raw\s+(ndc|protocol|message|ccprot|field|1c)|'
+    # Field separator reference — characteristic of NDC messages
+    r'\\1c|\\x1c|field\s+separator|'
+    # Asking what the protocol messages mean/contain
+    r'(what\s+(do|does|are|is)\s+.{0,20}(raw|protocol|ndc|ccprot|hex|1c)\s*(message|line|data|log)|'
+    r'(protocol|ndc|ccprot)\s*(message|data|log|line|frame|hex))'
+    r')\b',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _detect_ndc_intent(question: str) -> bool:
+    """Returns True if the question is asking to decode/show NDC protocol messages."""
+    return bool(_NDC_INTENT_PATTERNS.search(question))
+
+
+def _extract_ndc_lines(ej_content: str, jrn_content: str) -> list:
+    """
+    Extract raw NDC messages from EJ or JRN content already loaded for this transaction.
+    Uses extract_messages_from_jrn which reads 41004/41005 log lines.
+    Falls back to scanning any line that looks like a raw NDC message.
+    """
+    combined = "\n".join(filter(None, [ej_content, jrn_content]))
+    if not combined.strip():
+        return []
+
+    # Primary: use the jrn extractor (reads 41004/41005 event lines)
+    messages = extract_messages_from_jrn(combined)
+
+    # Fallback: scan for bare NDC lines (start with 2-hex + \1c)
+    if not messages:
+        _bare_ndc = re.compile(r'^[0-9A-Fa-f]{1,2}(?:\\1c|\x1c)', re.MULTILINE)
+        for line in combined.splitlines():
+            line = line.strip()
+            if _bare_ndc.match(line):
+                try:
+                    messages.append(decode_message(line))
+                except Exception:
+                    pass
+
+    return messages
+
+
+def _format_ndc_decoded(messages: list) -> str:
+    """
+    Format a list of NdcMessage objects into a clean plain-text response
+    suitable for the chat window.
+    """
+    if not messages:
+        return (
+            "No raw NDC protocol messages were found in this transaction's log. "
+            "NDC messages are extracted from 41004/41005 CCProtFW1 log lines — "
+            "they may not be present in all log types."
+        )
+
+    DIRECTION_ARROW = {"ATM→HOST": "↑ ATM→HOST", "HOST→ATM": "↓ HOST→ATM"}
+
+    lines = [f"Found {len(messages)} NDC message(s) in this transaction:\n"]
+
+    for i, msg in enumerate(messages, 1):
+        direction = DIRECTION_ARROW.get(msg.direction, msg.direction)
+        lines.append(f"{'─' * 50}")
+        lines.append(f"#{i}  [{msg.message_class}]  {direction}")
+        lines.append(f"    {msg.summary}")
+
+        for label, value in msg.fields:
+            if not value and label.startswith("─"):
+                lines.append(f"    {label}")
+            elif value:
+                lines.append(f"    {label:<30} {value}")
+
+        if msg.emv_tags:
+            lines.append(f"    EMV Tags ({len(msg.emv_tags)} decoded):")
+            for tag, val in msg.emv_tags.items():
+                lines.append(f"      {tag:<32} {val}")
+
+        if msg.receipt_lines:
+            lines.append(f"    Receipt ({len(msg.receipt_lines)} lines):")
+            for rl in msg.receipt_lines[:8]:
+                lines.append(f"      {rl}")
+            if len(msg.receipt_lines) > 8:
+                lines.append(f"      ... ({len(msg.receipt_lines) - 8} more lines)")
+
+        if msg.errors:
+            for err in msg.errors:
+                lines.append(f"    ⚠ {err}")
+
+    lines.append(f"{'─' * 50}")
+    return "\n".join(lines)
 
 
 def _layer_a_check(question: str) -> str:
@@ -327,6 +432,12 @@ def chat_turn(
     if not question or not question.strip():
         raise ValueError("Question cannot be empty.")
 
+    # ── NDC decode intercept (bypasses scope guard — always in-scope) ─────────
+    if _detect_ndc_intent(question):
+        logger.info(f"NDC DECODE INTERCEPT | question='{question[:80]}'")
+        messages = _extract_ndc_lines(ej_content or "", jrn_content or "")
+        return _format_ndc_decoded(messages)
+
     # Layer A
     layer_a_result = _layer_a_check(question)
     logger.info(
@@ -407,6 +518,13 @@ def chat_turn_stream(
     """
     if not question or not question.strip():
         raise ValueError("Question cannot be empty.")
+
+    # ── NDC decode intercept (bypasses scope guard — always in-scope) ─────────
+    if _detect_ndc_intent(question):
+        logger.info(f"NDC DECODE INTERCEPT [stream] | question='{question[:80]}'")
+        messages = _extract_ndc_lines(ej_content or "", jrn_content or "")
+        yield _format_ndc_decoded(messages)
+        return
 
     # ── Layer A ───────────────────────────────────────────────────────────────
     layer_a_result = _layer_a_check(question)

@@ -6584,9 +6584,11 @@ def render_ndc_decoder():
         for err in msg.errors:
             st.warning(f"⚠ {err}")
 
-        # Raw message
+        # Raw message — use text_area (disabled) to avoid hover-flicker
         with st.expander("Raw message", expanded=False):
-            st.code(msg.raw, language=None)
+            st.text_area("", value=msg.raw, height=80,
+                         disabled=True, key=f"ndc_raw_ta_{idx}",
+                         label_visibility="collapsed")
 
         st.divider()
 

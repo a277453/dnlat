@@ -43,6 +43,9 @@ from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import hashlib
 import os
 from modules.login import get_db_connection
+import logging
+from fastapi.logger import logger
+from modules.logging_config import logger
 from modules.streamlit_logger import logger as frontend_logger
 from dotenv import load_dotenv
 load_dotenv()  # auto load from root
@@ -204,6 +207,7 @@ def initialize_admin_table():
     if not conn:
         frontend_logger.error("Admin table initialization aborted due to DB connection failure")
         return
+    
 
     try:
         cursor = conn.cursor()
@@ -247,7 +251,7 @@ def initialize_admin_table():
         conn.commit()
         
     except Exception as e:
-        frontend_logger.exception("Error occurred while initializing admin table")
+        logger.exception("Error occurred while initializing admin table")
         conn.rollback()
     finally:
         conn.close()

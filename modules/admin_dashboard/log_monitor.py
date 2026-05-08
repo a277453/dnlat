@@ -34,8 +34,20 @@ import re
 import time
 import argparse
 import sys
+import io
 from datetime import datetime
 from pathlib import Path
+
+# Re-wrap stdout so un-encodable characters (e.g. \ufffd replacement chars that
+# slip through from app.log) are substituted rather than raising UnicodeEncodeError.
+# This is the most common crash on Windows where the console uses cp1252/charmap.
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(
+        sys.stdout.buffer,
+        encoding=sys.stdout.encoding or "utf-8",
+        errors="replace",
+        line_buffering=True,
+    )
 
 # ---------------------------------------------------------------------------
 # Patterns that QUALIFY a line as a major error worth capturing
@@ -43,6 +55,8 @@ from pathlib import Path
 MAJOR_PATTERNS = [
     # ── DB connectivity & schema ──────────────────────────────────────────
     re.compile(r"DB connection returned None", re.IGNORECASE),
+    re.compile(r".*Database.*fail", re.IGNORECASE),  
+    re.compile(r".*DB.*fail", re.IGNORECASE),
     re.compile(r"Database connection failed", re.IGNORECASE),
     re.compile(r"DB connection failed", re.IGNORECASE),
     re.compile(r"employee_code could not be retrieved from DB", re.IGNORECASE),
@@ -75,6 +89,7 @@ MAJOR_PATTERNS = [
     re.compile(r"authenticate_user_backend.*failed", re.IGNORECASE),
 
     # ── Password reset / identity security ───────────────────────────────
+    re.compile(r".*Password.*", re.IGNORECASE),
     re.compile(r"Reset identity verification failed", re.IGNORECASE),
     re.compile(r"validate_reset_token:.*invalid.*expired.*used", re.IGNORECASE),
     re.compile(r"reset_password_endpoint: reset failed", re.IGNORECASE),
@@ -86,12 +101,14 @@ MAJOR_PATTERNS = [
 
     # ── LLM / Ollama ──────────────────────────────────────────────────────
     re.compile(r"Ollama is not installed", re.IGNORECASE),
+    re.compile(r"Failed to connect to Ollama", re.IGNORECASE),
+    re.compile(r"Ollama.*unavailable|unavailable.*Ollama", re.IGNORECASE),
     re.compile(r"LLM.*fail|fail.*LLM", re.IGNORECASE),
     re.compile(r"LLM call failed", re.IGNORECASE),
     re.compile(r"chat_transaction.*LLM call failed", re.IGNORECASE),
+    re.compile(r"LLM Analysis Timeout", re.IGNORECASE),
 
     # ── Top-level pipeline crashes ────────────────────────────────────────
-    re.compile(r"Analysis failed for transaction", re.IGNORECASE),
     re.compile(r"Visualization failed", re.IGNORECASE),
     re.compile(r"Unexpected failure", re.IGNORECASE),
     re.compile(r"Unexpected error in /", re.IGNORECASE),
@@ -99,11 +116,20 @@ MAJOR_PATTERNS = [
     re.compile(r"chat_transaction_stream.*no session found", re.IGNORECASE),
 
     # ── Unhandled exceptions & tracebacks ────────────────────────────────
-    re.compile(r"Traceback \(most recent call last\)", re.IGNORECASE),
     re.compile(r"Exception|Critical", re.IGNORECASE),
 
-    # ── HTTP 500 ──────────────────────────────────────────────────────────
+    # ── Streamlit / API connectivity ─────────────────────────────────────
+    re.compile(r"validate-reset-token API call failed", re.IGNORECASE),
+    re.compile(r"POST /reset-password API call failed", re.IGNORECASE),
+    re.compile(r"POST /forgot-password unexpected error", re.IGNORECASE),
+    re.compile(r"API call failed with status", re.IGNORECASE),
+
+    # ── HTTP errors ───────────────────────────────────────────────────────
+    re.compile(r"API call failed with status: [4-9]\d{2}", re.IGNORECASE),
     re.compile(r"\b500\b"),
+
+    # API
+    re.compile(r".*API.*",re.IGNORECASE),
 ]
 
 # ---------------------------------------------------------------------------
@@ -127,6 +153,7 @@ EXCLUDE_PATTERNS = [
     re.compile(r"Error processing .*(journal|file)", re.IGNORECASE),
     re.compile(r"Error extracting UI flow", re.IGNORECASE),
     re.compile(r"Could not read (registry|feedback) file", re.IGNORECASE),
+    re.compile(r"Analysis failed for transaction", re.IGNORECASE),
     re.compile(r"Failed to delete Temp run folder", re.IGNORECASE),
     re.compile(r"Invalid file type uploaded", re.IGNORECASE),
     re.compile(r"Only ZIP files are accepted", re.IGNORECASE),
@@ -167,6 +194,10 @@ WARNING_OVERRIDE_PATTERNS = [
 def is_major_error(line: str) -> bool:
     """Return True if this log line should be captured as a major error."""
 
+    # Lines without a leading timestamp are continuation lines (traceback frames, bare print statements, etc.) — never capture them.
+    if not re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", line):
+        return False
+
     # Extract log level from standard format:
     # 2026-05-06 03:16:22,344 [WARNING] [module:file] message
     level_match = re.search(r"\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]", line)
@@ -180,9 +211,17 @@ def is_major_error(line: str) -> bool:
         else:
             return False
 
-    # Apply exclusion patterns first (file-level noise)
+    # Apply exclusion patterns (file-level noise), but never exclude a line that also contains an infra-level signal like an Ollama/LLM failure.
+    INFRA_OVERRIDE_PATTERNS = [
+        re.compile(r"Ollama", re.IGNORECASE),
+        re.compile(r"LLM", re.IGNORECASE),
+        re.compile(r"DB connection", re.IGNORECASE),
+        re.compile(r"Database connection", re.IGNORECASE),
+		re.compile(r"API", re.IGNORECASE),
+    ]
     if any(p.search(line) for p in EXCLUDE_PATTERNS):
-        return False
+        if not any(p.search(line) for p in INFRA_OVERRIDE_PATTERNS):
+            return False
 
     # Must match at least one major pattern
     return any(p.search(line) for p in MAJOR_PATTERNS)
@@ -218,8 +257,6 @@ def tail_and_monitor(log_path: Path, out_path: Path, poll_interval: float):
     log_file = log_path.open("r", encoding="utf-8", errors="replace")
     log_file.seek(0, 2)  # SEEK_END
 
-    in_traceback = False   # track multi-line traceback blocks
-
     try:
         while True:
             line = log_file.readline()
@@ -234,20 +271,7 @@ def tail_and_monitor(log_path: Path, out_path: Path, poll_interval: float):
             print(line_stripped)
 
             # --- traceback continuation logic ---
-            # Once we detect "Traceback (most recent call last)" we capture
-            # all subsequent lines until we hit the next timestamped log line.
-            if re.search(r"Traceback \(most recent call last\)", line):
-                in_traceback = True
-
-            is_new_log_line = bool(
-                re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", line)
-            )
-            if is_new_log_line and in_traceback:
-                # This new timestamped line ends the traceback block.
-                # Check if the new line itself is also a major error.
-                in_traceback = False
-
-            if in_traceback or is_major_error(line_stripped):
+            if is_major_error(line_stripped):
                 decorated = format_output_line(line_stripped)
                 out_file.write(decorated + "\n")
                 out_file.flush()
@@ -255,26 +279,27 @@ def tail_and_monitor(log_path: Path, out_path: Path, poll_interval: float):
     except KeyboardInterrupt:
         print("\n[log_monitor] Stopped by user.")
     finally:
-        out_file.write(
-            f"[log_monitor] Session ended at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        )
         out_file.close()
         log_file.close()
 
 
 def main():
+    this_dir = Path(__file__).resolve().parent          # dnlat/modules/admin_dashboard/
+    default_log = this_dir.parent / "app.log"           # dnlat/modules/app.log
+    default_out = this_dir / "critical_errors.log"      # dnlat/modules/admin_dashboard/critical_errors.log
+
     parser = argparse.ArgumentParser(
         description="Tail app.log and extract major infrastructure errors."
     )
     parser.add_argument(
         "--log",
-        default="app.log",
-        help="Path to the application log file (default: app.log)",
+        default=str(default_log),
+        help="Path to the application log file (default: ../app.log relative to this script)",
     )
     parser.add_argument(
         "--out",
-        default="critical_errors.log",
-        help="Output file for captured major errors (default: critical_errors.log)",
+        default=str(default_out),
+        help="Output file for captured major errors (default: critical_errors.log next to this script)",
     )
     parser.add_argument(
         "--poll",

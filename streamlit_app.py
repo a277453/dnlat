@@ -10,7 +10,9 @@ import plotly.express as px
 import os  
 from datetime import datetime  
 import numpy as np
+import logging
 from fastapi.logger import logger
+from modules.logging_config import logger
 from modules.analysis import create_analysis_table, create_feedback_table, create_userresponse_database
 from modules.chat_service import chat_turn as llm_chat_turn
 from modules.chat_logger import ChatLogger
@@ -743,7 +745,7 @@ inject_theme_css()
 # ============================================
 # GLOBAL VARIABLES
 # ============================================
-API_BASE_URL = "http://backend:8000/api/v1"
+API_BASE_URL = "http://localhost:8000/api/v1"
 
 def get_auth_headers() -> dict:
     """Returns Authorization: Bearer header carrying the JWT issued at login."""
@@ -960,6 +962,7 @@ def show_login_page():
                             st.error("  Invalid username or password")
                     except requests.exceptions.ConnectionError:
                         st.error("  Cannot connect to the server. Please try again later.")
+                        logger.error("Cannot connect to port 8000.")
                     except requests.exceptions.Timeout:
                         st.error("  Request timed out. Please try again.")
 
@@ -1135,9 +1138,11 @@ def show_register_page():
 
                 except requests.exceptions.ConnectionError:
                     st.error("Service temporarily unavailable. Please try again later.")
+                    logger.error("Servive unavailable.")
 
                 except requests.exceptions.Timeout:
                     st.error("Registration failed due to an internal error.")
+                    logger.error("Registration failed due to an internal error.")
                 
                 
         # ---------------------------
@@ -1264,7 +1269,7 @@ def show_forgot_password_page():
                         else:
                             _detail = _resp.json().get("detail", "Unknown error")
                             st.error(_detail)
-                            frontend_logger.warning(
+                            logger.warning(
                                 "POST /forgot-password returned %s for %s: %s",
                                 _resp.status_code, fp_username.strip(), _detail
                             )
@@ -1278,7 +1283,7 @@ def show_forgot_password_page():
                         st.error("Request timed out. Please try again.")
                     except Exception as _e:
                         st.error("An unexpected error occurred. Please try again.")
-                        frontend_logger.error(
+                        logger.error(
                             "POST /forgot-password unexpected error: %s", _e
                         )
 
@@ -1354,7 +1359,7 @@ def show_reset_password_page():
             )
         except Exception as _e:
             st.error("Cannot reach the API server. Please ensure it is running.")
-            frontend_logger.error("validate-reset-token API call failed: %s", _e)
+            logger.error("validate-reset-token API call failed: %s", _e)
             return
 
         if _val_resp.status_code != 200:
@@ -1448,7 +1453,7 @@ def show_reset_password_page():
                         )
                     except Exception as _e:
                         st.error("Cannot reach the API server. Please try again.")
-                        frontend_logger.error("POST /reset-password API call failed: %s", _e)
+                        logger.error("POST /reset-password API call failed: %s", _e)
                         _reset_resp = None
 
                 if _reset_resp and _reset_resp.status_code == 200:
@@ -2059,7 +2064,7 @@ def render_transaction_stats():
         check_response = requests.get(
             f"{API_BASE_URL}/transaction-statistics",
                 headers=get_auth_headers(),
-            timeout=30
+            timeout=300
         )
         if check_response.status_code in (401, 403):
             st.error(" Access Denied — your role does not have permission to use this feature.")
@@ -2105,7 +2110,7 @@ def render_transaction_stats():
         response = requests.get(
             f"{API_BASE_URL}/transaction-statistics",
                 headers=get_auth_headers(),
-            timeout=30
+            timeout=300
         )
         if response.status_code in (401, 403):
             st.error(" Access Denied — your role does not have permission to use this feature.")
@@ -2140,7 +2145,7 @@ def render_transaction_stats():
                 # Get source files information
                 sources_response = requests.get(
                     f"{API_BASE_URL}/get-transactions-with-sources",
-                    timeout=30,
+                    timeout=300,
                     headers=get_auth_headers()
                 )
                 
@@ -2165,7 +2170,7 @@ def render_transaction_stats():
                             filter_response = requests.post(
                                 f"{API_BASE_URL}/filter-transactions-by-sources",
                                 json={"source_files": selected_sources},
-                                timeout=30,
+                                timeout=300,
                                 headers=get_auth_headers()
                             )
                             
@@ -2371,6 +2376,7 @@ def render_transaction_stats():
         st.error("  Request timeout. Please try again.")
     except requests.exceptions.ConnectionError:
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
+        logger.error("Ensure the API server is running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error loading transaction statistics: {str(e)}")
         with st.expander(" Debug Information"):
@@ -2505,8 +2511,10 @@ RAISES:
                     
     except requests.exceptions.Timeout:
         st.error("  Request timeout. Please try again.")
+        logger.error("Request timeout.")
     except requests.exceptions.ConnectionError:
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
+        logger.error("API server may not be running on Backend:8000.")
     except Exception as e:
         st.error(f"  Error: {str(e)}")
         logger.exception("Error in render_registry_single")
@@ -2529,7 +2537,7 @@ def render_registry_compare():
             f"{API_BASE_URL}/get-registry-contents",
                 headers=get_auth_headers(),
             params={"session_id": "current_session"},
-            timeout=30
+            timeout=300
         )
         if response.status_code in (401, 403):
             st.error(" Access Denied — your role does not have permission to use this feature.")
@@ -2761,7 +2769,7 @@ def render_transaction_comparison():
         try:
             sources_response = requests.get(
                 f"{API_BASE_URL}/get-transactions-with-sources",
-                timeout=30,
+                timeout=300,
                 headers=get_auth_headers()
             )
             
@@ -3322,8 +3330,10 @@ def render_transaction_comparison():
                     
             except requests.exceptions.Timeout:
                 st.error("⏱  Request timeout while comparing transactions. Please try again.")
+                logger.error("Request timeout.")
             except requests.exceptions.ConnectionError:
                 st.error("  Connection error. Ensure the API server is running.")
+                logger.error("API server down.")
             except Exception as e:
                 st.error(f"  Error during comparison: {str(e)}")
                 with st.expander("  Debug Information"):
@@ -3331,8 +3341,10 @@ def render_transaction_comparison():
     
     except requests.exceptions.Timeout:
         st.error("Request timeout. Please try again.")
+        logger.error("Request timeout.")
     except requests.exceptions.ConnectionError:
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
+        logger.error("API server down.")
     except Exception as e:
         st.error(f"  Error in transaction comparison: {str(e)}")
   
@@ -3663,8 +3675,10 @@ def render_ui_flow_individual():
                     
             except requests.exceptions.Timeout:
                 st.error("Request timeout. Please try again.")
+                logger.error("Request timeout.")
             except requests.exceptions.ConnectionError:
                 st.error("  Connection error. Ensure the API server is running on Backend:8000.")
+                logger.error("Ensure API server is running on Backend:8000. ")
             except Exception as e:
                 st.error(f"  Error in UI flow visualization: {str(e)}")
                 with st.expander("  Debug Information"):
@@ -3672,8 +3686,10 @@ def render_ui_flow_individual():
     
     except requests.exceptions.Timeout:
         st.error("Request timeout. Please try again.")
+        logger.error("Request timeout.")
     except requests.exceptions.ConnectionError:
         st.error("  Connection error. Ensure the API server is running on Backend:8000.")
+        logger.error("Ensure API server is running on Backend:8000. ")
     except Exception as e:
         st.error(f"  Error loading UI flow: {str(e)}")
         with st.expander("  Debug Information"):
@@ -4375,8 +4391,10 @@ def render_consolidated_flow():
                         
                 except requests.exceptions.Timeout:
                     st.error("Request timeout. Please try again.")
+                    logger.error("Request timeout.")
                 except requests.exceptions.ConnectionError:
                     st.error("Connection error. Ensure the API server is running.")
+                    logger.error("Ensure the API server is running.")
                 except Exception as e:
                     st.error(f"  Error: {str(e)}")
                     with st.expander("  Debug Information"):
@@ -4682,8 +4700,10 @@ RAISES:
                         
                 except requests.exceptions.Timeout:
                     st.error("⏱  Analysis timeout. The model may be taking too long to respond.")
+                    logger.error("LLM Analysis Timeout.")
                 except requests.exceptions.ConnectionError:
                     st.error("  Connection error. Ensure the API server and Ollama are running.")
+                    logger.error("Ensure the API server and Ollama are running.")
                 except Exception as e:
                     st.error(f"  Error: {str(e)}")
         
@@ -5030,6 +5050,7 @@ RAISES:
                         st.error(response.json().get("detail", "Something went wrong."))
                 except Exception as e:
                     st.error(f"Failed to connect to API: {str(e)}")
+                    logger.error(f"Failed to connect to API: {str(e)}")
 
         # ============================================
         # VIEW FEEDBACK FROM DB  (ADMIN + DEV_MODE ONLY)
@@ -5071,6 +5092,7 @@ RAISES:
                         st.error(response.json().get("detail", "Something went wrong."))
                 except Exception as e:
                     st.error(f"Failed to connect to API: {str(e)}")
+                    logger.error(f"Failed to connect to API: {str(e)}")
 
 def render_counters_analysis():
     """
@@ -5114,7 +5136,7 @@ RAISES:
         try:
             sources_response = requests.get(
                 f"{API_BASE_URL}/get-transactions-with-sources",
-                timeout=30,
+                timeout=300,
                 headers=get_auth_headers()
             )
             
@@ -5160,7 +5182,7 @@ RAISES:
         # Get source files and transactions
         sources_response = requests.get(
             f"{API_BASE_URL}/get-transactions-with-sources",
-            timeout=30,
+            timeout=300,
             headers=get_auth_headers()
         )
         
@@ -5527,9 +5549,11 @@ RAISES:
                                                     st.session_state["_cmp_result"] = {}
                                             except requests.exceptions.Timeout:
                                                 st.error("  Request timeout while computing comparison.")
+                                                logger.error("Request timeout while computing comparison.")
                                                 st.session_state["_cmp_result"] = {}
                                             except requests.exceptions.ConnectionError:
                                                 st.error("  Connection error while computing comparison.")
+                                                logger.error("Connection error while computing comparison.")
                                                 st.session_state["_cmp_result"] = {}
                                             except Exception as e:
                                                 st.error(f"  Error computing comparison: {e}")
@@ -5617,8 +5641,10 @@ RAISES:
                     
             except requests.exceptions.Timeout:
                 st.error("  Request timeout. Please try again.")
+                logger.error("Request Timeout.")
             except requests.exceptions.ConnectionError:
                 st.error("  Connection error. Ensure the API server is running.")
+                logger.error("Ensure the API server is running.")
             except Exception as e:
                 st.error(f"  Error: {str(e)}")
                 with st.expander("  Debug Information"):
@@ -5951,8 +5977,10 @@ RAISES:
                                 
                 except requests.exceptions.Timeout:
                     st.error("⏱  Request timeout.")
+                    logger.error("Request timeout.")
                 except requests.exceptions.ConnectionError:
                     st.error("  Connection error. Check if API server is running.")
+                    logger.error("Check if API server is running.")
                 except Exception as e:
                     st.error(f"  Error: {str(e)}")
                     with st.expander("  Debug Info"):
@@ -6400,8 +6428,10 @@ def show_main_app():
                         
                 except requests.exceptions.Timeout:
                     st.error("Request timeout. The file may be too large or the server is not responding.")
+                    logger.error("Request Timeout")
                 except requests.exceptions.ConnectionError:
                     st.error("Connection error. Please ensure the FastAPI server is running on Backend:8000.")
+                    logger.error("Ensure the FastAPI server is running on Backend:8000.")
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
         else:

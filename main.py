@@ -1,4 +1,4 @@
-import subprocess
+import threading
 import sys
 
 from fastapi import FastAPI, HTTPException
@@ -40,38 +40,25 @@ async def lifespan(app: FastAPI):
     logger.info(" Ready to accept requests")
     logger.info("=" * 60)
 
-    # ── Start log_monitor as a background process ──────────────────
-    _monitor_proc = None
-    try:
-        _base        = Path(__file__).resolve().parent
-        _monitor_py  = _base / "modules" / "log_monitor.py"
-        _log_path    = _base / "modules" / "app.log"
-        _out_path    = _base / "modules" / "critical_errors.log"
+    # ── Start log_monitor as a background thread ───────────────────
+    from modules.admin_dashboard.log_monitor import tail_and_monitor
+    _base     = Path(__file__).resolve().parent
+    _log_path = _base / "modules" / "app.log"
+    _out_path = _base / "modules" / "admin_dashboard" / "critical_errors.log"
 
-
-        _monitor_proc = subprocess.Popen(
-            [sys.executable, str(_monitor_py),
-             "--log", str(_log_path),
-             "--out", str(_out_path)],
-            # Keep stderr visible in the uvicorn terminal so failures surface
-            stdout=subprocess.DEVNULL,
-            stderr=None,
-        )
-        print(f"[lifespan] log_monitor started (pid={_monitor_proc.pid})", flush=True)
-    except Exception as e:
-        print(f"[lifespan] ERROR — could not start log_monitor: {e}", flush=True)
+    _monitor_thread = threading.Thread(
+        target=tail_and_monitor,
+        args=(_log_path, _out_path, 1.0),
+        daemon=True
+    )
+    _monitor_thread.start()
+    print(f"[lifespan] log_monitor thread started", flush=True)
     # ───────────────────────────────────────────────────────────────
 
     yield  # Application runs after this
 
     # ── Shutdown ───────────────────────────────────────────────────
-    if _monitor_proc and _monitor_proc.poll() is None:
-        _monitor_proc.terminate()
-        try:
-            _monitor_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            _monitor_proc.kill()
-        print(f"[lifespan] log_monitor stopped (pid={_monitor_proc.pid})", flush=True)
+    # daemon=True means the thread stops automatically when uvicorn exits
 
     logger.info("=" * 60)
     logger.info("API shutting down...")
@@ -367,16 +354,3 @@ async def health_check():
 
 # Export the set_processed_files_dir function so routes.py can use it
 __all__ = ['app', 'set_processed_files_dir', 'get_processed_files_dir']
-
-# ============================================
-# RELOAD EXCLUSIONS (prevents log file changes from triggering uvicorn --reload restarts)
-# ============================================
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="127.0.0.1",
-        port=8000,
-        reload=True,
-        reload_excludes=["*.log", "modules/critical_errors.log"],
-    )

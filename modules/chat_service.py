@@ -23,7 +23,7 @@ import ollama
 import os
 
 from modules.logging_config import logger
-from modules.ndc_parser import decode_message, extract_messages_from_jrn, NdcMessage
+from modules.ndc_parser import extract_messages_from_jrn, decode_message
 
 MODEL_NAME = os.getenv("OLLAMA_MODEL", "llama3_log_analyzer")
 
@@ -107,7 +107,7 @@ _ONTOPIC_PATTERNS = re.compile(
     r'dispense|dispenser|cassette|cash\b|retract|shutter|card\b|pin\b|'
     r'receipt|printer|sensor|cdm\b|presenter|purge|reject\b|'
     r'diebold|nixdorf|\bdn\b|atm\b|terminal\b|tid\b|'
-    r'ccprotfw|tdr_|emv\b|icc\b|host\s+(offline|timeout|error|response)|'
+    r'ccprotfw|ndc\b|raw\s+message|raw\s+protocol|\\1c|1c\s+message|tdr_|emv\b|icc\b|host\s+(offline|timeout|error|response)|'
     r'authoris|authoriz|'
     r'3[0-9]{3}\b|4[0-9]{4}\b|'
     r'rollback|reversal|time.?out|cancel|abandon|'
@@ -125,107 +125,179 @@ _ONTOPIC_PATTERNS = re.compile(
 )
 
 
+
 # ── NDC decode intent detection ───────────────────────────────────────────────
-# Matches questions that semantically ask to decode/show/explain the raw NDC
-# protocol messages in the log — without requiring any exact phrase.
-_NDC_INTENT_PATTERNS = re.compile(
-    r'\b('
-    # Explicit decode/parse/show requests on raw/protocol/hex/NDC/CCProtFW data
-    r'(decode|parse|interpret|read|show|explain|break\s*down|translate|decipher)'
-    r'\s+(the\s+)?(raw|ndc|protocol|ccprot|hex|binary|1c|\\1c|field).*?(message|log|data|line|frame)?|'
-    # "what do/does the raw messages mean/contain/say"
-    r'what\s+(do|does|are|is|did)\s+(the\s+)?raw\s+(messages?|log|data|lines?)|'
-    # Direct references to NDC or CCProtFW1 protocol
-    r'ndc\s+(message|log|data|protocol|frame|field|raw)|'
-    r'ccprot(fw1?)?\s*(message|log|raw)?|'
-    r'raw\s+(ndc|protocol|message|ccprot|field|1c)|'
-    # Field separator reference — characteristic of NDC messages
-    r'\\1c|\\x1c|field\s+separator|'
-    # Asking what the protocol messages mean/contain
-    r'(what\s+(do|does|are|is)\s+.{0,20}(raw|protocol|ndc|ccprot|hex|1c)\s*(message|line|data|log)|'
-    r'(protocol|ndc|ccprot)\s*(message|data|log|line|frame|hex))'
-    r')\b',
-    re.IGNORECASE | re.DOTALL,
-)
+# Simple keyword-based detection — if any of these appear in the question,
+# route to the NDC decoder instead of the LLM.
+_NDC_KEYWORDS = {
+    "ndc", "41004", "41005", "ccprotfw1", "ccprot",
+    "raw message", "\\1c", "\\x1c", "field separator",
+    "ndc message", "ndc messages",
+    "decode ndc", "parse ndc", "show ndc",
+}
 
 
 def _detect_ndc_intent(question: str) -> bool:
     """Returns True if the question is asking to decode/show NDC protocol messages."""
-    return bool(_NDC_INTENT_PATTERNS.search(question))
+    q = question.lower()
+    return any(kw in q for kw in _NDC_KEYWORDS)
 
 
-def _extract_ndc_lines(ej_content: str, jrn_content: str) -> list:
+def _extract_ndc_from_sources(ej_content, jrn_content, txn_data: dict) -> list:
     """
-    Extract raw NDC messages from EJ or JRN content already loaded for this transaction.
-    Uses extract_messages_from_jrn which reads 41004/41005 log lines.
-    Falls back to scanning any line that looks like a raw NDC message.
+    Extract NDC messages for the current transaction from all available log sources.
+
+    Filters jrn/ej content to the transaction time window (Start Time / End Time
+    from txn_data) so only NDC messages belonging to this transaction are returned.
     """
-    combined = "\n".join(filter(None, [ej_content, jrn_content]))
-    if not combined.strip():
+    import re as _re
+    _RAW_NDC_LINE = _re.compile(r'\b(41004|41005)\b.*raw message', _re.IGNORECASE)
+    _TS_RE        = _re.compile(r'^(\d{2}:\d{2}:\d{2})')
+
+    def _collect_texts(source) -> list:
+        if isinstance(source, dict):
+            return [v for v in source.values() if v and isinstance(v, str)]
+        if isinstance(source, str) and source.strip():
+            return [source]
         return []
 
-    # Primary: use the jrn extractor (reads 41004/41005 event lines)
-    messages = extract_messages_from_jrn(combined)
+    def _filter_by_window(text: str, start: str, end: str) -> str:
+        """Keep only lines whose HH:MM:SS timestamp falls within (start, end].
+        Start is exclusive to avoid picking up the previous transaction's
+        final messages that share the same start timestamp.
 
-    # Fallback: scan for bare NDC lines (start with 2-hex + \1c)
-    if not messages:
-        _bare_ndc = re.compile(r'^[0-9A-Fa-f]{1,2}(?:\\1c|\x1c)', re.MULTILINE)
-        for line in combined.splitlines():
-            line = line.strip()
-            if _bare_ndc.match(line):
-                try:
-                    messages.append(decode_message(line))
-                except Exception:
-                    pass
+        41004/41005 lines may contain embedded newline bytes (\x0a from receipt
+        data). These are rejoined before filtering so the full raw NDC string
+        is preserved on a single line for the parser.
+        """
+        if not start or not end:
+            return text
+
+        # Step 1: rejoin lines that are continuations of 41004/41005 raw messages.
+        # A continuation line has no HH:MM:SS prefix. We detect the start of a
+        # 41004/41005 block and concatenate until the next timestamped line.
+        rejoined = []
+        buf = None
+        for line in text.splitlines():
+            has_ts = bool(_TS_RE.match(line.strip()))
+            if has_ts:
+                if buf is not None:
+                    rejoined.append(buf)
+                buf = line
+            else:
+                if buf is not None:
+                    buf = buf + " " + line.strip()
+                # else: leading non-ts line, skip
+        if buf is not None:
+            rejoined.append(buf)
+
+        # Step 2: filter by time window
+        filtered = []
+        for line in rejoined:
+            m = _TS_RE.match(line.strip())
+            if m:
+                ts = m.group(1)
+                if start < ts <= end:
+                    filtered.append(line)
+        return "\n".join(filtered)
+
+    # Get transaction time window — try multiple sources
+    import re as _re2
+    def _hms(raw: str) -> str:
+        raw = str(raw or '').strip()
+        # handles "YYYY-MM-DD HH:MM:SS", "HH:MM:SS", pandas Timestamp str
+        m = _re2.search(r'(\d{2}:\d{2}:\d{2})', raw)
+        return m.group(1) if m else ''
+
+    start_time = ''
+    end_time   = ''
+    if txn_data:
+        # Primary: Start Time / End Time columns from DataFrame
+        start_time = _hms(txn_data.get('Start Time', ''))
+        end_time   = _hms(txn_data.get('End Time',   ''))
+
+        # Fallback: parse ts_start/ts_end from the prompt JSON block
+        if not start_time or not end_time:
+            prompt_str = str(txn_data.get('prompt', '') or '')
+            ts_s = _re2.search(r'"ts_start"\s*:\s*"(\d{2}:\d{2}:\d{2})"', prompt_str)
+            ts_e = _re2.search(r'"ts_end"\s*:\s*"(\d{2}:\d{2}:\d{2})"', prompt_str)
+            if ts_s: start_time = ts_s.group(1)
+            if ts_e: end_time   = ts_e.group(1)
+
+    # Gather and filter all text sources
+    raw_texts = (
+        _collect_texts(jrn_content) +
+        _collect_texts(ej_content) +
+        ([str(txn_data.get('Transaction Log', '') or '')] if txn_data else []) +
+        ([str(txn_data.get('prompt', '') or '')] if txn_data else [])
+    )
+    if start_time and end_time:
+        all_texts = [_filter_by_window(t, start_time, end_time) for t in raw_texts]
+    else:
+        all_texts = raw_texts
+
+    # Extract Format A NDC messages (41004/41005 raw lines only)
+    messages = []
+    seen_raws = set()
+    for text in all_texts:
+        if not _RAW_NDC_LINE.search(text):
+            continue
+        for m in extract_messages_from_jrn(text):
+            if m.raw not in seen_raws:
+                seen_raws.add(m.raw)
+                messages.append(m)
 
     return messages
 
 
 def _format_ndc_decoded(messages: list) -> str:
-    """
-    Format a list of NdcMessage objects into a clean plain-text response
-    suitable for the chat window.
-    """
+    """Format decoded NdcMessages into markdown for the Streamlit chat window."""
     if not messages:
         return (
-            "No raw NDC protocol messages were found in this transaction's log. "
-            "NDC messages are extracted from 41004/41005 CCProtFW1 log lines — "
+            "No raw NDC protocol messages were found in this transaction's log.  \n"
+            "NDC messages appear as 41004/41005 CCProtFW1 log lines -- "
             "they may not be present in all log types."
         )
 
-    DIRECTION_ARROW = {"ATM→HOST": "↑ ATM→HOST", "HOST→ATM": "↓ HOST→ATM"}
-
-    lines = [f"Found {len(messages)} NDC message(s) in this transaction:\n"]
+    DIRECTION = {"ATM->HOST": "ATM -> HOST", "HOST->ATM": "HOST -> ATM"}
+    # Sort chronologically by timestamp
+    messages = sorted(messages, key=lambda m: m.timestamp or "")
+    lines = [f"**Found {len(messages)} NDC message(s) in this transaction:**\n"]
 
     for i, msg in enumerate(messages, 1):
-        direction = DIRECTION_ARROW.get(msg.direction, msg.direction)
-        lines.append(f"{'─' * 50}")
-        lines.append(f"#{i}  [{msg.message_class}]  {direction}")
-        lines.append(f"    {msg.summary}")
-
+        direction = DIRECTION.get(msg.direction, msg.direction)
+        lines.append(f"---")
+        ts_label = f" @ {msg.timestamp}" if msg.timestamp else ""
+        lines.append(f"**#{i} [{msg.message_class}] {direction}{ts_label}**  ")
+        lines.append(f"*{msg.summary}*  \n")
+        # Raw message
+        raw_display = msg.raw[:120] + ("..." if len(msg.raw) > 120 else "")
+        lines.append(f"- **Raw:** `{raw_display}`  ")
+        # Decoded fields — skip "Op Code (raw)" since raw is already shown above
         for label, value in msg.fields:
-            if not value and label.startswith("─"):
-                lines.append(f"    {label}")
+            clean_label = label.strip("-_ ")
+            if clean_label.lower() in ("op code (raw)", "raw"):
+                clean_label = "Op Code"
+            if not value and label.startswith("-"):
+                lines.append(f"**{clean_label}**  ")
             elif value:
-                lines.append(f"    {label:<30} {value}")
-
+                lines.append(f"- **{clean_label}:** {value}  ")
         if msg.emv_tags:
-            lines.append(f"    EMV Tags ({len(msg.emv_tags)} decoded):")
+            lines.append(f"\n**EMV Tags ({len(msg.emv_tags)} decoded):**  ")
             for tag, val in msg.emv_tags.items():
-                lines.append(f"      {tag:<32} {val}")
-
+                lines.append(f"- `{tag}` {val}  ")
         if msg.receipt_lines:
-            lines.append(f"    Receipt ({len(msg.receipt_lines)} lines):")
+            lines.append(f"\n**Receipt ({len(msg.receipt_lines)} lines):**  ")
             for rl in msg.receipt_lines[:8]:
-                lines.append(f"      {rl}")
+                lines.append(f"  {rl}  ")
             if len(msg.receipt_lines) > 8:
-                lines.append(f"      ... ({len(msg.receipt_lines) - 8} more lines)")
-
+                lines.append(f"  *... ({len(msg.receipt_lines)-8} more lines)*  ")
         if msg.errors:
             for err in msg.errors:
-                lines.append(f"    ⚠ {err}")
+                lines.append(f"- **WARNING:** {err}  ")
+        lines.append("")
 
-    lines.append(f"{'─' * 50}")
+    lines.append("---")
     return "\n".join(lines)
 
 
@@ -416,8 +488,8 @@ def _build_chat_prompt(
 
 
 def chat_turn(
-    ej_content: str,
-    jrn_content: str,
+    ej_content,
+    jrn_content,
     analysis_result: str,
     history: list,
     question: str,
@@ -432,11 +504,18 @@ def chat_turn(
     if not question or not question.strip():
         raise ValueError("Question cannot be empty.")
 
-    # ── NDC decode intercept (bypasses scope guard — always in-scope) ─────────
+    # ── NDC intercept (before scope guard) ────────────────────────────────────
+    # Pass raw dict content so _extract_ndc_from_sources can search all files.
     if _detect_ndc_intent(question):
         logger.info(f"NDC DECODE INTERCEPT | question='{question[:80]}'")
-        messages = _extract_ndc_lines(ej_content or "", jrn_content or "")
-        return _format_ndc_decoded(messages)
+        ndc_msgs = _extract_ndc_from_sources(ej_content, jrn_content, txn_data or {})
+        return _format_ndc_decoded(ndc_msgs)
+
+    # Flatten dicts to strings for LLM prompt building
+    if isinstance(jrn_content, dict):
+        jrn_content = "\n".join(v for v in jrn_content.values() if v and isinstance(v, str))
+    if isinstance(ej_content, dict):
+        ej_content = "\n".join(v for v in ej_content.values() if v and isinstance(v, str))
 
     # Layer A
     layer_a_result = _layer_a_check(question)
@@ -498,8 +577,8 @@ def chat_turn(
 
 
 def chat_turn_stream(
-    ej_content: str,
-    jrn_content: str,
+    ej_content,
+    jrn_content,
     analysis_result: str,
     history: list,
     question: str,
@@ -519,12 +598,19 @@ def chat_turn_stream(
     if not question or not question.strip():
         raise ValueError("Question cannot be empty.")
 
-    # ── NDC decode intercept (bypasses scope guard — always in-scope) ─────────
+    # ── NDC intercept (before scope guard) ────────────────────────────────────
+    # Pass raw dict so _extract_ndc_from_sources can search all files.
     if _detect_ndc_intent(question):
         logger.info(f"NDC DECODE INTERCEPT [stream] | question='{question[:80]}'")
-        messages = _extract_ndc_lines(ej_content or "", jrn_content or "")
-        yield _format_ndc_decoded(messages)
+        ndc_msgs = _extract_ndc_from_sources(ej_content, jrn_content, txn_data or {})
+        yield _format_ndc_decoded(ndc_msgs)
         return
+
+    # Flatten dicts to strings for LLM prompt building
+    if isinstance(jrn_content, dict):
+        jrn_content = "\n".join(v for v in jrn_content.values() if v and isinstance(v, str))
+    if isinstance(ej_content, dict):
+        ej_content = "\n".join(v for v in ej_content.values() if v and isinstance(v, str))
 
     # ── Layer A ───────────────────────────────────────────────────────────────
     layer_a_result = _layer_a_check(question)

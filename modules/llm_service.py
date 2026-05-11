@@ -651,7 +651,26 @@ def analyze_transaction(
         relevant_examples = fetch_relevant_examples(ej_record, top_k=1)
         if relevant_examples:
             example_block = build_example_block(relevant_examples)
-            user_content = example_block + "\n\nNow analyze the following transaction and produce output in the same format:\n\n" + user_content
+            # Strip any lines that instruct the model to wait for input —
+            # these cause the model to respond with a request rather than analysis
+            _waiting_phrases = (
+                "after the examples you will receive",
+                "you will receive a new transaction",
+                "a new transaction to analyze",
+            )
+            cleaned_example_lines = [
+                line for line in example_block.splitlines()
+                if not any(p in line.lower() for p in _waiting_phrases)
+            ]
+            example_block = "\n".join(cleaned_example_lines)
+            user_content = (
+                example_block
+                + "\n\n=== END OF EXAMPLES — DO NOT ANALYZE THE ABOVE ===\n\n"
+                + "ANALYZE THIS TRANSACTION NOW. Do not ask for more input. "
+                + "Do not repeat or summarize the examples. "
+                + "Produce the full analysis output immediately.\n\n"
+                + user_content
+            )
             logger.info(
                 f"Injected {len(relevant_examples)} few-shot example(s) into prompt "
                 f"for {transaction_id}"

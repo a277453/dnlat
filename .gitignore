@@ -44,3 +44,4 @@ config\.env
 .idea/d
 \postman
 .postman
+chat_logs

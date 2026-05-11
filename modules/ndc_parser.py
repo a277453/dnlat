@@ -7,15 +7,15 @@ into human-readable structured form.
 Based on analysis of real DN ATM logs (20250915.jrn).
 
 Real message classes present in logs:
-    11  Transaction Request – Card Data          ATM→HOST  (52×)
-    22  Go Next State / Acknowledge              HOST→ATM  (539×)
-    40  Transaction Complete                     ATM→HOST  (12×)
-    61  Solicited Status                         ATM→HOST  (6×)
-    10  Go Out of Service                        HOST→ATM  (48×)
-    12  Status Ready (ATM→HOST init/config)      ATM→HOST  (19×)
-    30  Go In Service / Screen Load              HOST→ATM  (358×)
-    80  EMV / Encryption Config Download         HOST→ATM  (96×)
-    23  Cancel                                   HOST→ATM  (5×)
+    11  Transaction Request – Card Data          ATM->HOST  (52×)
+    22  Go Next State / Acknowledge              HOST->ATM  (539×)
+    40  Transaction Complete                     ATM->HOST  (12×)
+    61  Solicited Status                         ATM->HOST  (6×)
+    10  Go Out of Service                        HOST->ATM  (48×)
+    12  Status Ready (ATM->HOST init/config)      ATM->HOST  (19×)
+    30  Go In Service / Screen Load              HOST->ATM  (358×)
+    80  EMV / Encryption Config Download         HOST->ATM  (96×)
+    23  Cancel                                   HOST->ATM  (5×)
 
 Public API:
     decode_message(raw: str) -> NdcMessage
@@ -40,25 +40,25 @@ GS = "\x1d"
 # ─────────────────────────────────────────────────────────────────────────────
 
 MESSAGE_CLASS_MAP = {
-    "11": ("Transaction Request – Card Data",          "ATM→HOST"),
-    "12": ("Status / Ready",                           "ATM→HOST"),
-    "23": ("Encryptor Initialisation Data",            "ATM→HOST"),
-    "61": ("Solicited Status",                         "ATM→HOST"),
-    "62": ("Solicited Status – Command Reject",        "ATM→HOST"),
-    "70": ("Unsolicited Status – Device Fault",        "ATM→HOST"),
-    "71": ("Unsolicited Status – Ready",               "ATM→HOST"),
-    "40": ("Transaction Reply Command",                "HOST→ATM"),
-    "41": ("Transaction Reply – No Receipt",           "HOST→ATM"),
-    "6":  ("EJ Command",                              "HOST→ATM"),
-    "10": ("Go Out of Service",                        "HOST→ATM"),
-    "22": ("Go Next State / Acknowledge",              "HOST→ATM"),
-    "24": ("Send PIN / Cancel",                        "HOST→ATM"),
-    "30": ("Go In Service / Screen Load",              "HOST→ATM"),
-    "31": ("FIT Data Load",                            "HOST→ATM"),
-    "80": ("EMV / Encryption Config Download",         "HOST→ATM"),
-    "83": ("Supervisor Reply",                         "HOST→ATM"),
-    "84": ("Go Out of Service (Supervisor)",           "HOST→ATM"),
-    "85": ("Go In Service (Supervisor)",               "HOST→ATM"),
+    "11": ("Transaction Request – Card Data",          "ATM->HOST"),
+    "12": ("Status / Ready",                           "ATM->HOST"),
+    "23": ("Encryptor Initialisation Data",            "ATM->HOST"),
+    "61": ("Solicited Status",                         "ATM->HOST"),
+    "62": ("Solicited Status – Command Reject",        "ATM->HOST"),
+    "70": ("Unsolicited Status – Device Fault",        "ATM->HOST"),
+    "71": ("Unsolicited Status – Ready",               "ATM->HOST"),
+    "40": ("Transaction Reply Command",                "HOST->ATM"),
+    "41": ("Transaction Reply – No Receipt",           "HOST->ATM"),
+    "6":  ("EJ Command",                              "HOST->ATM"),
+    "10": ("Go Out of Service",                        "HOST->ATM"),
+    "22": ("Go Next State / Acknowledge",              "HOST->ATM"),
+    "24": ("Send PIN / Cancel",                        "HOST->ATM"),
+    "30": ("Go In Service / Screen Load",              "HOST->ATM"),
+    "31": ("FIT Data Load",                            "HOST->ATM"),
+    "80": ("EMV / Encryption Config Download",         "HOST->ATM"),
+    "83": ("Supervisor Reply",                         "HOST->ATM"),
+    "84": ("Go Out of Service (Supervisor)",           "HOST->ATM"),
+    "85": ("Go In Service (Supervisor)",               "HOST->ATM"),
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -281,6 +281,7 @@ class NdcMessage:
     emv_tags:      dict = field(default_factory=dict)
     receipt_lines: list = field(default_factory=list)
     errors:        list = field(default_factory=list)
+    timestamp:     str  = ""   # HH:MM:SS from the 41004/41005 log line
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -395,7 +396,7 @@ def _decode_5cam_block(raw: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _decode_11(f: list, msg: NdcMessage) -> None:
-    """Transaction Request – Card Data  (ATM→HOST)
+    """Transaction Request – Card Data  (ATM->HOST)
 
     Spec field map (NDC Transaction Request Message Format):
         [0]  b+c  Message class+subclass = "11"
@@ -403,7 +404,7 @@ def _decode_11(f: list, msg: NdcMessage) -> None:
         [2]       FS — reserved
         [3]       FS — reserved
         [4]  e    Time Variant Number (8 hex chars)
-        [5]  h    Track 2 Data (up to 39 chars, start→end sentinel)
+        [5]  h    Track 2 Data (up to 39 chars, start->end sentinel)
         [6]  i    Track 3 Data (up to 106 chars, optional)
         [7]  j    Operation Code (8 chars — FDK key states)
         [8]  k    Amount Entry (8 or 12 chars, right-justified, ÷100)
@@ -529,7 +530,7 @@ def _decode_11(f: list, msg: NdcMessage) -> None:
 
 
 def _decode_22(f: list, msg: NdcMessage) -> None:
-    """Go Next State / Acknowledge  (HOST→ATM)
+    """Go Next State / Acknowledge  (HOST->ATM)
 
     Spec field layout:
         [0]  class "22"
@@ -544,11 +545,11 @@ def _decode_22(f: list, msg: NdcMessage) -> None:
                For 'B': Transaction serial number + optional CAM\x1d<EMV TLV>
                For 'C': Rejection reason code (e.g. "C01")
                For 'F': Config response payload, variants:
-                 "5025MMDDHHMMSS"  → Terminal date/time response
-                 "LA<data>"        → Language/locale config
-                 "HA<data>"        → Hardware config params
-                 "IA<data>\x1dE...\x1dG..."  → Input config params
-                 "JA<data>"        → Journal config params
+                 "5025MMDDHHMMSS"  -> Terminal date/time response
+                 "LA<data>"        -> Language/locale config
+                 "HA<data>"        -> Hardware config params
+                 "IA<data>\x1dE...\x1dG..."  -> Input config params
+                 "JA<data>"        -> Journal config params
         [5]  Additional config field (for 'F' multi-field responses, e.g. 'B11')
         [6]  Further GS-delimited config key=value pairs
     """
@@ -567,7 +568,7 @@ def _decode_22(f: list, msg: NdcMessage) -> None:
     state_label = NEXT_STATE_LABELS.get(next_state, f"State {next_state}")
     if next_state:
         msg.fields.append(("Next State", f"{next_state}  ({state_label})"))
-        msg.summary += f" → {state_label}"
+        msg.summary += f" -> {state_label}"
 
     if not field4:
         return
@@ -662,7 +663,7 @@ def _decode_22_terminal_state(f: list, field4: str, msg: NdcMessage) -> None:
 
 
 def _decode_40(f: list, msg: NdcMessage) -> None:
-    """Transaction Reply Command  (HOST→ATM)
+    """Transaction Reply Command  (HOST->ATM)
 
     Spec: Table 10-15 — Transaction Reply Command Message Format
     Class '4' + response_flag = "40" (response_flag '0' = standard).
@@ -763,7 +764,7 @@ def _decode_40(f: list, msg: NdcMessage) -> None:
 
 
 def _decode_6_ej(f: list, msg: NdcMessage) -> None:
-    """EJ (Electronic Journal) Command  (HOST→ATM)
+    """EJ (Electronic Journal) Command  (HOST->ATM)
 
     Spec: Table 10-38/39 — EJ Options and Timers / Acknowledge EJ Upload Block
     Class '6' = Electronic Journal commands.
@@ -884,6 +885,7 @@ def _decode_12(f: list, msg: NdcMessage) -> None:
             msg.fields.append(("Config Version", data.strip()))
 
     elif key == "P":
+        # Device position map (NDC spec, 15 devices)
         P_DEVICE_MAP = {
             0: "Card Reader",    1: "Cash Handler",      2: "Receipt Printer",
             3: "Journal Printer",4: "Night Safe",         5: "Encryptor",
@@ -891,14 +893,26 @@ def _decode_12(f: list, msg: NdcMessage) -> None:
             9: "Fascia",        10: "Statement Printer", 11: "Passbook Printer",
            12: "Barcode Reader", 13: "Cheque Processing", 14: "Coin Dispenser",
         }
+        # Non-supply devices where code '1' means 'Not Fitted / Inactive'
+        # rather than 'Needs Replenishment' (which only applies to cash/paper devices)
+        NON_SUPPLY_DEVICES = {
+            7: "Supervisor", 8: "Door", 9: "Fascia",
+        }
         msg.fields.append(("--- Peripheral Status ---", ""))
         ok_devices, fault_devices = [], []
         for i, ch in enumerate(data):
             device = P_DEVICE_MAP.get(i)
-            if device is None: break
-            state = DEVICE_STATE_CODES.get(ch.upper(), "Unknown (" + ch + ")")
-            if state == "OK": ok_devices.append(device)
-            else:             fault_devices.append((device, state))
+            if device is None:
+                break
+            ch_upper = ch.upper()
+            if ch_upper == "0":
+                ok_devices.append(device)
+            elif ch_upper == "1" and i in NON_SUPPLY_DEVICES:
+                # For non-supply devices code 1 = not fitted / inactive, treat as OK
+                ok_devices.append(device + " (not fitted)")
+            else:
+                state = DEVICE_STATE_CODES.get(ch_upper, "Unknown (" + ch + ")")
+                fault_devices.append((device, state))
         for device, state in fault_devices:
             msg.fields.append(("  ! " + device, state))
         if ok_devices:
@@ -987,7 +1001,7 @@ def _decode_30(f: list, msg: NdcMessage) -> None:
 
 
 def _decode_31_fit(f: list, msg: NdcMessage) -> None:
-    """FIT Data Load  (HOST→ATM)
+    """FIT Data Load  (HOST->ATM)
 
     Spec: Table 10-7 — FIT Data Load
     Downloads Financial Institution Tables (FITs) to the terminal.
@@ -1166,7 +1180,7 @@ def _decode_23(f: list, msg: NdcMessage) -> None:
 
 
 def _decode_61(f: list, msg: NdcMessage) -> None:
-    """Solicited Status Message  (ATM→HOST)
+    """Solicited Status Message  (ATM->HOST)
 
     Spec: Solicited Status Message Format (Table 9-7)
         [0]  b+c  Message class+subclass = "61" (DN extension of spec "22")
@@ -1334,18 +1348,43 @@ def decode_log_block(raw_block: str) -> list:
 
 
 def extract_messages_from_jrn(jrn_text: str) -> list:
-    """Extract NDC messages from raw .jrn file content (41004/41005 log lines)."""
+    """Extract NDC messages from raw .jrn file content (41004/41005 log lines).
+
+    Only handles Format A — real raw NDC messages from 41004/41005 log lines:
+        10:47:56  41004 <CCProtFW1> Sent raw message     : 11\1c003\1c\1c...
+        10:48:01  41005 <CCProtFW1> Received raw message : 40\1c003\1c...
+    """
     messages = []
+    seen_raws = set()
+
     for line in jrn_text.splitlines():
-        if ("41004" in line or "41005" in line) and "raw message" in line:
-            idx = line.rfind(": ")
-            if idx == -1: continue
-            raw = line[idx+2:].strip().rstrip("\r\n")
-            if not (raw and _NDC_LINE_RE.match(raw)): continue
+        line = line.strip()
+        if not line:
+            continue
+        if ("41004" in line or "41005" in line) and "raw message" in line.lower():
+            # Find "raw message" then the colon after it — avoids rfind picking
+            # up ": " inside rejoined receipt/screen data on the same line
+            _rm_idx = line.lower().find("raw message")
+            _colon_idx = line.find(": ", _rm_idx)
+            if _colon_idx == -1:
+                continue
+            raw = line[_colon_idx+2:].strip().rstrip("\r\n")
+            if not (raw and _NDC_LINE_RE.match(raw)):
+                continue
+            if raw in seen_raws:
+                continue
+            seen_raws.add(raw)
             m = decode_message(raw)
-            if "41004" in line:  m.direction = "ATM→HOST"
-            elif "41005" in line: m.direction = "HOST→ATM"
+            if "41004" in line:
+                m.direction = "ATM->HOST"
+            elif "41005" in line:
+                m.direction = "HOST->ATM"
+            # Extract timestamp from the log line (HH:MM:SS)
+            _ts_m = re.match(r"(\d{2}:\d{2}:\d{2})", line.strip())
+            if _ts_m:
+                m.timestamp = _ts_m.group(1)
             messages.append(m)
+
     return messages
 
 

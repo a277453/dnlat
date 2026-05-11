@@ -4682,9 +4682,25 @@ RAISES:
                                 "content": _analysis_text,
                             },
                         ]
+                        # Pull raw .jrn file contents from session so the
+                        # NDC decoder in chat_service can access 41004/41005 lines.
+                        try:
+                            _jrn_response = requests.get(
+                                f"{API_BASE_URL}/get-journal-contents",
+                                headers=get_auth_headers(),
+                                timeout=30,
+                            )
+                            _jrn_raw = (
+                                _jrn_response.json().get("journal_contents", {})
+                                if _jrn_response.status_code == 200
+                                else {}
+                            )
+                        except Exception:
+                            _jrn_raw = {}
+
                         st.session_state.chat_context = {
                             "ej":             transaction_log,
-                            "jrn":            "",
+                            "jrn":            _jrn_raw,
                             "analysis":       _analysis_text,
                             "txn_data":       selected_txn_data.to_dict(),
                             "transaction_id": selected_txn_id,

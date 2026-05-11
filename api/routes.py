@@ -4640,6 +4640,31 @@ def get_counter_column_descriptions():
     }
 
 # ============================================
+# GET RAW JOURNAL CONTENTS (for NDC chat)
+# ============================================
+
+@router.get("/get-journal-contents")
+async def get_journal_contents(
+    session_id: str = Query(default=None),
+):
+    """
+    Returns raw ui_journal_contents and journal_llm_contents for the current session.
+    Used by the Streamlit chat panel to pass raw .jrn file content to the NDC decoder.
+    """
+    session_id   = _resolve_session_id(session_id)
+    session_data = session_service.get_session(session_id)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    ui_jrn  = session_data.get('ui_journal_contents',  {}) or {}
+    llm_jrn = session_data.get('journal_llm_contents', {}) or {}
+    combined = {**ui_jrn, **llm_jrn}
+
+    logger.info(f"get-journal-contents | session={session_id} | files={list(combined.keys())}")
+    return {"journal_contents": combined}
+
+
+# ============================================
 # GET ANALYSIS RECORDS
 # ============================================
 

@@ -12,6 +12,7 @@ from modules.categorization import CategorizationService
 from modules.processing import ProcessingService
 from modules.llm_service import analyze_transaction
 from modules.session import session_service
+from modules.login import decode_access_token
 from modules.transaction_analyzer import TransactionAnalyzerService
 from modules.schemas import (
     FileCategorizationResponse,
@@ -29,8 +30,7 @@ from modules.analysis import (
         create_feedback_table,
     )
 
-from modules.login import decode_access_token
-from modules.extraction import extract_from_directory, extract_from_zip_bytes
+from modules.extraction import extract_from_directory, extract_from_zip_bytes, resolve_main_zips
 from modules.xml_parser_logic import parse_xml_to_dataframe
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -74,6 +74,12 @@ logger.info("Logger initialized at startup")
 
 router = APIRouter()
 logger.info("FastAPI app started")
+
+# ── Counter Analysis ─────────────────────────────────────────────────────────
+# Imported after require_elevated_role is defined below — see bottom of this
+# block for the include_router call.
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 # ============================================
 # RBAC DEPENDENCY
@@ -134,6 +140,9 @@ async def require_elevated_role(
             },
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+# ── Counter Analysis import (after require_elevated_role is defined) ──────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 log_file=Path("app.log")
 
@@ -288,10 +297,9 @@ async def debug_zip_members(file: UploadFile = File(...)):
 
 # Simple session ID for now (use UUID in production)
 global CURRENT_SESSION_ID
-CURRENT_SESSION_ID =str(uuid4())
+CURRENT_SESSION_ID = str(uuid4())
 
-# ── Session-ID resolver ───────────────────────────────────────
-# so that session is not passed as a string like it previously was.
+# ── Session-ID resolver ───────────────────────────────────────────────────────
 _SESSION_SENTINELS = {"current_session", "CURRENT_SESSION_ID", "", None}
 
 def _resolve_session_id(session_id) -> str:
@@ -307,6 +315,10 @@ def _resolve_session_id(session_id) -> str:
         return CURRENT_SESSION_ID
     return session_id
 # ──────────────────────────────────────────────────────────────────────────────
+
+from modules.counter_analysis import init_counter_router, counter_router
+init_counter_router(require_elevated_role, _resolve_session_id)
+router.include_router(counter_router)
 
 # Global variable to track processed files directory (for registry endpoints)
 PROCESSED_FILES_DIR = None
@@ -389,7 +401,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
         try:
             extraction_service = ZipExtractionService()
-            extract_path, total_files_in_zip, acu_zip_bytes = extraction_service.extract_zip(zip_content)
+            extract_path, total_files_in_zip, acu_zip_bytes_list = extraction_service.extract_zip(zip_content)
             all_files_on_disk = [p for p in Path(extract_path).rglob('*') if p.is_file()]
             total_files_on_disk = len(all_files_on_disk)
             logger.info(f"Total files in original ZIP: {total_files_in_zip}")
@@ -425,11 +437,22 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         #  extract_zip() captured and returned. This avoids re-opening the main ZIP and
         #  re-decompressing acu.zip a second time.
         try:
-            if acu_zip_bytes:
-                acu_files = extract_from_zip_bytes(acu_zip_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
+            acu_files = {}
+            if acu_zip_bytes_list:
+                for acu_zip_bytes in acu_zip_bytes_list:
+                    partial = extract_from_zip_bytes(acu_zip_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
+                    for key, content in partial.items():
+                        # Use the same _1, _2 suffix dedup as the on-disk ACU/ branch so
+                        # that duplicate filenames from multiple acu.zip copies are all kept.
+                        dedup_key = key
+                        i = 1
+                        while dedup_key in acu_files:
+                            base, ext = os.path.splitext(key)
+                            dedup_key = f"{base}_{i}{ext}"
+                            i += 1
+                        acu_files[dedup_key] = content
             else:
                 logger.info(" No acu.zip found in uploaded package — skipping ACU extraction.")
-                acu_files = {}
             xml_count = sum(1 for k in acu_files if not k.startswith('__xsd__'))
             xsd_count = sum(1 for k in acu_files if k.startswith('__xsd__'))
             logger.info(f" ACU extraction: {xml_count} XML, {xsd_count} XSD files")
@@ -808,31 +831,46 @@ async def extract_files_from_zip(file: UploadFile = File(...)):
 
         acu_logs = []
 
-        # --- Drill into nested acu.zip (mirrors /process-zip logic) ---
-        # The uploaded package wraps ACU files inside an inner acu.zip.
-        # extract_from_zip_bytes only scans the top level of whatever bytes
-        # you hand it, so passing the outer ZIP would never find jdd*/x3* files.
-        # We locate acu.zip inside the outer archive first, then pass its bytes.
-        acu_zip_bytes = None
+        # --- Resolve shell ZIP if needed, then drill into acu.zip ---
+        # resolve_main_zips handles the case where the user uploaded a shell ZIP
+        # that wraps the real main ZIP(s). For a normal upload it is a no-op fast path.
+        # We then search each confirmed main ZIP for acu.zip and extract from it.
+        acu_files: dict = {}
         try:
-            with zipfile.ZipFile(io.BytesIO(zip_content)) as outer_zf:
-                acu_candidates = [
-                    name for name in outer_zf.namelist()
-                    if os.path.basename(name).lower() == 'acu.zip'
-                ]
-                if acu_candidates:
-                    acu_zip_bytes = outer_zf.read(acu_candidates[0])
-                    logger.info(f"Found nested acu.zip at: {acu_candidates[0]}")
-                else:
-                    logger.info("No nested acu.zip found — treating uploaded ZIP as the ACU archive directly")
+            main_zip_list = resolve_main_zips(zip_content)
+            for main_zip_bytes in main_zip_list:
+                with zipfile.ZipFile(io.BytesIO(main_zip_bytes)) as outer_zf:
+                    acu_candidates = [
+                        name for name in outer_zf.namelist()
+                        if os.path.basename(name).lower() == 'acu.zip'
+                    ]
+                    if acu_candidates:
+                        for candidate in acu_candidates:
+                            candidate_bytes = outer_zf.read(candidate)
+                            logger.info(f"Processing nested acu.zip at: {candidate}")
+                            partial = extract_from_zip_bytes(candidate_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
+                            for key, content in partial.items():
+                                dedup_key = key
+                                i = 1
+                                while dedup_key in acu_files:
+                                    base, ext = os.path.splitext(key)
+                                    dedup_key = f"{base}_{i}{ext}"
+                                    i += 1
+                                acu_files[dedup_key] = content
+                    else:
+                        logger.info("No nested acu.zip found — treating main ZIP as the ACU archive directly")
+                        partial = extract_from_zip_bytes(main_zip_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
+                        for key, content in partial.items():
+                            dedup_key = key
+                            i = 1
+                            while dedup_key in acu_files:
+                                base, ext = os.path.splitext(key)
+                                dedup_key = f"{base}_{i}{ext}"
+                                i += 1
+                            acu_files[dedup_key] = content
         except zipfile.BadZipFile as e:
             logger.error(f"BadZipFile when scanning for nested acu.zip in {file.filename}: {e}")
             raise HTTPException(status_code=400, detail=f"Invalid ZIP file: {e}")
-
-        # Use inner acu.zip bytes when found; fall back to the outer ZIP for
-        # flat packages that already contain jdd*/x3* files at the top level.
-        target_bytes = acu_zip_bytes if acu_zip_bytes else zip_content
-        acu_files = extract_from_zip_bytes(target_bytes, acu_logs, target_prefixes=('jdd', 'x3'))
         logger.debug(f"ACU extraction logs: {acu_logs}")
 
         if not acu_files:
@@ -1635,8 +1673,19 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
             logger.info(f"   Sample record keys: {list(sample.keys())}")
             logger.info(f"   Sample 'Source File' value: '{sample.get('Source File', 'KEY NOT FOUND')}'")
         
-        # Store in session (remove duplicates from source_files)
-        unique_source_files = sorted(set(source_files))
+        # Preserve all source file names including deduplicated variants (_1, _2, …).
+        # Do NOT collapse via set() — duplicate .jrn files in the ZIP are stored in
+        # the session as  20250404, 20250404_1, 20250404_2 … and each must remain a
+        # distinct entry so that the Counters Analysis dropdown can surface them all.
+        # We still deduplicate consecutive identical names that arise from the same
+        # filename appearing twice in the loop (shouldn't happen, but guard anyway).
+        seen = set()
+        unique_source_files = []
+        for sf in source_files:
+            if sf not in seen:
+                seen.add(sf)
+                unique_source_files.append(sf)
+        unique_source_files = sorted(unique_source_files)
 
         logger.info(f" Unique source files being stored: {unique_source_files}")
         logger.info(f" Total source files count: {len(unique_source_files)}")
@@ -3805,839 +3854,6 @@ RAISES:
             detail=f"Failed to retrieve feedback: {str(e)}"
         )
     
-class CounterDataRequest(BaseModel):
-    transaction_id: str
-    source_file: str
-
-def safe_decode(blob: bytes) -> str:
-    """Safely decode bytes to string"""
-    encs = ["utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "cp1252", "latin-1", "utf-8"]
-    for e in encs:
-        try:
-            return blob.decode(e)
-        except Exception:
-            continue
-    return blob.decode("utf-8", errors="replace")
-
-def parse_counter_data_from_trc(log_lines: list) -> list:
-    """
-        FUNCTION: parse_counter_data_from_trc
-
-        DESCRIPTION:
-            Parses counter data from TRC trace log lines using intelligent field detection. 
-            Handles missing or optional fields by detecting patterns for UnitName, currency, 
-            and numeric values. Returns a list of structured counter records.
-
-        USAGE:
-            counters = parse_counter_data_from_trc(log_lines)
-
-        PARAMETERS:
-            log_lines (list) : List of strings, each representing a line from a TRC trace file.
-
-        RETURNS:
-            list : A list of dictionaries, each representing a counter record with fields:
-                - 'No'        : Counter number
-                - 'Ty'        : Counter type
-                - 'ID'        : Counter ID
-                - 'UnitName'  : Unit name (may be empty if missing)
-                - 'Cur'       : Currency code (3-letter, may be empty)
-                - 'Val'       : Value
-                - 'Ini'       : Initial count
-                - 'Cnt'       : Current count
-                - 'RCnt'      : Reject count
-                - 'Safe'      : Safe count
-                - 'Min'       : Minimum value
-                - 'Max'       : Maximum value
-                - 'Disp'      : Display field (empty by default)
-                - 'Pres'      : Present field (empty by default)
-                - 'Retr'      : Retracted field (empty by default)
-                - 'A'         : AppL field
-                - 'DevL'      : DevL field
-                - 'St'        : Status field
-                - 'HWsens'    : Hardware sensor field
-                - 'Record_Type': Always 'Logical'
-
-        RAISES:
-            None : Function handles parsing errors internally and skips invalid lines.
-"""
-
-    counter_rows = []
-    
-    # Find header line
-    header_line = None
-    header_idx = -1
-    
-    for idx, line in enumerate(log_lines):
-        if 'No' in line and 'Ty' in line and 'UnitName' in line:
-            header_line = line
-            header_idx = idx
-            break
-    
-    if not header_line or header_idx == -1:
-        return []
-    
-    # Parse data lines
-    for idx in range(header_idx + 1, len(log_lines)):
-        line = log_lines[idx]
-        
-        # Skip empty, CCdm, or separator lines
-        if (not line.strip() or 
-            'CCdm' in line or 
-            'usTellerID' in line or
-            line.strip().startswith('*')):
-            continue
-        
-        # Skip continuation lines (start with whitespace)
-        if line.startswith(' ') or line.startswith('\t'):
-            continue
-        
-        # Validate this is a data line (starts with digit)
-        if not line[0].isdigit():
-            continue
-        
-        try:
-            counter_data = {}
-            
-            # Parse first 3 fields using single space (always present)
-            first_part = line[:12].strip()
-            first_fields = first_part.split()
-            
-            if len(first_fields) < 3:
-                continue
-            
-            counter_data['No'] = first_fields[0]
-            counter_data['Ty'] = first_fields[1]
-            counter_data['ID'] = first_fields[2]
-            
-            # Parse remaining part (split by 2+ spaces)
-            remaining_part = line[12:]
-            remaining_fields = re.split(r'  +', remaining_part.strip())
-            
-            if not remaining_fields:
-                continue
-            
-            field_idx = 0
-            
-            # Intelligently detect UnitName and Cur
-            # UnitName: alphanumeric with dots/underscores (SLOT1, HEADUNIT.RET)
-            # Cur: exactly 3 uppercase letters (USD, EUR, INR)
-            
-            first_field = remaining_fields[field_idx] if field_idx < len(remaining_fields) else ''
-            
-            # Check if first field is a currency code
-            is_currency = (len(first_field) == 3 and 
-                          first_field.isalpha() and 
-                          first_field.isupper())
-            
-            if is_currency:
-                # No UnitName present, first field is Cur
-                counter_data['UnitName'] = ''
-                counter_data['Cur'] = first_field
-                field_idx += 1
-            else:
-                # First field is UnitName
-                counter_data['UnitName'] = first_field
-                field_idx += 1
-                
-                # Check if next field is currency
-                if field_idx < len(remaining_fields):
-                    next_field = remaining_fields[field_idx]
-                    if (len(next_field) == 3 and 
-                        next_field.isalpha() and 
-                        next_field.isupper()):
-                        counter_data['Cur'] = next_field
-                        field_idx += 1
-                    else:
-                        counter_data['Cur'] = ''
-                else:
-                    counter_data['Cur'] = ''
-            
-            # Parse numeric fields: Val, Init, Actn, Rej, Safe, Min, Max
-            numeric_field_names = ['Val', 'Ini', 'Cnt', 'RCnt', 'Safe', 'Min', 'Max']
-            
-            for field_name in numeric_field_names:
-                if field_idx < len(remaining_fields):
-                    value = remaining_fields[field_idx]
-                    # Check if it's a numeric field
-                    if value.replace('-', '').isdigit():
-                        counter_data[field_name] = value
-
-                        if field_name == 'Val' and value.isdigit():
-                            counter_data[field_name] = str(int(value) // 100)
-                        else:
-                            counter_data[field_name] = value
-                        field_idx += 1
-                    else:
-                        # Stop consuming numeric fields if we hit a non-numeric
-                        counter_data[field_name] = ''
-                        break
-                else:
-                    counter_data[field_name] = ''
-            
-            # Set empty fields
-            counter_data['Disp'] = ''
-            counter_data['Pres'] = ''
-            counter_data['Retr'] = ''
-            
-            # Parse remaining fields: AppL (A), DevL, Status (St), HWsens
-            # These are typically: FALSE FALSE 0/OK
-            counter_data['A'] = remaining_fields[field_idx] if field_idx < len(remaining_fields) else ''
-            field_idx += 1
-            
-            counter_data['DevL'] = remaining_fields[field_idx] if field_idx < len(remaining_fields) else ''
-            field_idx += 1
-            
-            counter_data['St'] = remaining_fields[field_idx] if field_idx < len(remaining_fields) else ''
-            field_idx += 1
-            
-            counter_data['HWsens'] = remaining_fields[field_idx] if field_idx < len(remaining_fields) else ''
-            
-            counter_data['Record_Type'] = 'Logical'
-            counter_rows.append(counter_data)
-            
-        except Exception as e:
-            continue
-    
-    return counter_rows
-
-def parse_time_from_trc(time_str: str) -> datetime.time:
-    """Parse time from TRC trace format (HH:MM:SS or HH:MM:SS.MS)"""
-    try:
-        if '.' in time_str:
-            time_str = time_str.split('.')[0]
-        return datetime.strptime(time_str, '%H:%M:%S').time()
-    except Exception as e:
-        return None
-
-def extract_counter_blocks(trc_file_path: str) -> list:
-    """
-        FUNCTION: extract_counter_blocks
-
-        DESCRIPTION:
-            Extracts all counter blocks from a given TRC trace file.
-            Each 'CCdmCashUnitInfoDataEx' block is parsed separately and returned
-            as a dictionary containing the block's timestamp, time object, and counter data.
-            CRITICAL: Each block is kept separate; no merging of blocks occurs.
-
-        USAGE:
-            counter_blocks = extract_counter_blocks("path/to/trc_file.trc")
-
-        PARAMETERS:
-            trc_file_path (str) : Path to the TRC trace file to be processed.
-
-        RETURNS:
-            list : A list of dictionaries, each representing a counter block with:
-                - 'time' (datetime.time)        : Time extracted from the TRC block
-                - 'timestamp' (str)             : Timestamp string (HH:MM:SS.ss) from the TRC block
-                - 'data' (list of dicts)        : Counter data extracted using parse_counter_data_from_trc
-
-        RAISES:
-            Exception : Any error during file reading or parsing is caught and printed,
-                        but the function will return an empty list if critical errors occur.
-"""
-
-    all_counter_blocks = []
-    
-    try:
-        with open(trc_file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
-            lines = content.split('\n')
-        
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            
-            # Look for counter block marker
-            if 'CCdmCashUnitInfoDataEx' in line:
-                # Extract timestamp from THIS line or previous line
-                timestamp_str = None
-                block_time = None
-                
-                # Check current line for timestamp (format: XXXXX YYMMDD HH:MM:SS.ss)
-                ts_match = re.search(r'(\d+)\s+(\d{6})\s+(\d{2}:\d{2}:\d{2}\.\d{2})', line)
-                if not ts_match and i > 0:
-                    # Check previous line
-                    ts_match = re.search(r'(\d+)\s+(\d{6})\s+(\d{2}:\d{2}:\d{2}\.\d{2})', lines[i-1])
-                
-                if ts_match:
-                    timestamp_str = ts_match.group(3)  # HH:MM:SS.ss
-                    try:
-                        block_time = datetime.strptime(timestamp_str, '%H:%M:%S.%f').time()
-                    except:
-                        pass
-                
-                # Extract counter data lines for THIS block only
-                block_lines = []
-                i += 1
-                
-                # Collect lines until we hit another CCdmCashUnitInfoDataEx or empty line pattern
-                while i < len(lines):
-                    current_line = lines[i]
-                    
-                    # Stop if we hit another counter block
-                    if 'CCdmCashUnitInfoDataEx' in current_line:
-                        i -= 1  # Back up so we process this block next iteration
-                        break
-                    
-                    # Stop if we hit another timestamp line (new trace entry)
-                    if re.search(r'^\d+\s+\d{6}\s+\d{2}:\d{2}:\d{2}\.\d{2}', current_line):
-                        break
-                    
-                    # Add line to current block
-                    block_lines.append(current_line)
-                    i += 1
-                
-                # Parse the counter data from this block
-                counter_data = parse_counter_data_from_trc(block_lines)
-                
-                # CRITICAL: Add as NEW BLOCK - NEVER MERGE
-                if counter_data and timestamp_str:
-                    all_counter_blocks.append({
-                        'time': block_time,
-                        'timestamp': timestamp_str,
-                        'data': counter_data
-                    })
-            
-            i += 1
-    
-    except Exception as e:
-        logger.error(f"Error extracting counter blocks: {e}")
-        traceback.print_exc()
-    
-    return all_counter_blocks
-
-
-def extract_counter_blocks_from_string(content: str) -> list:
-    """
-    FUNCTION: extract_counter_blocks_from_string
-
-    DESCRIPTION:
-        Identical to extract_counter_blocks() but accepts file content as a string
-        instead of a file path. Used when TRC file content has been loaded into
-        session memory and Temp has been deleted.
-
-    PARAMETERS:
-        content (str) : Full text content of the TRC trace file.
-
-    RETURNS:
-        list : Same structure as extract_counter_blocks() — list of counter block dicts.
-
-    RAISES:
-        None : All errors are caught and logged.
-    """
-    all_counter_blocks = []
-    try:
-        lines = content.split('\n')
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            if 'CCdmCashUnitInfoDataEx' in line:
-                timestamp_str = None
-                block_time = None
-                ts_match = re.search(r'(\d+)\s+(\d{6})\s+(\d{2}:\d{2}:\d{2}\.\d{2})', line)
-                if not ts_match and i > 0:
-                    ts_match = re.search(r'(\d+)\s+(\d{6})\s+(\d{2}:\d{2}:\d{2}\.\d{2})', lines[i-1])
-                if ts_match:
-                    timestamp_str = ts_match.group(3)
-                    try:
-                        block_time = datetime.strptime(timestamp_str, '%H:%M:%S.%f').time()
-                    except Exception:
-                        pass
-                block_lines = []
-                i += 1
-                while i < len(lines):
-                    current_line = lines[i]
-                    if 'CCdmCashUnitInfoDataEx' in current_line:
-                        i -= 1
-                        break
-                    if re.search(r'^\d{4,}\s+\d{6}\s+\d{2}:\d{2}:\d{2}\.\d{2}', current_line):
-                        break
-                    block_lines.append(current_line)
-                    i += 1
-                counter_data = parse_counter_data_from_trc(block_lines)
-                if counter_data and timestamp_str:
-                    all_counter_blocks.append({
-                        'time': block_time,
-                        'timestamp': timestamp_str,
-                        'data': counter_data
-                    })
-            i += 1
-    except Exception as e:
-        logger.error(f"Error extracting counter blocks from string: {e}")
-    return all_counter_blocks
-
-@router.get("/get-matching-sources-for-trc", dependencies=[Depends(require_elevated_role)])
-async def get_matching_sources_for_trc(session_id: str = Query(default=CURRENT_SESSION_ID)):
-    """
-        FUNCTION: get_matching_sources_for_trc
-
-        DESCRIPTION:
-            Retrieves a list of source files that have corresponding TRC trace files in the current session.
-            Matches source file dates with TRC trace file contents to determine availability.
-
-        USAGE:
-            response = await get_matching_sources_for_trc(session_id="session_123")
-
-        PARAMETERS:
-            session_id (str) : Optional. The session ID to search for matching TRC trace files.
-                            Defaults to CURRENT_SESSION_ID if not provided.
-
-        RETURNS:
-            dict : A dictionary containing:
-                - "matching_sources" (list) : List of source file names that have at least one matching TRC trace file.
-
-        RAISES:
-            HTTPException :
-                - 404 : If the session with the given ID does not exist
-                - 500 : For any unexpected server error during processing
-"""
-
-    session_id = _resolve_session_id(session_id)
-    try:
-        if not session_service.session_exists(session_id):
-            raise HTTPException(status_code=404, detail="No session found")
-        
-        session_data = session_service.get_session(session_id)
-        
-        # Get all source files
-        all_sources = session_data.get('source_files', [])
-
-        # Get TRC trace filenames and contents from session
-        file_categories = session_data.get('file_categories', {})
-        trc_trace_files = file_categories.get('trc_trace', [])
-        trc_trace_contents = session_data.get('trc_trace_contents', {})
-
-        if not trc_trace_files:
-            return {"matching_sources": []}
-
-        matching_sources = []
-
-        for source in all_sources:
-            source_date_short = source[2:] if len(source) == 8 else source
-            for trc_filename in trc_trace_files:
-                try:
-                    content = trc_trace_contents.get(trc_filename, '')
-                    if source_date_short in content:
-                        matching_sources.append(source)
-                        logger.info(f"[TRC-MATCH] {source} ({source_date_short}) -> {trc_filename}")
-                        break
-                except Exception:
-                    continue
-
-        logger.info(f"[TRC-MATCH] matching_sources: {matching_sources}")
-        return {"matching_sources": matching_sources}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[TRC-MATCH] error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-
-@router.post("/get-counter-data", dependencies=[Depends(require_elevated_role)])
-async def get_counter_data(
-    request: CounterDataRequest,
-    session_id: str = Query(default=None)
-):
-    """
-        FUNCTION: get_counter_data
-
-        DESCRIPTION:
-            Retrieves counter data from TRC trace files mapped to a specific transaction. 
-            Finds the corresponding TRC trace file for the transaction's source file and date, 
-            extracts start, first, and last counters, and builds a per-transaction counter table 
-            including CIN/CI and COUT/GA transactions. Handles transaction logs to extract 
-            denomination information and flags transactions with counters available.
-
-        USAGE:
-            response = await get_counter_data(request=CounterDataRequest(transaction_id="TX123", source_file="20250404"))
-
-        PARAMETERS:
-            request (CounterDataRequest) : Pydantic model containing:
-                - transaction_id (str) : ID of the transaction to retrieve counters for
-                - source_file (str)    : Source file associated with the transaction
-            session_id (str)           : Optional. Session ID to fetch data from. Defaults to CURRENT_SESSION_ID.
-
-        RETURNS:
-            dict : Dictionary containing counter data:
-                - "transaction_id" (str)           : Transaction ID
-                - "source_file" (str)              : Source file name
-                - "all_blocks" (list)              : All counter blocks extracted from TRC files
-                - "column_descriptions" (dict)     : Column descriptions for counters
-                - "start_counter" (dict)           : First counter in file (static)
-                    - "date" (str)
-                    - "timestamp" (str)
-                    - "counter_data" (list of dict)
-                - "first_counter" (dict)           : Counter at or after transaction start (dynamic)
-                - "last_counter" (dict)            : Last counter in file (static)
-                - "counter_per_transaction" (list of dict) : Summary of each transaction with:
-                    - "date_timestamp" (str)
-                    - "transaction_id" (str)
-                    - "transaction_type" (str)
-                    - "transaction_summary" (str)
-                    - "transaction_state" (str)
-                    - "count" (str)
-                    - "counter_summary" (str)
-                    - "comment" (str)
-
-        RAISES:
-            HTTPException :
-                - 400 : No transaction data available or no TRC trace files found
-                - 404 : Session not found, transaction not found, or no matching TRC trace file
-                - 500 : For any unexpected errors during processing
-"""
-
-    session_id = _resolve_session_id(session_id)
-    try:
-        # print(f" Getting counter data for transaction: {request.transaction_id}")
-        
-        # Check session
-        if not session_service.session_exists(session_id):
-            raise HTTPException(
-                status_code=404,
-                detail="No session found"
-            )
-        
-        session_data = session_service.get_session(session_id)
-        
-        # Get transaction data
-        transaction_data = session_data.get('transaction_data')
-        if not transaction_data:
-            raise HTTPException(
-                status_code=400,
-                detail="No transaction data available"
-            )
-        
-        # Find the transaction
-        df = pd.DataFrame(transaction_data)
-        
-        # Filter transactions to only those from the selected source file
-        source_transactions = df[df['Source File'] == request.source_file]
-
-        source_transactions = source_transactions.drop_duplicates(subset=['Transaction ID'], keep='first')
-        
-        if len(source_transactions) == 0:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No transactions found in source '{request.source_file}'"
-            )
-        
-        if request.transaction_id not in source_transactions['Transaction ID'].values:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Transaction {request.transaction_id} not found in source '{request.source_file}'"
-            )
-        
-        txn_data = source_transactions[source_transactions['Transaction ID'] == request.transaction_id].iloc[0]
-        
-        # Get TRC trace filenames and contents from session
-        file_categories = session_data.get('file_categories', {})
-        trc_trace_files = file_categories.get('trc_trace', [])
-        trc_trace_contents = session_data.get('trc_trace_contents', {})
-
-        if not trc_trace_files:
-            raise HTTPException(
-                status_code=400,
-                detail="No TRC trace files available"
-            )
-
-        # Parse transaction date from source file (format: YYYYMMDD -> YYMMDD)
-        txn_date_full = request.source_file  # e.g., "20250404"
-        txn_date_short = txn_date_full[2:] if len(txn_date_full) == 8 else txn_date_full  # "250404"
-
-        # Find matching TRC trace file by scanning session content for the date
-        matching_trc = None
-        matching_trc_content = None
-
-        for trc_filename in trc_trace_files:
-            try:
-                content = trc_trace_contents.get(trc_filename, '')
-                first_lines = '\n'.join(content.splitlines()[:100])
-                if txn_date_short in first_lines:
-                    matching_trc = trc_filename
-                    matching_trc_content = content
-                    break
-            except Exception:
-                continue
-
-        if not matching_trc:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No matching TRC trace file found for date '{txn_date_full}' (searched for '{txn_date_short}')"
-            )
-
-        # Extract counter blocks from TRC content in session memory
-        txn_start_time = str(txn_data.get('Start Time', ''))
-        txn_end_time = str(txn_data.get('End Time', ''))
-
-        # OPTIMIZATION: Extract ALL counter blocks from TRC content ONCE
-        all_counter_blocks = extract_counter_blocks_from_string(matching_trc_content)
-
-        if not all_counter_blocks:
-            print(" No counter blocks found")
-            start_counter_data = []
-            first_counter_data = []
-            last_counter_data = []
-            start_timestamp = txn_start_time
-            first_timestamp = txn_start_time
-            last_timestamp = txn_end_time
-        else:
-            # Parse transaction times
-            
-            def parse_time_from_trc_local(time_str):
-                """Parse time from TRC trace format (HH:MM:SS or HH:MM:SS.MS)"""
-                try:
-                    # Handle "21:17:33" or "21:17:33.04" format
-                    if '.' in time_str:
-                        base_time = time_str.split('.')[0]
-                    else:
-                        base_time = time_str
-                    
-                    # Parse as time object
-                    parsed = datetime.strptime(base_time, '%H:%M:%S').time()
-                    return parsed
-                except Exception as e:
-                    # print(f" Error parsing time '{time_str}': {e}")
-                    return None
-            
-            # Extract just the time portion from transaction start/end
-            txn_start_time_only = txn_start_time.split()[-1] if ' ' in txn_start_time else txn_start_time
-            txn_end_time_only = txn_end_time.split()[-1] if ' ' in txn_end_time else txn_end_time
-            
-            txn_start_dt = parse_time_from_trc_local(txn_start_time_only)
-            txn_end_dt = parse_time_from_trc_local(txn_end_time_only)
-            
-            # print(f" Transaction start time: {txn_start_dt}")
-            # print(f" Transaction end time: {txn_end_dt}")
-            # print(f" Total counter blocks: {len(all_counter_blocks)}")
-            
-            # 1. Start counter: STATIC - absolute first block in the file
-            start_block = all_counter_blocks[0]
-            start_counter_data = start_block['data']
-            start_timestamp = start_block['timestamp']
-            
-            # 2. First counter: DYNAMIC - find counter at or just AFTER transaction start time
-            first_block = None
-            
-            if txn_start_dt:
-                for i, block in enumerate(all_counter_blocks):
-                    block_time = block.get('time')
-                    if block_time:
-                        # print(f"  Block {i}: time={block_time}, comparing with txn_start={txn_start_dt}")
-                        if block_time >= txn_start_dt:
-                            first_block = block
-                            # print(f"   Found first counter at/after transaction start: {block_time}")
-                            break
-            
-            # Fallback to first block if no counter found after start time
-            if not first_block:
-                # print(f"   No counter found at/after transaction start, using first block")
-                first_block = all_counter_blocks[0]
-            
-            first_counter_data = first_block['data']
-            first_timestamp = first_block['timestamp']
-            
-            # 3. Last counter: STATIC - absolute last block in the file
-            last_block = all_counter_blocks[-1]
-            last_counter_data = last_block['data']
-            last_timestamp = last_block['timestamp']
-            
-            # print(f" Start counter (static - first in file): {len(start_counter_data)} rows at {start_timestamp}")
-            # print(f" First counter (dynamic - at/after txn start): {len(first_counter_data)} rows at {first_timestamp}")
-            # print(f" Last counter (static - last in file): {len(last_counter_data)} rows at {last_timestamp}")
-        
-        # Get transaction date
-        txn_date = txn_date_full
-
-        # Format the date for display (YYYYMMDD -> "DD Month YYYY")
-        txn_date_formatted = txn_date
-        if len(txn_date) == 8:  # YYYYMMDD
-            try:
-                dt = datetime.strptime(txn_date, '%Y%m%d')
-                txn_date_formatted = dt.strftime('%d %B %Y')
-            except:
-                txn_date_formatted = txn_date
-        
-        # Build Counter per Transaction table
-        counter_per_transaction = []
-        
-        # First, reset index to avoid index mismatch issues
-        source_transactions_reset = source_transactions.reset_index(drop=True)
-
-        # Find the position (not index) of the selected transaction
-        selected_txn_position = source_transactions_reset[source_transactions_reset['Transaction ID'] == request.transaction_id].index[0]
-
-        # Get all transactions from that position onwards
-        transactions_subset = source_transactions_reset.iloc[selected_txn_position:]
-
-        # Filter only CIN/CI and COUT/GA transactions
-        transactions_subset = transactions_subset[
-            transactions_subset['Transaction Type'].isin(['Cash Deposit', 'Cash Withdrawal'])
-        ]
-
-        # print(f"  Building counter per transaction table for {len(transactions_subset)} transactions (CIN/COUT only)")
-
-        for _, txn_row in transactions_subset.iterrows():
-            txn_id = txn_row['Transaction ID']
-            txn_type = txn_row.get('Transaction Type', 'Unknown')
-            txn_state = txn_row.get('End State', 'Unknown')
-            txn_start_time = str(txn_row.get('Start Time', ''))
-            txn_end_time = str(txn_row.get('End Time', ''))
-            txn_log = str(txn_row.get('Transaction Log', ''))
-            
-            # Parse date and time
-            if ' ' in txn_start_time:
-                date_part = txn_start_time.split()[0] if len(txn_start_time.split()) > 0 else txn_date
-                time_part = txn_start_time.split()[1] if len(txn_start_time.split()) > 1 else txn_start_time
-            else:
-                date_part = txn_date
-                time_part = txn_start_time
-            
-            # Format date as "DD Month YYYY" (e.g., "29 May 2025")
-            date_formatted = date_part
-            if len(date_part) == 8:  # YYYYMMDD
-                try:
-                    dt = datetime.strptime(date_part, '%Y%m%d')
-                    date_formatted = dt.strftime('%d %B %Y')
-                except:
-                    date_formatted = date_part
-            
-            # Extract count information from transaction log
-            # Pattern for COUT: "Dispense info - 1 note(s) of 500,00 INR from cassette 5 (SLOT3)"
-            # Pattern for CIN: "Identified notes:     1 x    500 INR"
-            count_info = []
-
-            # Check conditions for displaying denomination or cancellation
-            is_cancelled = "Transaction cancelled. Customer timeout." in txn_log
-            is_successful = txn_state == 'Successful'
-            has_card_presented = "Card successfully presented" in txn_log
-            has_banknotes_presented = "Banknotes presented" in txn_log
-
-            # Decision logic based on conditions
-            if is_cancelled and not (is_successful and (has_card_presented or has_banknotes_presented)):
-                # Show "Transaction Canceled" for all cancelled transactions EXCEPT when successful with card/banknotes presented
-                count_display = "Transaction Canceled"
-            else:
-                # Show denomination for:
-                # 1. No cancellation + successful
-                # 2. Cancellation + successful + (card presented OR banknotes presented)
-                
-                if txn_type == 'Cash Withdrawal':
-                    # COUT pattern: "Dispense info - 1 note(s) of 500,00 INR from cassette 5 (SLOT3)"
-                    for log_line in txn_log.split('\n'):
-                        match = re.search(r'(\d+)\s+note\(s\)\s+of\s+([\d,\.]+)\s+([A-Z]{3})', log_line, re.IGNORECASE)
-                        if match:
-                            note_count = match.group(1)
-                            amount = match.group(2).replace(',', '.')  # Handle comma as decimal separator
-                            currency = match.group(3)
-                            count_info.append(f"{currency} {amount} x{note_count}")
-                
-                elif txn_type == 'Cash Deposit':
-                    # CIN pattern: "Identified notes:     1 x    500 INR"
-                    for log_line in txn_log.split('\n'):
-                        match = re.search(r'(\d+)\s+x\s+([\d,\.]+)\s+([A-Z]{3})', log_line, re.IGNORECASE)
-                        if match:
-                            note_count = match.group(1)
-                            amount = match.group(2).replace(',', '.')
-                            currency = match.group(3)
-                            count_info.append(f"{currency} {amount} x{note_count}")
-                
-                count_display = ", ".join(count_info) if count_info else ""
-            
-            # Create transaction summary
-            if txn_state == 'Successful':
-                summary = f"Successful"
-            elif txn_state == 'Unsuccessful':
-                summary = f"Unsuccessful"
-            else:
-                summary = txn_state
-            
-            # Check for counters in transaction timeframe
-            counter_summary = ""
-            try:
-                txn_start_dt = parse_time_from_trc(time_part)
-                txn_end_dt = parse_time_from_trc(txn_end_time.split()[-1] if ' ' in txn_end_time else txn_end_time)
-                
-                if txn_start_dt and txn_end_dt and all_counter_blocks:
-                    for block in all_counter_blocks:
-                        block_time = block.get('time')
-                        if block_time and txn_start_dt <= block_time <= txn_end_dt:
-                            counter_summary = "View Counters"
-                            break
-            except Exception as e:
-                print(f" Error checking counters for {txn_id}: {e}")
-            
-            counter_per_transaction.append({
-                'date_timestamp': f"{date_formatted} {time_part}",
-                'transaction_id': txn_id,
-                'transaction_type': txn_type,
-                'transaction_summary': summary,
-                'transaction_state': txn_state,
-                'count': count_display,
-                'counter_summary': counter_summary,
-                'comment': ''
-            })
-        
-        # print(f" Created counter per transaction table with {len(counter_per_transaction)} entries")
-        
-        # Find this section in get_counter_data endpoint (around line 1890):
-        response_data = {
-            "transaction_id": request.transaction_id,
-            "source_file": request.source_file,
-            "all_blocks": all_counter_blocks,
-            "column_descriptions": get_counter_column_descriptions(),  # ADD THIS LINE
-            "start_counter": {
-                "date": txn_date_formatted,
-                "timestamp": start_timestamp,
-                "counter_data": start_counter_data
-            },
-            "first_counter": {
-                "date": txn_date_formatted,
-                "timestamp": first_timestamp,
-                "counter_data": first_counter_data
-            },
-            "last_counter": {
-                "date": txn_date_formatted,
-                "timestamp": last_timestamp,
-                "counter_data": last_counter_data
-            },
-            "counter_per_transaction": counter_per_transaction
-        }
-        
-        return response_data
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to get counter data: {str(e)}"
-        )
-    
-def get_counter_column_descriptions():
-    """Return descriptions for counter table columns"""
-    return {
-        'No': 'Cassette number',
-        'Ty': 'Type',
-        'ID': 'Unit ID',
-        'UnitName': 'UnitName',
-        'Cur': 'Currency',
-        'Val': 'Denomination',
-        'Ini': 'Ini - count in number',
-        'Cnt': 'Cnt - Remaining counters formula: INI - (RETRACT + DISP)',
-        'RCnt': 'Reject Count -> (Reject + Presented (Pres))',
-        'Safe': 'Safe',
-        'Min': 'Min',
-        'Max': 'Max',
-        'Disp': 'Disp',
-        'Pres': 'Presented notes to customer',
-        'Retr': 'Retract',
-        'A': 'AppL',
-        'DevL': 'DevL',
-        'St': 'Status - Indicates status of Logical cassette',
-        'HWsens': 'HWsens',
-        'Record_Type': 'Record Type'
-    }
 
 # ============================================
 # GET RAW JOURNAL CONTENTS (for NDC chat)

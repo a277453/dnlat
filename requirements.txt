@@ -16,3 +16,4 @@ bcrypt
 load-dotenv
 python-dotenv
 python-jose
+asyncpg

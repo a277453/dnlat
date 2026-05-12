@@ -20,6 +20,7 @@ from modules.logging_config import logger
 from modules.example_store import fetch_relevant_examples, build_example_block, needs_examples
 
 import os
+import asyncpg
 MODEL_NAME       = os.getenv("OLLAMA_MODEL", "llama3_log_analyzer")
 MIN_PROMPT_CHARS = 150
 
@@ -407,6 +408,59 @@ def _enrich_record_with_jrn_context(record: dict, jrn_context: dict) -> dict:
     return record
 
 
+async def _get_filtered_input_from_cache(transaction_id: str, db_url: str) -> "str | None":
+    """
+    Fetch pre-built filtered_input from txn_input_cache.
+    Returns the string on hit, None on miss or any DB failure.
+    Callers treat None as a signal to build the prompt on-the-fly.
+    """
+    try:
+        conn = await asyncpg.connect(db_url, timeout=5)
+        try:
+            row = await conn.fetchrow(
+                "SELECT filtered_input FROM txn_input_cache WHERE txn_id = $1",
+                transaction_id
+            )
+        finally:
+            await conn.close()
+
+        if row and row["filtered_input"]:
+            logger.info(f"[BATCH-HIT] txn_id={transaction_id} — loaded from txn_input_cache")
+            return row["filtered_input"]
+
+        logger.info(f"[BATCH-MISS] txn_id={transaction_id} — not in cache, building on-the-fly")
+        return None
+
+    except Exception as e:
+        logger.warning(
+            f"[BATCH-SKIP] Cache read failed for {transaction_id} ({e}) — building on-the-fly"
+        )
+        return None
+
+
+async def _write_analysis_result_to_cache(
+    transaction_id: str, analysis_result: str, db_url: str
+) -> None:
+    """
+    Write LLM analysis result back into txn_input_cache.
+    Fire-and-forget — failures are logged and never propagate to the caller.
+    """
+    try:
+        conn = await asyncpg.connect(db_url, timeout=5)
+        try:
+            await conn.execute(
+                "UPDATE txn_input_cache SET analysis_result = $1 WHERE txn_id = $2",
+                analysis_result, transaction_id
+            )
+        finally:
+            await conn.close()
+        logger.info(f"[BATCH-WRITE] analysis_result cached for txn_id={transaction_id}")
+    except Exception as e:
+        logger.warning(
+            f"[BATCH-WRITE] Failed to write analysis_result for {transaction_id}: {e}"
+        )
+
+
 def analyze_transaction(
     transaction_id: str,
     transaction_log: str,
@@ -474,211 +528,238 @@ def analyze_transaction(
     if customer_journal_contents is None:
         customer_journal_contents = {}
 
-    _preprocessor = LogPreprocessorService()
-    _merger        = TransactionMergerService()
-
-    # ── STEP 1: Build EJ record directly from txn_data ───────────────────
-    ej_record = _build_ej_record_from_txn_data(txn_data, transaction_log)
-
-    logger.info(
-        f"EJ record built from txn_data | "
-        f"txn_id={transaction_id} | "
-        f"ts_start={ej_record.get('ts_start')} | "
-        f"type={ej_record.get('type')} | "
-        f"status={ej_record.get('status')} | "
-        f"has_protocol_steps={bool(ej_record.get('protocol_steps'))} | "
-        f"has_device_errors={bool(ej_record.get('device_errors'))}"
-    )
-
-    # Guard: record must have at minimum ts_start and type
-    meaningful_keys = {k for k, v in ej_record.items() if v not in (None, [], "", False)}
-    if len(meaningful_keys) < 2:
-        raise ValueError(
-            "Transaction record has insufficient diagnostic information to send to the model."
-        )
-
-    # ── STEP 2: JRN enrichment from JOURNAL folder ───────────────────────
-    # Use extract_diagnostic_context_from_content to get structured diagnostic
-    # data from the JOURNAL folder .jrn file. This is ALWAYS attempted when
-    # we have a matching JRN file, regardless of whether txn_data already has
-    # JRN fields — the JOURNAL folder may contain richer data.
-
-    jrn_already_enriched = bool(
-        txn_data.get("JRN Protocol Steps") or
-        txn_data.get("JRN Response Code") or
-        txn_data.get("JRN Device Errors")
-    )
-
+    _preprocessor        = LogPreprocessorService()
+    _merger              = TransactionMergerService()
+    _db_url              = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/dnlat")
+    jrn_data_available   = False
+    jrn_already_enriched = False
     jrn_context_enriched = False
-    source_stem = str(txn_data.get('Source File') or txn_data.get('Source_File') or '')
-    matched_jrn_file = match_journal_file(source_stem, ui_journal_files)
 
-    if matched_jrn_file:
-        jrn_filename = Path(matched_jrn_file).name
-        raw_jrn = ui_journal_contents.get(jrn_filename, '')
-
-        if raw_jrn and raw_jrn.strip():
-            ts_start = ej_record.get('ts_start', '')
-            ts_end   = ej_record.get('ts_end', '')
-
-            if ts_start and ts_end:
-                logger.info(
-                    f"Extracting JOURNAL diagnostic context from {jrn_filename} "
-                    f"[{ts_start}-{ts_end}] for {transaction_id}"
-                )
-                jrn_context = extract_diagnostic_context_from_content(
-                    jrn_content=raw_jrn,
-                    jrn_filename=jrn_filename,
-                    start_time_str=ts_start,
-                    end_time_str=ts_end,
-                )
-
-                # Count non-empty fields for logging
-                ctx_fields = sum(
-                    1 for v in jrn_context.values()
-                    if v and v != [] and v != ''
-                )
-                logger.info(
-                    f"JOURNAL context extracted: {ctx_fields} non-empty fields "
-                    f"from {jrn_filename}"
-                )
-
-                if ctx_fields > 0:
-                    _enrich_record_with_jrn_context(ej_record, jrn_context)
-                    jrn_context_enriched = True
-                    logger.info(
-                        f"EJ record enriched with JOURNAL context for {transaction_id}"
-                    )
-            else:
-                logger.warning(
-                    f"Cannot extract JOURNAL context — missing ts_start/ts_end "
-                    f"for {transaction_id}"
-                )
-        else:
-            logger.warning(
-                f"JOURNAL file '{jrn_filename}' not found or empty in session contents "
-                f"(available keys: {list(ui_journal_contents.keys())[:10]})"
-            )
-    else:
+    # ── CACHE CHECK ───────────────────────────────────────────────────────
+    # If batch_service already built and stored filtered_input for this txn,
+    # skip STEPS 1-3 entirely (record build, JRN enrichment, prompt build,
+    # few-shot injection). Only txn_id, type, start/end time are read from
+    # txn_data for the response — no re-parsing, fewer tokens to Ollama.
+    # On cache miss or any DB failure, fall through to the full pipeline.
+    _cached_input = None
+    try:
+        import asyncio
+        _cached_input = asyncio.get_event_loop().run_until_complete(
+            _get_filtered_input_from_cache(transaction_id, _db_url)
+        )
+    except Exception as _cache_err:
         logger.warning(
-            f"No matching JOURNAL file for source '{source_stem}' in {ui_journal_files}"
+            f"[BATCH-SKIP] Cache lookup raised unexpectedly for "
+            f"{transaction_id}: {_cache_err} — building on-the-fly"
         )
 
-    # Legacy fallback: preprocess_jrn for EJ-only sessions with no JOURNAL
-    # context extracted above.
-    merged_record = ej_record
-    if not jrn_already_enriched and not jrn_context_enriched and matched_jrn_file:
-        jrn_filename = Path(matched_jrn_file).name
-        raw_jrn = ui_journal_contents.get(jrn_filename, '')
-        if raw_jrn and raw_jrn.strip():
-            try:
-                jrn_records = _preprocessor.preprocess_jrn(raw_jrn)
-                if jrn_records:
+    if _cached_input:
+        # ── CACHE HIT ────────────────────────────────────────────────────
+        # batch_service already merged EJ+JRN and built the full prompt.
+        # Skip all build steps — go straight to monitoring + Ollama.
+        user_content         = _cached_input
+        jrn_data_available   = True
+        jrn_already_enriched = True
+        jrn_context_enriched = True
+        logger.info(
+            f"[BATCH-HIT] {transaction_id} — "
+            f"skipping STEPS 1-3 (record build / JRN enrichment / "
+            f"prompt build / few-shot). "
+            f"cached filtered_input: {len(user_content)} chars"
+        )
+
+    else:
+        # ── CACHE MISS: run full pipeline ─────────────────────────────────
+        logger.info(
+            f"[BATCH-MISS] {transaction_id} — cache empty, running full pipeline"
+        )
+
+        # ── STEP 1: Build EJ record from txn_data ────────────────────────
+        ej_record = _build_ej_record_from_txn_data(txn_data, transaction_log)
+        logger.info(
+            f"EJ record built from txn_data | "
+            f"txn_id={transaction_id} | "
+            f"ts_start={ej_record.get('ts_start')} | "
+            f"type={ej_record.get('type')} | "
+            f"status={ej_record.get('status')} | "
+            f"has_protocol_steps={bool(ej_record.get('protocol_steps'))} | "
+            f"has_device_errors={bool(ej_record.get('device_errors'))}"
+        )
+
+        meaningful_keys = {k for k, v in ej_record.items() if v not in (None, [], "", False)}
+        if len(meaningful_keys) < 2:
+            raise ValueError(
+                "Transaction record has insufficient diagnostic information to send to the model."
+            )
+
+        # ── STEP 2: JRN enrichment from JOURNAL folder ───────────────────
+        jrn_already_enriched = bool(
+            txn_data.get("JRN Protocol Steps") or
+            txn_data.get("JRN Response Code") or
+            txn_data.get("JRN Device Errors")
+        )
+
+        source_stem      = str(txn_data.get('Source File') or txn_data.get('Source_File') or '')
+        matched_jrn_file = match_journal_file(source_stem, ui_journal_files)
+
+        if matched_jrn_file:
+            jrn_filename = Path(matched_jrn_file).name
+            raw_jrn      = ui_journal_contents.get(jrn_filename, '')
+
+            if raw_jrn and raw_jrn.strip():
+                ts_start = ej_record.get('ts_start', '')
+                ts_end   = ej_record.get('ts_end', '')
+
+                if ts_start and ts_end:
                     logger.info(
-                        f"JRN preprocess_jrn fallback: {len(jrn_records)} record(s) "
+                        f"Extracting JOURNAL diagnostic context from {jrn_filename} "
+                        f"[{ts_start}-{ts_end}] for {transaction_id}"
+                    )
+                    jrn_context = extract_diagnostic_context_from_content(
+                        jrn_content=raw_jrn,
+                        jrn_filename=jrn_filename,
+                        start_time_str=ts_start,
+                        end_time_str=ts_end,
+                    )
+                    ctx_fields = sum(
+                        1 for v in jrn_context.values()
+                        if v and v != [] and v != ''
+                    )
+                    logger.info(
+                        f"JOURNAL context extracted: {ctx_fields} non-empty fields "
                         f"from {jrn_filename}"
                     )
-                    merged_list = _merger.merge([ej_record], jrn_records)
-                    if merged_list:
-                        merged_record = merged_list[0]
+                    if ctx_fields > 0:
+                        _enrich_record_with_jrn_context(ej_record, jrn_context)
+                        jrn_context_enriched = True
                         logger.info(
-                            f"JRN preprocess_jrn fallback merge successful "
-                            f"for {transaction_id}"
+                            f"EJ record enriched with JOURNAL context for {transaction_id}"
                         )
                 else:
                     logger.warning(
-                        f"JRN preprocess_jrn fallback: no records from {jrn_filename}"
+                        f"Cannot extract JOURNAL context — missing ts_start/ts_end "
+                        f"for {transaction_id}"
                     )
-            except Exception as jrn_err:
-                logger.warning(f"JRN preprocess_jrn fallback failed: {jrn_err}")
-
-    jrn_data_available = jrn_already_enriched or jrn_context_enriched or (merged_record is not ej_record)
-    logger.info(
-        f"JRN data summary | already_enriched={jrn_already_enriched} | "
-        f"context_enriched={jrn_context_enriched} | "
-        f"preprocess_merged={merged_record is not ej_record} | "
-        f"jrn_data_available={jrn_data_available}"
-    )
-
-    # ── STEP 2b: Strip emv_events that carry no diagnostic value ────────────
-    # [3214] card track 2 lines with fully masked data have zero signal for the LLM.
-    # Keep only lines that contain an AID, chip decision, or non-masked content.
-    if ej_record.get('emv_events'):
-        ej_record['emv_events'] = [
-            e for e in ej_record['emv_events']
-            if not (
-                '[3214]' in e and
-                '[MASKED]' in e and
-                'AID:' not in e
-            )
-        ]
-        if not ej_record['emv_events']:
-            del ej_record['emv_events']
-
-    # ── STEP 3: Build prompt ──────────────────────────────────────────────
-    user_content = _preprocessor.build_prompt(
-        [merged_record],
-        atm_id=str(txn_data.get('Terminal ID', ''))
-    )
-
-    # ── STEP 3b: Append compact CUSTOMER journal EJ excerpt ─────────────
-    # Only lines that carry diagnostic value NOT already in the structured
-    # record are kept.  PII is masked, redundant patterns stripped, and
-    # output is capped at 40 lines to avoid prompt bloat.
-    if transaction_log and transaction_log.strip():
-        compact_ej = _compact_ej_for_prompt(transaction_log, max_lines=40)
-        if compact_ej.strip():
-            user_content += (
-                "\n\n--- CUSTOMER JOURNAL (EJ) SUPPLEMENTARY LINES ---\n"
-                f"{compact_ej}"
-            )
-            logger.info(
-                f"Appended compact CUSTOMER EJ excerpt ({len(compact_ej)} chars, "
-                f"from {len(transaction_log)} raw) to LLM prompt for {transaction_id}"
-            )
+            else:
+                logger.warning(
+                    f"JOURNAL file '{jrn_filename}' not found or empty in session contents "
+                    f"(available keys: {list(ui_journal_contents.keys())[:10]})"
+                )
         else:
-            logger.info(
-                f"No non-redundant EJ lines for {transaction_id} — "
-                f"structured record covers everything"
+            logger.warning(
+                f"No matching JOURNAL file for source '{source_stem}' in {ui_journal_files}"
             )
 
-    # ── STEP 3c: Inject dynamic few-shot examples ───────────────────────
-    # Only injected for complex transactions (host offline, cancel, retract,
-    # chained, device errors). Simple cases (customer cancel, timeout, success)
-    # skip injection entirely — saves ~660 tokens per call.
-    # top_k=1 to minimise token overhead while still providing format guidance.
-    if needs_examples(ej_record):
-        relevant_examples = fetch_relevant_examples(ej_record, top_k=1)
-        if relevant_examples:
-            example_block = build_example_block(relevant_examples)
-            # Strip any lines that instruct the model to wait for input —
-            # these cause the model to respond with a request rather than analysis
-            _waiting_phrases = (
-                "after the examples you will receive",
-                "you will receive a new transaction",
-                "a new transaction to analyze",
-            )
-            cleaned_example_lines = [
-                line for line in example_block.splitlines()
-                if not any(p in line.lower() for p in _waiting_phrases)
+        # Legacy fallback: preprocess_jrn for EJ-only sessions
+        merged_record = ej_record
+        if not jrn_already_enriched and not jrn_context_enriched and matched_jrn_file:
+            jrn_filename = Path(matched_jrn_file).name
+            raw_jrn      = ui_journal_contents.get(jrn_filename, '')
+            if raw_jrn and raw_jrn.strip():
+                try:
+                    jrn_records = _preprocessor.preprocess_jrn(raw_jrn)
+                    if jrn_records:
+                        logger.info(
+                            f"JRN preprocess_jrn fallback: {len(jrn_records)} record(s) "
+                            f"from {jrn_filename}"
+                        )
+                        merged_list = _merger.merge([ej_record], jrn_records)
+                        if merged_list:
+                            merged_record = merged_list[0]
+                            logger.info(
+                                f"JRN preprocess_jrn fallback merge successful "
+                                f"for {transaction_id}"
+                            )
+                    else:
+                        logger.warning(
+                            f"JRN preprocess_jrn fallback: no records from {jrn_filename}"
+                        )
+                except Exception as jrn_err:
+                    logger.warning(f"JRN preprocess_jrn fallback failed: {jrn_err}")
+
+        jrn_data_available = (
+            jrn_already_enriched or
+            jrn_context_enriched or
+            (merged_record is not ej_record)
+        )
+        logger.info(
+            f"JRN data summary | already_enriched={jrn_already_enriched} | "
+            f"context_enriched={jrn_context_enriched} | "
+            f"preprocess_merged={merged_record is not ej_record} | "
+            f"jrn_data_available={jrn_data_available}"
+        )
+
+        # ── STEP 2b: Strip low-signal EMV events ─────────────────────────
+        if ej_record.get('emv_events'):
+            ej_record['emv_events'] = [
+                e for e in ej_record['emv_events']
+                if not (
+                    '[3214]' in e and
+                    '[MASKED]' in e and
+                    'AID:' not in e
+                )
             ]
-            example_block = "\n".join(cleaned_example_lines)
-            user_content = (
-                example_block
-                + "\n\n=== END OF EXAMPLES — DO NOT ANALYZE THE ABOVE ===\n\n"
-                + "ANALYZE THIS TRANSACTION NOW. Do not ask for more input. "
-                + "Do not repeat or summarize the examples. "
-                + "Produce the full analysis output immediately.\n\n"
-                + user_content
-            )
-            logger.info(
-                f"Injected {len(relevant_examples)} few-shot example(s) into prompt "
-                f"for {transaction_id}"
-            )
+            if not ej_record['emv_events']:
+                del ej_record['emv_events']
+
+        # ── STEP 3: Build prompt ──────────────────────────────────────────
+        user_content = _preprocessor.build_prompt(
+            [merged_record],
+            atm_id=str(txn_data.get('Terminal ID', ''))
+        )
+
+        # ── STEP 3b: Append compact EJ excerpt ───────────────────────────
+        if transaction_log and transaction_log.strip():
+            compact_ej = _compact_ej_for_prompt(transaction_log, max_lines=40)
+            if compact_ej.strip():
+                user_content += (
+                    "\n\n--- CUSTOMER JOURNAL (EJ) SUPPLEMENTARY LINES ---\n"
+                    f"{compact_ej}"
+                )
+                logger.info(
+                    f"Appended compact CUSTOMER EJ excerpt ({len(compact_ej)} chars, "
+                    f"from {len(transaction_log)} raw) to LLM prompt for {transaction_id}"
+                )
+            else:
+                logger.info(
+                    f"No non-redundant EJ lines for {transaction_id} — "
+                    f"structured record covers everything"
+                )
+
+        # ── STEP 3c: Inject dynamic few-shot examples ────────────────────
+        # Only for complex transactions — simple cases skip to save ~660 tokens.
+        if needs_examples(ej_record):
+            relevant_examples = fetch_relevant_examples(ej_record, top_k=1)
+            if relevant_examples:
+                example_block    = build_example_block(relevant_examples)
+                _waiting_phrases = (
+                    "after the examples you will receive",
+                    "you will receive a new transaction",
+                    "a new transaction to analyze",
+                )
+                cleaned_example_lines = [
+                    line for line in example_block.splitlines()
+                    if not any(p in line.lower() for p in _waiting_phrases)
+                ]
+                example_block = "\n".join(cleaned_example_lines)
+                user_content  = (
+                    example_block
+                    + "\n\n=== END OF EXAMPLES — DO NOT ANALYZE THE ABOVE ===\n\n"
+                    + "ANALYZE THIS TRANSACTION NOW. Do not ask for more input. "
+                    + "Do not repeat or summarize the examples. "
+                    + "Produce the full analysis output immediately.\n\n"
+                    + user_content
+                )
+                logger.info(
+                    f"Injected {len(relevant_examples)} few-shot example(s) into prompt "
+                    f"for {transaction_id}"
+                )
+            else:
+                logger.info(
+                    f"Complex transaction but no matching examples found for {transaction_id}"
+                )
         else:
-            logger.info(f"Complex transaction but no matching examples found for {transaction_id}")
-    else:
-        logger.info(f"Simple transaction — skipping few-shot injection for {transaction_id}")
+            logger.info(f"Simple transaction — skipping few-shot injection for {transaction_id}")
 
     if len(user_content.strip()) < MIN_PROMPT_CHARS:
         raise ValueError(
@@ -794,6 +875,18 @@ def analyze_transaction(
         llm_analysis          = raw_response
     )
     logger.info(f"Metadata stored for txn: {transaction_id}")
+
+    # ── Write analysis result back to cache (fire-and-forget) ────────────
+    try:
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(
+            _write_analysis_result_to_cache(transaction_id, raw_response, _db_url)
+        )
+    except Exception as _write_err:
+        logger.warning(
+            f"[BATCH-WRITE] Cache write raised unexpectedly for "
+            f"{transaction_id}: {_write_err}"
+        )
 
     # ── STEP 8: Return structured response ───────────────────────────────
     return {

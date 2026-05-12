@@ -6,7 +6,7 @@ import base64 as _b64
 import base64
 from pydantic import BaseModel
 from datetime import datetime, time as dt_time
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query, status, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, status, Depends, BackgroundTasks
 from modules.extraction import ZipExtractionService
 from modules.categorization import CategorizationService
 from modules.processing import ProcessingService
@@ -55,6 +55,7 @@ import time
 #  Import our central logger
 from modules.logging_config import logger
 from modules.chat_logger import ChatLogger
+from modules.batch_service import batch_preprocess_session
 from modules.error_classifier import ErrorClassifierService
 
 _error_classifier_service = ErrorClassifierService()
@@ -334,7 +335,7 @@ def get_processed_files_dir() -> str:
 
 
 @router.post("/process-zip", response_model=FileCategorizationResponse)
-async def process_zip_file(file: UploadFile = File(..., description="ZIP file to process"),mode: Optional[str] = Query(None, description="Processing mode (e.g., 'registry' to optimize for registry files)")):
+async def process_zip_file(file: UploadFile = File(..., description="ZIP file to process"), mode: Optional[str] = Query(None, description="Processing mode (e.g., 'registry' to optimize for registry files)"), background_tasks: BackgroundTasks = BackgroundTasks()):
     """
     FUNCTION:
         process_zip_file
@@ -636,6 +637,20 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
         t_sess_end = time.perf_counter()
         logger.debug(f"SESSION SAVE TIME: {t_sess_end - t_sess_start:.4f} s")
+
+        # ── BATCH PREPROCESSING ───────────────────────────────────────────
+        # Fire batch preprocessing as a background task so the upload response
+        # returns immediately. Builds filtered_input for every transaction in
+        # the session and caches it in txn_input_cache. If the DB is unreachable
+        # the task exits cleanly and analysis falls back to on-the-fly builds.
+        _db_url = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/dnlat")
+        background_tasks.add_task(
+            batch_preprocess_session,
+            session_id=CURRENT_SESSION_ID,
+            session_data=session_service.get_session(CURRENT_SESSION_ID),
+            db_url=_db_url,
+        )
+        logger.info(f"[{CURRENT_SESSION_ID}] Batch preprocessing queued as background task")
 
         # Delete the run folder from Temp so all content is now in memory.
         try:

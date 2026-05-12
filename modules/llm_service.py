@@ -20,8 +20,29 @@ from modules.logging_config import logger
 from modules.example_store import fetch_relevant_examples, build_example_block, needs_examples
 
 import os
+import asyncio
 import asyncpg
+import concurrent.futures
+
 MODEL_NAME       = os.getenv("OLLAMA_MODEL", "llama3_log_analyzer")
+
+
+def _run_async(coro):
+    """
+    Run an async coroutine from sync code, regardless of whether an event
+    loop is already running (FastAPI context) or not.
+
+    asyncio.get_event_loop().run_until_complete() raises
+    'This event loop is already running' when called inside FastAPI's loop.
+    This helper always executes the coroutine in a fresh thread with its own
+    clean event loop via asyncio.run() — fully isolated from FastAPI's loop.
+
+    The ThreadPoolExecutor(max_workers=1) spins up one thread per call and
+    tears it down immediately after — lightweight, no persistent pool.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(asyncio.run, coro)
+        return future.result()
 MIN_PROMPT_CHARS = 150
 
 # ── EJ line codes / patterns already captured by the structured record ────
@@ -530,7 +551,7 @@ def analyze_transaction(
 
     _preprocessor        = LogPreprocessorService()
     _merger              = TransactionMergerService()
-    _db_url              = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/dnlat")
+    _db_url              = os.getenv("DB_URL")
     jrn_data_available   = False
     jrn_already_enriched = False
     jrn_context_enriched = False
@@ -543,8 +564,7 @@ def analyze_transaction(
     # On cache miss or any DB failure, fall through to the full pipeline.
     _cached_input = None
     try:
-        import asyncio
-        _cached_input = asyncio.get_event_loop().run_until_complete(
+        _cached_input = _run_async(
             _get_filtered_input_from_cache(transaction_id, _db_url)
         )
     except Exception as _cache_err:
@@ -878,8 +898,7 @@ def analyze_transaction(
 
     # ── Write analysis result back to cache (fire-and-forget) ────────────
     try:
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(
+        _run_async(
             _write_analysis_result_to_cache(transaction_id, raw_response, _db_url)
         )
     except Exception as _write_err:

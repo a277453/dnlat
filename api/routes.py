@@ -335,7 +335,7 @@ def get_processed_files_dir() -> str:
 
 
 @router.post("/process-zip", response_model=FileCategorizationResponse)
-async def process_zip_file(file: UploadFile = File(..., description="ZIP file to process"), mode: Optional[str] = Query(None, description="Processing mode (e.g., 'registry' to optimize for registry files)"), background_tasks: BackgroundTasks = BackgroundTasks()):
+async def process_zip_file(file: UploadFile = File(..., description="ZIP file to process"), mode: Optional[str] = Query(None, description="Processing mode (e.g., 'registry' to optimize for registry files)")):
     """
     FUNCTION:
         process_zip_file
@@ -637,20 +637,6 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
 
         t_sess_end = time.perf_counter()
         logger.debug(f"SESSION SAVE TIME: {t_sess_end - t_sess_start:.4f} s")
-
-        # ── BATCH PREPROCESSING ───────────────────────────────────────────
-        # Fire batch preprocessing as a background task so the upload response
-        # returns immediately. Builds filtered_input for every transaction in
-        # the session and caches it in txn_input_cache. If the DB is unreachable
-        # the task exits cleanly and analysis falls back to on-the-fly builds.
-        _db_url = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/dnlat")
-        background_tasks.add_task(
-            batch_preprocess_session,
-            session_id=CURRENT_SESSION_ID,
-            session_data=session_service.get_session(CURRENT_SESSION_ID),
-            db_url=_db_url,
-        )
-        logger.info(f"[{CURRENT_SESSION_ID}] Batch preprocessing queued as background task")
 
         # Delete the run folder from Temp so all content is now in memory.
         try:
@@ -1551,7 +1537,7 @@ async def select_file_type(request: FileTypeSelectionRequest,session_id: str = Q
     }
 
 @router.post("/analyze-customer-journals")
-async def analyze_customer_journals(session_id: str = Query(default=None)):
+async def analyze_customer_journals(background_tasks: BackgroundTasks, session_id: str = Query(default=None)):
     """
     FUNCTION:
         analyze_customer_journals
@@ -1731,6 +1717,20 @@ async def analyze_customer_journals(session_id: str = Query(default=None)):
         if _jrn_cols else 0
 
         logger.info(f"Customer journal analysis completed. JRN enriched: {jrn_enriched}")
+
+        # ── BATCH PREPROCESSING ───────────────────────────────────────────
+        # Fired here — not at ZIP upload — because transaction_data is only
+        # populated after this function completes. Batch builds filtered_input
+        # for every transaction and caches it in txn_input_cache so subsequent
+        # LLM analysis calls skip re-parsing entirely.
+        _db_url = os.getenv("DB_URL")
+        background_tasks.add_task(
+            batch_preprocess_session,
+            session_id=session_id,
+            session_data=session_service.get_session(session_id),
+            db_url=_db_url,
+        )
+        logger.info(f"[{session_id}] Batch preprocessing queued after transaction_data populated")
 
         return {
             'message':              'Customer journals analyzed successfully',

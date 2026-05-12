@@ -37,10 +37,15 @@ from typing import Optional
 
 import asyncpg
 
-from modules.processing import LogPreprocessorService, TransactionMergerService
-from modules.journal_parser import match_journal_file
+from modules.processing import LogPreprocessorService
+from modules.journal_parser import match_journal_file, extract_diagnostic_context_from_content
 from modules.example_store import fetch_relevant_examples, build_example_block, needs_examples
 from modules.logging_config import logger
+from modules.llm_service import (
+    _build_ej_record_from_txn_data,
+    _enrich_record_with_jrn_context,
+    _compact_ej_for_prompt,
+)
 
 # ── Module logger ─────────────────────────────────────────────────────────────
 
@@ -125,18 +130,6 @@ def _prompt_hash(text: str) -> str:
     return hashlib.md5(text.encode()).hexdigest()[:16]
 
 
-def _read_file(path_str: str) -> Optional[str]:
-    """Read a file with UTF-8 fallback. Returns None on any failure."""
-    p = Path(path_str)
-    if not p.exists():
-        BATCH_LOG.warning(f"File not found: {path_str}")
-        return None
-    try:
-        return p.read_text(encoding="utf-8", errors="replace")
-    except Exception as e:
-        BATCH_LOG.warning(f"Failed to read {p.name}: {e}")
-        return None
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Per-row upsert  (LAYER 2 fallback lives here)
@@ -220,156 +213,168 @@ async def _upsert_transaction(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Per EJ+JRN pair processing
+# Per-transaction processing  (mirrors llm_service.analyze_transaction exactly)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def process_ej_jrn_pair(
+async def _process_single_txn(
     conn: asyncpg.Connection,
     session_id: str,
-    ej_path: str,
-    jrn_path: Optional[str],
+    txn_data: dict,
+    ui_contents: dict,
+    ui_journal_files: list,
     preprocessor: LogPreprocessorService,
-    merger: TransactionMergerService,
-) -> int:
+) -> bool:
     """
-    Process one EJ file (and its matched JRN file) and insert all transactions
-    into txn_input_cache.
+    Build filtered_input for one transaction using the identical pipeline as
+    llm_service.analyze_transaction — same record builder, same JRN enrichment,
+    same prompt builder, same EJ append, same few-shot injection.
 
-    Returns the number of transactions successfully inserted.
+    Returns True if the row was inserted successfully, False otherwise.
     """
-    ej_filename  = Path(ej_path).stem       # e.g. "20250403"
-    jrn_filename = Path(jrn_path).name if jrn_path else None
+    txn_id     = str(txn_data.get("Transaction ID") or "")
+    txn_log    = str(txn_data.get("Transaction Log") or "")
+    source_file = str(txn_data.get("Source File") or txn_data.get("Source_File") or "")
 
-    BATCH_LOG.info(
-        f"[{session_id}] Processing pair: EJ={ej_filename} | "
-        f"JRN={jrn_filename or 'none'}"
-    )
+    if not txn_id:
+        BATCH_LOG.warning(f"[{session_id}] Skipping txn with no Transaction ID")
+        return False
 
-    # ── 1. Read raw files ──────────────────────────────────────────────────
-    ej_raw  = _read_file(ej_path)
-    jrn_raw = _read_file(jrn_path) if jrn_path else None
-
-    if not ej_raw:
-        BATCH_LOG.warning(f"[{session_id}] Empty or unreadable EJ: {ej_path}")
-        return 0
-
-    # ── 2. Preprocess EJ ──────────────────────────────────────────────────
+    # ── STEP 1: Build EJ record from txn_data (identical to llm_service) ──
     try:
-        ej_records = preprocessor.preprocess_ej(ej_raw)
+        ej_record = _build_ej_record_from_txn_data(txn_data, txn_log)
     except Exception as e:
-        BATCH_LOG.error(
-            f"[{session_id}] EJ preprocessing failed ({ej_filename}): {e}"
-        )
-        return 0
-
-    if not ej_records:
         BATCH_LOG.warning(
-            f"[{session_id}] No EJ records parsed from {ej_filename}"
+            f"[{session_id}] _build_ej_record_from_txn_data failed "
+            f"for {txn_id}: {e} — skipping"
         )
-        return 0
+        return False
 
-    BATCH_LOG.info(
-        f"[{session_id}] EJ={ej_filename}: {len(ej_records)} record(s) parsed"
+    meaningful_keys = {k for k, v in ej_record.items() if v not in (None, [], "", False)}
+    if len(meaningful_keys) < 2:
+        BATCH_LOG.warning(
+            f"[{session_id}] Insufficient data in EJ record for {txn_id} — skipping"
+        )
+        return False
+
+    # ── STEP 2: JRN enrichment (identical to llm_service) ─────────────────
+    matched_jrn = match_journal_file(source_file, ui_journal_files)
+    if matched_jrn:
+        raw_jrn = ui_contents.get(matched_jrn, "")
+        if raw_jrn and raw_jrn.strip():
+            ts_start = ej_record.get("ts_start", "")
+            ts_end   = ej_record.get("ts_end", "")
+            if ts_start and ts_end:
+                try:
+                    jrn_context = extract_diagnostic_context_from_content(
+                        jrn_content=raw_jrn,
+                        jrn_filename=matched_jrn,
+                        start_time_str=ts_start,
+                        end_time_str=ts_end,
+                    )
+                    ctx_fields = sum(
+                        1 for v in jrn_context.values()
+                        if v and v != [] and v != ""
+                    )
+                    if ctx_fields > 0:
+                        _enrich_record_with_jrn_context(ej_record, jrn_context)
+                        BATCH_LOG.debug(
+                            f"[{session_id}] JRN enriched {txn_id} "
+                            f"({ctx_fields} fields from {matched_jrn})"
+                        )
+                except Exception as e:
+                    BATCH_LOG.warning(
+                        f"[{session_id}] JRN enrichment failed for {txn_id}: {e}"
+                    )
+
+    # ── STEP 2b: Strip low-signal EMV events (identical to llm_service) ───
+    if ej_record.get("emv_events"):
+        ej_record["emv_events"] = [
+            e for e in ej_record["emv_events"]
+            if not ("[3214]" in e and "[MASKED]" in e and "AID:" not in e)
+        ]
+        if not ej_record["emv_events"]:
+            del ej_record["emv_events"]
+
+    # ── STEP 3: Build prompt (identical to llm_service) ───────────────────
+    try:
+        filtered_input = preprocessor.build_prompt(
+            [ej_record],
+            atm_id=str(txn_data.get("Terminal ID", "")),
+        )
+    except Exception as e:
+        BATCH_LOG.warning(
+            f"[{session_id}] build_prompt failed for {txn_id}: {e} — skipping"
+        )
+        return False
+
+    # ── STEP 3b: Append compact EJ excerpt (identical to llm_service) ─────
+    if txn_log and txn_log.strip():
+        try:
+            compact_ej = _compact_ej_for_prompt(txn_log, max_lines=40)
+            if compact_ej.strip():
+                filtered_input += (
+                    "\n\n--- CUSTOMER JOURNAL (EJ) SUPPLEMENTARY LINES ---\n"
+                    + compact_ej
+                )
+        except Exception as e:
+            BATCH_LOG.warning(
+                f"[{session_id}] _compact_ej_for_prompt failed for {txn_id}: {e}"
+            )
+
+    # ── STEP 3c: Inject few-shot examples (identical to llm_service) ──────
+    try:
+        if needs_examples(ej_record):
+            relevant_examples = fetch_relevant_examples(ej_record, top_k=1)
+            if relevant_examples:
+                example_block    = build_example_block(relevant_examples)
+                _waiting_phrases = (
+                    "after the examples you will receive",
+                    "you will receive a new transaction",
+                    "a new transaction to analyze",
+                )
+                cleaned_lines = [
+                    line for line in example_block.splitlines()
+                    if not any(p in line.lower() for p in _waiting_phrases)
+                ]
+                example_block  = "\n".join(cleaned_lines)
+                filtered_input = (
+                    example_block
+                    + "\n\n=== END OF EXAMPLES — DO NOT ANALYZE THE ABOVE ===\n\n"
+                    + "ANALYZE THIS TRANSACTION NOW. Do not ask for more input. "
+                    + "Do not repeat or summarize the examples. "
+                    + "Produce the full analysis output immediately.\n\n"
+                    + filtered_input
+                )
+                BATCH_LOG.debug(
+                    f"[{session_id}] Few-shot injected for {txn_id} "
+                    f"({len(relevant_examples)} example(s))"
+                )
+    except Exception as e:
+        BATCH_LOG.warning(
+            f"[{session_id}] Few-shot injection failed for {txn_id}: {e} "
+            f"— storing prompt without examples"
+        )
+
+    # ── INSERT into txn_input_cache ───────────────────────────────────────
+    txn_meta = {
+        "txn_number":       txn_id,
+        "transaction_id":   txn_id,
+        "date":             str(txn_data.get("Source File") or "")[:8],
+        "ts_start":         str(txn_data.get("Start Time") or ej_record.get("ts_start") or ""),
+        "ts_end":           str(txn_data.get("End Time") or ej_record.get("ts_end") or ""),
+        "duration_seconds": txn_data.get("Duration (seconds)"),
+        "type":             str(txn_data.get("Transaction Type") or "Unknown"),
+        "status":           str(txn_data.get("End State") or "Unknown"),
+    }
+
+    return await _upsert_transaction(
+        conn=conn,
+        session_id=session_id,
+        ej_filename=source_file,
+        jrn_filename=matched_jrn,
+        txn=txn_meta,
+        filtered_input=filtered_input,
     )
-
-    # ── 3. Preprocess JRN (optional enrichment) ───────────────────────────
-    jrn_records = []
-    if jrn_raw:
-        try:
-            jrn_records = preprocessor.preprocess_jrn(jrn_raw)
-            BATCH_LOG.info(
-                f"[{session_id}] JRN={jrn_filename}: "
-                f"{len(jrn_records)} record(s) parsed"
-            )
-        except Exception as e:
-            BATCH_LOG.warning(
-                f"[{session_id}] JRN preprocessing failed ({jrn_filename}): {e} "
-                f"— continuing with EJ-only"
-            )
-
-    # ── 4. Merge EJ + JRN ─────────────────────────────────────────────────
-    if ej_records and jrn_records:
-        try:
-            merged = merger.merge(ej_records, jrn_records)
-            BATCH_LOG.info(
-                f"[{session_id}] Merged {len(merged)} transaction(s) "
-                f"from EJ+JRN pair"
-            )
-        except Exception as e:
-            BATCH_LOG.warning(
-                f"[{session_id}] Merge failed, falling back to EJ-only: {e}"
-            )
-            merged = ej_records
-    else:
-        merged = ej_records
-
-    # ── 5. Build filtered_input and insert per transaction ─────────────────
-    inserted = 0
-    for txn in merged:
-        try:
-            filtered_input = preprocessor.build_prompt(
-                records=[txn],
-                atm_id=str(txn.get("atm_id") or ""),
-            )
-        except Exception as e:
-            BATCH_LOG.warning(
-                f"[{session_id}] build_prompt failed for txn "
-                f"{txn.get('txn_number')}: {e} — skipping"
-            )
-            continue
-
-        # ── 5b. Inject few-shot examples (same logic as llm_service) ──────
-        # Complex transactions (retract, offline, chained, device errors) need
-        # example guidance to maintain output quality. Baked into filtered_input
-        # at batch time so cache hits get full prompt quality with zero extra
-        # work at analysis time.
-        try:
-            if needs_examples(txn):
-                relevant_examples = fetch_relevant_examples(txn, top_k=1)
-                if relevant_examples:
-                    example_block    = build_example_block(relevant_examples)
-                    _waiting_phrases = (
-                        "after the examples you will receive",
-                        "you will receive a new transaction",
-                        "a new transaction to analyze",
-                    )
-                    cleaned_lines = [
-                        line for line in example_block.splitlines()
-                        if not any(p in line.lower() for p in _waiting_phrases)
-                    ]
-                    example_block  = "\n".join(cleaned_lines)
-                    filtered_input = (
-                        example_block
-                        + "\n\n=== END OF EXAMPLES — DO NOT ANALYZE THE ABOVE ===\n\n"
-                        + "ANALYZE THIS TRANSACTION NOW. Do not ask for more input. "
-                        + "Do not repeat or summarize the examples. "
-                        + "Produce the full analysis output immediately.\n\n"
-                        + filtered_input
-                    )
-                    BATCH_LOG.debug(
-                        f"[{session_id}] Few-shot injected for txn "
-                        f"{txn.get('txn_number')} "
-                        f"({len(relevant_examples)} example(s))"
-                    )
-        except Exception as e:
-            # Few-shot failure is non-fatal — store prompt without examples
-            BATCH_LOG.warning(
-                f"[{session_id}] Few-shot injection failed for txn "
-                f"{txn.get('txn_number')}: {e} — storing prompt without examples"
-            )
-
-        success = await _upsert_transaction(
-            conn=conn,
-            session_id=session_id,
-            ej_filename=ej_filename,
-            jrn_filename=jrn_filename,
-            txn=txn,
-            filtered_input=filtered_input,
-        )
-        if success:
-            inserted += 1
-
-    return inserted
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -420,63 +425,57 @@ async def batch_preprocess_session(
             return
 
         preprocessor = LogPreprocessorService()
-        merger        = TransactionMergerService()
 
-        file_categories = session_data.get("file_categories", {})
+        # ── Read from session — same sources llm_service uses ──────────────
+        # transaction_data: fully parsed list of txn_data dicts from
+        #   transaction_analyzer — same input _build_ej_record_from_txn_data needs.
+        # ui_journal_contents + journal_llm_contents: merged exactly as
+        #   analyze_transaction_llm does (line: all_jrn_contents = {**ui, **llm})
+        transaction_data     = session_data.get("transaction_data", [])
+        ui_contents          = session_data.get("ui_journal_contents", {}) or {}
+        journal_llm_contents = session_data.get("journal_llm_contents", {}) or {}
 
-        # Customer journal files (EJ) — primary source
-        ej_files = file_categories.get("customer_journals", [])
+        # Merge both — ui_journal_contents keys take precedence on collision
+        # (matches the behavior in analyze_transaction_llm route exactly)
+        all_jrn_contents = {**ui_contents, **journal_llm_contents}
 
-        # Journal files (JRN) — enrichment; exclude VCP-PRO subtree
-        all_jrn_files = [
-            f for f in file_categories.get("ui_journals", [])
-            if "vcp-pro" not in str(f).replace("\\", "/").lower()
-        ]
+        # Exclude VCP-PRO entries from JRN pool
+        all_jrn_contents = {
+            k: v for k, v in all_jrn_contents.items()
+            if "vcp-pro" not in k.replace("\\", "/").lower()
+        }
+        ui_journal_files = list(all_jrn_contents.keys())
 
-        if not ej_files:
+        if not transaction_data:
             BATCH_LOG.warning(
-                f"[{session_id}] No customer journal files found — "
-                f"nothing to batch"
+                f"[{session_id}] No transaction_data in session — "
+                f"nothing to batch (run analyze-customer-journals first)"
             )
             return
 
         BATCH_LOG.info(
-            f"[{session_id}] Found {len(ej_files)} EJ file(s) | "
-            f"{len(all_jrn_files)} JRN file(s)"
+            f"[{session_id}] Found {len(transaction_data)} transaction(s) | "
+            f"{len(ui_journal_files)} JRN file(s) in session"
         )
 
         total_inserted = 0
 
-        for ej_path in ej_files:
-            ej_stem     = Path(ej_path).stem
-            matched_jrn = match_journal_file(ej_stem, all_jrn_files)
-
-            if matched_jrn:
-                BATCH_LOG.info(
-                    f"[{session_id}] Matched: {Path(ej_path).name} "
-                    f"→ {Path(matched_jrn).name}"
-                )
-            else:
-                BATCH_LOG.info(
-                    f"[{session_id}] No JRN match for {Path(ej_path).name} "
-                    f"— EJ-only processing"
-                )
-
+        for txn_data in transaction_data:
             try:
-                count = await process_ej_jrn_pair(
+                success = await _process_single_txn(
                     conn=conn,
                     session_id=session_id,
-                    ej_path=ej_path,
-                    jrn_path=matched_jrn,
+                    txn_data=txn_data,
+                    ui_contents=all_jrn_contents,
+                    ui_journal_files=ui_journal_files,
                     preprocessor=preprocessor,
-                    merger=merger,
                 )
-                total_inserted += count
+                if success:
+                    total_inserted += 1
             except Exception as e:
-                # One EJ file failed entirely — log and continue with the rest
                 BATCH_LOG.error(
-                    f"[{session_id}] Unexpected error processing "
-                    f"{Path(ej_path).name}: {e} — skipping file",
+                    f"[{session_id}] Unexpected error processing txn "
+                    f"{txn_data.get('Transaction ID', '?')}: {e} — skipping",
                     exc_info=True,
                 )
 

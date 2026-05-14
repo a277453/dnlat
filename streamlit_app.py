@@ -13,6 +13,7 @@ import numpy as np
 from fastapi.logger import logger
 from modules.analysis import create_analysis_table, create_feedback_table, create_userresponse_database
 from modules.chat_service import chat_turn as llm_chat_turn
+from modules.ndc_parser import decode_log_block, extract_messages_from_jrn, NdcMessage
 from modules.chat_logger import ChatLogger
 from modules.streamlit_logger import logger as frontend_logger
 import time
@@ -4668,9 +4669,25 @@ RAISES:
                                 "content": _analysis_text,
                             },
                         ]
+                        # Pull raw .jrn file contents from session so the
+                        # NDC decoder in chat_service can access 41004/41005 lines.
+                        try:
+                            _jrn_response = requests.get(
+                                f"{API_BASE_URL}/get-journal-contents",
+                                headers=get_auth_headers(),
+                                timeout=30,
+                            )
+                            _jrn_raw = (
+                                _jrn_response.json().get("journal_contents", {})
+                                if _jrn_response.status_code == 200
+                                else {}
+                            )
+                        except Exception:
+                            _jrn_raw = {}
+
                         st.session_state.chat_context = {
                             "ej":             transaction_log,
-                            "jrn":            "",
+                            "jrn":            _jrn_raw,
                             "analysis":       _analysis_text,
                             "txn_data":       selected_txn_data.to_dict(),
                             "transaction_id": selected_txn_id,
@@ -6258,6 +6275,275 @@ def render_error_summary():
                 )
 
 
+# ============================================
+# NDC MESSAGE DECODER
+# ============================================
+
+def render_ndc_decoder():
+    """
+    Standalone NDC CCProtFW1 message decoder.
+    Supports paste input (raw NDC lines) and .jrn file upload.
+    Zero coupling to the ZIP pipeline — has its own input controls.
+    """
+
+    # ── Direction badge colours ──────────────────────────────────────────────
+    _DIR_COLOUR = {
+        "ATM→HOST": ("#e8f4fd", "#1a6ea8", "↑"),
+        "HOST→ATM": ("#fdf3e8", "#a85a1a", "↓"),
+        "UNKNOWN":  ("#f0f0f0", "#555555", "?"),
+    }
+    _CLASS_COLOUR = {
+        "1": "#1a6ea8",  # Transaction Request  – blue
+        "2": "#1a8a4a",  # Transaction Reply    – green
+        "4": "#6e1aa8",  # Transaction Complete – purple
+        "6": "#8a6a1a",  # Solicited Status     – amber
+        "7": "#c0392b",  # Unsolicited Status   – red
+        "3": "#2a7a5a",  # Go In Service        – teal
+        "8": "#7a4a1a",  # Config download      – brown
+    }
+
+    _SAMPLE = (
+        r"61\1c\1c\1c\1c02200025091510190404608304620412110:18:35 09/15/2025\0d\0a"
+        r"10:18:35\0d\0a*** 10:19 OUT OF SERVICE\0a" + "\n" +
+        r"11\1c003\1c\1c\1c18\1c;589558XXXXXXXXX2869=XXXXXXXXXX?\1c\1cAAFA    "
+        r"\1c00000000\1cXXXXXXXXXXXXXXXX\1c\1c\1c\1c20031100000000010000000000"
+        r"\1dCAM\1d9F100706010A03602000950580000400009B0260009F26085E3339AE044746"
+        r"169F2701409F0306000000000000" + "\n" +
+        r"10\1c003\1c000\1c72" + "\n" +
+        r"22\1c003\1c\1cB\1c0001\1dCAM\1d9F100706010A03202000950580000400009B0260"
+        r"009F2608201806A33ECF260F9F2701009F0306000000000000" + "\n" +
+        r"23\1c003\1c\1c3\1cD8839B"
+    )
+
+    # ── CSS ──────────────────────────────────────────────────────────────────
+    st.markdown("""
+    <style>
+    .ndc-card { border:1px solid #2a2a2a; border-radius:8px;
+                padding:12px 16px 8px; margin-bottom:12px; }
+    .ndc-field-table { border-collapse:collapse; width:100%; }
+    .ndc-field-table td { padding:3px 10px 3px 6px; font-size:0.82rem; vertical-align:top; }
+    .ndc-field-label { color:#888; white-space:nowrap; min-width:180px; }
+    .ndc-field-value { font-family:monospace; word-break:break-all; }
+    .ndc-section-head { color:#888; font-size:0.75rem; font-weight:600;
+                        letter-spacing:0.5px; padding:6px 6px 2px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown("## NDC Message Decoder")
+    st.caption(
+        "Decode raw CCProtFW1 NDC protocol messages — paste lines directly "
+        "or upload a `.jrn` log file to extract all messages automatically."
+    )
+
+    # ── Input ────────────────────────────────────────────────────────────────
+    input_tab, file_tab = st.tabs(["Paste Raw Messages", "Upload .jrn File"])
+
+    with input_tab:
+        col_area, col_btns = st.columns([10, 1])
+        with col_area:
+            raw_input = st.text_area(
+                "Raw NDC messages (one per line)",
+                placeholder="Paste raw NDC lines here…",
+                height=150,
+                key="ndc_raw_input",
+                label_visibility="collapsed",
+            )
+        with col_btns:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Sample", key="ndc_sample_btn", use_container_width=True):
+                st.session_state["ndc_raw_input"] = _SAMPLE
+                st.rerun()
+            decode_btn = st.button("▶ Decode", key="ndc_decode_btn",
+                                   type="primary", use_container_width=True)
+
+    with file_tab:
+        uploaded_jrn = st.file_uploader(
+            "Upload a .jrn log file — all NDC messages extracted automatically",
+            type=["jrn", "log", "txt"],
+            key="ndc_jrn_upload",
+        )
+        decode_file_btn = st.button(
+            "▶ Extract & Decode", key="ndc_decode_file_btn",
+            type="primary", disabled=uploaded_jrn is None
+        )
+
+    # ── Decode ───────────────────────────────────────────────────────────────
+    if decode_file_btn and uploaded_jrn:
+        jrn_text = uploaded_jrn.read().decode("latin-1", errors="replace")
+        with st.spinner(f"Extracting NDC messages from {uploaded_jrn.name}…"):
+            msgs = extract_messages_from_jrn(jrn_text)
+        st.session_state["ndc_messages"]      = msgs
+        st.session_state["ndc_source_label"]  = uploaded_jrn.name
+
+    elif decode_btn:
+        src = st.session_state.get("ndc_raw_input", raw_input).strip()
+        if src:
+            msgs = decode_log_block(src)
+            st.session_state["ndc_messages"]     = msgs
+            st.session_state["ndc_source_label"] = "pasted input"
+
+    messages = st.session_state.get("ndc_messages", [])
+
+    if not messages:
+        st.info(
+            "No messages decoded yet. Paste raw NDC lines (each starting with a "
+            "2-char hex class code + `\\1c`) or upload a `.jrn` file."
+        )
+        return
+
+    # ── Summary bar ──────────────────────────────────────────────────────────
+    from collections import Counter
+    counts     = Counter(m.message_class for m in messages)
+    atm_to_h   = sum(1 for m in messages if m.direction == "ATM→HOST")
+    host_to_a  = sum(1 for m in messages if m.direction == "HOST→ATM")
+    has_errors = sum(1 for m in messages if m.errors)
+
+    src_label = st.session_state.get("ndc_source_label", "")
+    if src_label:
+        st.caption(f"Source: **{src_label}**")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total",       len(messages))
+    c2.metric("ATM → HOST",  atm_to_h)
+    c3.metric("HOST → ATM",  host_to_a)
+    c4.metric("Classes",     len(counts))
+    c5.metric("Parse Errors", has_errors)
+
+    # Class pills
+    _pill_parts = []
+    for cls, n in sorted(counts.items()):
+        _bg = _CLASS_COLOUR.get(cls[0], "#555")
+        _pill_parts.append(
+            f"<span style='background:{_bg};color:#fff;"
+            f"border-radius:10px;padding:2px 10px;font-size:0.77rem;"
+            f"font-family:monospace;margin:2px;display:inline-block;'>"
+            f"{cls} × {n}</span>"
+        )
+    pills_html = " ".join(_pill_parts)
+    st.markdown(pills_html, unsafe_allow_html=True)
+    st.markdown("")
+
+    # ── Filters ──────────────────────────────────────────────────────────────
+    all_classes = sorted(counts.keys())
+    all_dirs    = sorted({m.direction for m in messages})
+
+    fc, fd, fs = st.columns([3, 3, 4])
+    with fc:
+        sel_classes = st.multiselect(
+            "Filter by class", options=all_classes, default=all_classes,
+            key="ndc_filter_class"
+        )
+    with fd:
+        sel_dirs = st.multiselect(
+            "Filter by direction", options=all_dirs, default=all_dirs,
+            key="ndc_filter_dir"
+        )
+    with fs:
+        search = st.text_input(
+            "Search fields / receipt", placeholder="e.g. STAN, PIN CHANGE, 065803",
+            key="ndc_search"
+        )
+
+    filtered = [
+        m for m in messages
+        if m.message_class in sel_classes and m.direction in sel_dirs
+    ]
+    if search:
+        q = search.lower()
+        def _hit(m):
+            for lbl, val in m.fields:
+                if q in lbl.lower() or q in str(val).lower():
+                    return True
+            return any(q in line.lower() for line in m.receipt_lines) or \
+                   any(q in str(v).lower() for v in m.emv_tags.values())
+        filtered = [m for m in filtered if _hit(m)]
+
+    st.caption(f"Showing {len(filtered)} of {len(messages)} messages")
+    st.markdown("---")
+
+    # ── Message cards ────────────────────────────────────────────────────────
+    for idx, msg in enumerate(filtered):
+        cls_first = msg.message_class[0] if msg.message_class else "?"
+        accent    = _CLASS_COLOUR.get(cls_first, "#555555")
+        bg, fg, arrow = _DIR_COLOUR.get(msg.direction, _DIR_COLOUR["UNKNOWN"])
+
+        # Header row
+        col_badge, col_title, col_dir = st.columns([1, 8, 2])
+        with col_badge:
+            st.markdown(
+                f"<div style='background:{accent};color:#fff;font-family:monospace;"
+                f"font-weight:700;font-size:1.05rem;text-align:center;"
+                f"padding:6px 0;border-radius:6px;letter-spacing:1px;'>"
+                f"{msg.message_class}</div>",
+                unsafe_allow_html=True,
+            )
+        with col_title:
+            st.markdown(
+                f"<span style='font-weight:600;font-size:0.93rem;'>"
+                f"#{idx+1} — {msg.summary}</span>",
+                unsafe_allow_html=True,
+            )
+        with col_dir:
+            st.markdown(
+                f"<div style='background:{bg};color:{fg};font-size:0.78rem;"
+                f"font-weight:600;text-align:center;padding:4px 8px;"
+                f"border-radius:10px;border:1px solid {fg}44;'>"
+                f"{arrow} {msg.direction}</div>",
+                unsafe_allow_html=True,
+            )
+
+        # Fields table
+        if msg.fields:
+            rows_html = ""
+            for label, value in msg.fields:
+                if label.startswith("───"):
+                    rows_html += (
+                        f"<tr><td colspan='2' class='ndc-section-head'>{label}</td></tr>"
+                    )
+                else:
+                    rows_html += (
+                        f"<tr>"
+                        f"<td class='ndc-field-label'>{html.escape(str(label))}</td>"
+                        f"<td class='ndc-field-value'>{html.escape(str(value))}</td>"
+                        f"</tr>"
+                    )
+            st.markdown(
+                f"<table class='ndc-field-table'>{rows_html}</table>",
+                unsafe_allow_html=True,
+            )
+
+        # EMV tags expander
+        if msg.emv_tags:
+            with st.expander(f"EMV Tags  ({len(msg.emv_tags)} decoded)", expanded=False):
+                emv_rows = "".join(
+                    f"<tr><td class='ndc-field-label'>{html.escape(t)}</td>"
+                    f"<td class='ndc-field-value'>{html.escape(str(v))}</td></tr>"
+                    for t, v in msg.emv_tags.items()
+                )
+                st.markdown(
+                    f"<table class='ndc-field-table'>{emv_rows}</table>",
+                    unsafe_allow_html=True,
+                )
+
+        # Receipt expander
+        if msg.receipt_lines:
+            with st.expander(f"Receipt / Completion Text  ({len(msg.receipt_lines)} lines)",
+                             expanded=False):
+                st.code("\n".join(msg.receipt_lines), language=None)
+
+        # Parse errors
+        for err in msg.errors:
+            st.warning(f"⚠ {err}")
+
+        # Raw message — use text_area (disabled) to avoid hover-flicker
+        with st.expander("Raw message", expanded=False):
+            st.text_area("", value=msg.raw, height=80,
+                         disabled=True, key=f"ndc_raw_ta_{idx}",
+                         label_visibility="collapsed")
+
+        st.divider()
+
+
 def show_main_app():
     """
     Display main application UI (shown after login)
@@ -6644,6 +6930,12 @@ def show_main_app():
                 "description": "Classify and summarise errors from TRC log files by severity (P1–P5)",
                 "status": "ready",
                 "requires": ["trc_error", "trc_trace"]
+            },
+            "ndc_decoder": {
+                "name": "NDC Message Decoder",
+                "description": "Decode raw CCProtFW1 NDC protocol messages from journal logs",
+                "status": "ready",
+                "requires": []
             }
         }
 
@@ -6748,6 +7040,8 @@ def show_main_app():
                     render_acu_compare()
                 elif selected_func_id == "error_summary":
                     render_error_summary()
+                elif selected_func_id == "ndc_decoder":
+                    render_ndc_decoder()
 
     st.markdown("---")
     st.markdown("""

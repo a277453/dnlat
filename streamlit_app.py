@@ -744,7 +744,7 @@ inject_theme_css()
 # ============================================
 # GLOBAL VARIABLES
 # ============================================
-API_BASE_URL = "http://localhost:8000/api/v1"
+API_BASE_URL = "http://backend:8000/api/v1"
 
 def get_auth_headers() -> dict:
     """Returns Authorization: Bearer header carrying the JWT issued at login."""

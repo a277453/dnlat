@@ -10,8 +10,10 @@ RUN apt-get update && apt-get install -y \
     gcc \
     libxml2 \
     libxslt1-dev \
+    ca-certificates \
+    curl \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
 
 # Install Ollama CLI
 RUN curl -fsSL https://ollama.com/install.sh | bash
@@ -31,7 +33,11 @@ WORKDIR /app
 # Install Python dependencies
 # -------------------------------
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir \
+    --trusted-host pypi.org \
+    --trusted-host files.pythonhosted.org \
+    --trusted-host pypi.python.org \
+    -r requirements.txt
 
 # -------------------------------
 # Copy application code
@@ -49,6 +55,7 @@ RUN mkdir -p /app/tmp /app/logs
 EXPOSE 8000
 EXPOSE 8501
 EXPOSE 11434
+
 # -------------------------------
 # Start FastAPI
 # -------------------------------

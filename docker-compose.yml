@@ -34,9 +34,9 @@ services:
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_NAME: dn_logs
-      DB_USER: dn_user
-      DB_PASSWORD: dn_pass
+      DB_NAME: dndb
+      DB_USER: dnuser
+      DB_PASSWORD: dnpass
       OLLAMA_HOST: http://host.docker.internal:11434
       OLLAMA_MODEL: llama3.2
     ports:

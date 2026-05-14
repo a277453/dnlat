@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import api from '../../utils/api';
+import api from 'utils/api';
 import useTransactionData from '../../hooks/useTransactionData';
 import { Loading, AccessDenied, SelectField, MultiSelect, FlowChart, LogBlock, MetricCard, Expander } from '../UIComponents';
 

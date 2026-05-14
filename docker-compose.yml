@@ -1,6 +1,18 @@
-﻿version: "3.9"
+
+# ============================================================
+# DN Diagnostics Platform — Multi-User (10-user) Deployment
+# ============================================================
+# Single-worker FastAPI backend — correct for up to ~10-20
+# concurrent users because sessions live in process memory.
+# All users share one PostgreSQL instance and one Ollama instance.
+# ============================================================
 
 services:
+
+  # ────────────────────────────────────────
+  # PostgreSQL — shared by all users
+  # Stores login, user accounts, audit logs
+  # ────────────────────────────────────────
   postgres:
     image: postgres:15
     container_name: dn-postgres
@@ -16,8 +28,12 @@ services:
       test: ["CMD-SHELL", "pg_isready -U dn_user -d dn_logs"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+    restart: unless-stopped
 
+  # ────────────────────────────────────────
+  # Ollama — shared LLM inference
+  # ────────────────────────────────────────
   ollama:
     image: ollama/ollama:latest
     container_name: dn-ollama
@@ -27,38 +43,72 @@ services:
       - ollama:/root/.ollama
     restart: unless-stopped
 
+  # ────────────────────────────────────────
+  # FastAPI backend — SINGLE WORKER
+  #
+  # SCALING NOTE: sessions are stored in
+  # process memory (_SHARED_SESSIONS dict).
+  # Running --workers > 1 would split
+  # sessions across OS processes and break
+  # the "current_session" resolver.
+  # To use multiple workers, replace
+  # session.py with a Redis-backed store
+  # and set REDIS_URL here.
+  # ────────────────────────────────────────
   backend:
     build: .
     container_name: dn-backend
-    command: sh -c "python admin_setup.py && uvicorn main:app --host 0.0.0.0 --port 8000"
+    command: >
+      sh -c "python admin_setup.py &&
+             uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1"
     environment:
+      # ── Database ──────────────────────
       DB_HOST: postgres
-      DB_PORT: 5432
+      DB_PORT: "5432"
       DB_NAME: dn_logs
       DB_USER: dn_user
       DB_PASSWORD: dn_pass
+      # ── Admin DB bootstrap ────────────
       Admin_DB_USER: postgres
       Admin_DB_PASSWORD: postgres
-      Admin_DB_PORT: 5432
+      Admin_DB_PORT: "5432"
+      # ── Default admin account ─────────
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: dnadmin
       ADMIN_NAME: Admin User
-      ADMIN_EMPLOYEE_CODE: ADM0001
+      ADMIN_EMPLOYEE_CODE: ADM00001
       ADMIN_ROLE: ADMIN
       ADMIN_IS_ACTIVE: "True"
-      OLLAMA_HOST: http://host.docker.internal:11434
+      # ── LLM ──────────────────────────
+      OLLAMA_HOST: http://ollama:11434
       OLLAMA_MODEL: llama3.2
+      # ── Upload limits ─────────────────
+      # Each user can upload up to 500 MB
+      MAX_UPLOAD_SIZE_MB: "500"
+      # ── Session TTL (hours) ───────────
+      # Inactive sessions are evicted after
+      # this many hours to free memory.
+      SESSION_TTL_HOURS: "0.25" #setting it to 15mins for test purpose.
     ports:
       - "8000:8000"
-    volumes:
-      - ./app/auth/users.json:/app/auth/users.json:ro
     depends_on:
       postgres:
         condition: service_healthy
       ollama:
         condition: service_started
     restart: unless-stopped
+    # Shared tmp for chunked uploads
+    volumes:
+      - upload_staging:/tmp/dn_staging
 
+  # ────────────────────────────────────────
+  # React SPA + nginx reverse proxy
+  #
+  # Serves the built React bundle and
+  # proxies /api/ to the backend.
+  # All users hit this single container
+  # on port 3000 (change to 80 for prod).
+  # ────────────────────────────────────────
   react:
     build: ./react
     container_name: dn-react
@@ -67,26 +117,8 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
-  # streamlit:
-  #   build: .
-  #   container_name: dn-streamlit
-  #   command: streamlit run streamlit_app.py --server.port=8501 --server.address=0.0.0.0
-  #   environment:
-  #     DB_HOST: postgres
-  #     DB_PORT: "5432"
-  #     DB_NAME: dndb
-  #     DB_USER: dnuser
-  #     DB_PASSWORD: dnpass
-  #     API_BASE_URL: http://backend:8000/api/v1
-  #     OLLAMA_BASE_URL: http://ollama:11434
-  #   ports:
-  #     - "8501:8501"
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     backend:
-  #       condition: service_started
 
 volumes:
   pgdata:
   ollama:
+  upload_staging:

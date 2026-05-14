@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import api from 'utils/api';
+import api from 'utils/app';
 import useTransactionData from '../../hooks/useTransactionData';
 import { Loading, AccessDenied, SelectField, ThemedTable } from '../UIComponents';
 
@@ -42,7 +42,7 @@ function CountersInner() {
 
   // Get TRC-matched sources
   useEffect(() => {
-    api.get('/get-matching-sources-for-trc', { params: { session_id: 'current_session' }, timeout:30000 })
+    api.get('/get-matching-sources-for-trc', { timeout:30000 })
       .then(r => setFilteredSources(r.data.matching_sources || []))
       .catch(() => setFilteredSources(sources))
       .finally(() => setSrcLoading(false));
@@ -70,7 +70,7 @@ function CountersInner() {
     if (!selectedId || !selSource) return;
     setCntLoading(true); setCntError(''); setCntData(null);
     try {
-      const r = await api.post('/get-counter-data', { transaction_id: selectedId, source_file: selSource }, { params: { session_id: 'current_session' }, timeout:60000 });
+      const r = await api.post('/get-counter-data', { transaction_id: selectedId, source_file: selSource }, { timeout:60000 });
       setCntData(r.data);
     } catch (e) { setCntError(e.response?.data?.detail || 'Failed to load counter data.'); }
     finally { setCntLoading(false); }
@@ -93,6 +93,38 @@ function CountersInner() {
   const perTxnOptions = perTxnTable
     .filter(r => r['Counter Summary'] === 'View Counters')
     .map(r => `${r['Date Timestamp']} | ${r['Transaction ID']} | ${r['Transaction Type']}`);
+
+  // Get logical counters for selected per-txn row
+  let logicalCounters = [];
+  if (selPerTxn && cntData?.all_blocks) {
+    const parts = selPerTxn.split(' | ');
+    const dtStr = parts[0]; // "DD Month YYYY HH:MM:SS"
+    try {
+      const txnDt  = new Date(dtStr);
+      const txnTs  = txnDt.getTime();
+      cntData.all_blocks.forEach(blk => {
+        if (!blk.time) return;
+        const [h,m,s] = blk.time.split(':').map(Number);
+        const blkDt = new Date(txnDt); blkDt.setHours(h,m,s,0);
+        if (Math.abs(blkDt.getTime() - txnTs) <= 30000) {
+          (blk.data || []).filter(c => c.Record_Type === 'Logical').forEach(c => {
+            logicalCounters.push({
+              'Name (PName)': c.UnitName,'Value (Val)': c.Val,'Cur': c.Cur,'Ini': c.Ini,
+              'Retr': c.Retr,'Disp': c.Disp,'RCNT (Reject Count)': c.RCnt,
+              'Pres': c.Pres,'Cnt': c.Cnt,'Status (St)': c.St,'NrPCU': c.No,
+            });
+          });
+        }
+      });
+      // Deduplicate
+      const seen = new Set();
+      logicalCounters = logicalCounters.filter(r => {
+        const key = JSON.stringify(r);
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+      });
+    } catch {}
+  }
 
   return (
     <div>
@@ -187,6 +219,21 @@ function CountersInner() {
             </div>
           )}
 
+          {/* Logical counters */}
+          {selPerTxn && (
+            <div className="card fade-in mb-16">
+              <div className="section-heading mb-4">Counters for: {selPerTxn.split(' | ')[1]}</div>
+              <p style={{ color:'var(--text-muted)', fontSize:12, marginBottom:12 }}>{selPerTxn.split(' | ')[0]}</p>
+              {logicalCounters.length > 0
+                ? <>
+                    <ThemedTable data={logicalCounters} height={320} />
+                    <p style={{ color:'var(--text-muted)', fontSize:12, marginTop:8 }}>Showing {logicalCounters.length} unique counter record(s).</p>
+                  </>
+                : <div className="alert alert-info">No logical counters found for this transaction timeframe.</div>
+              }
+            </div>
+          )}
+
           {/*  v4 NEW: Counter Comparison  */}
           {selPerTxn && selPerTxn !== '' && (() => {
             const perTxnType = selPerTxn.split(' | ')[2]?.trim();
@@ -203,7 +250,7 @@ function CountersInner() {
                   transaction_id: perTxnId,
                   source_file:    selSource,
                   compare_mode:   cmpMode,
-                }, { params: { session_id: 'current_session' }, timeout: 60000 });
+                }, { timeout: 60000 });
                 setCmpData(r.data);
               } catch (e) {
                 setCmpError(e.response?.data?.detail || 'Comparison failed.');

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback } from 'react';
 import api from '../utils/api';
+import { useSession } from '../context/SessionContext';
 
 const CHUNK_MB    = 50;
 const CHUNK_BYTES = CHUNK_MB * 1024 * 1024;
@@ -9,6 +10,7 @@ function genId() {
 }
 
 export default function ChunkedUploader({ onResult, onClear }) {
+  const { setSession } = useSession();
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -72,12 +74,16 @@ export default function ChunkedUploader({ onResult, onClear }) {
       setStatus('Done!');
       setDone(true);
       setUploading(false);
+      // Store the session ID for future requests
+      if (res.data?.session_id) {
+        setSession(res.data.session_id);
+      }
       onResult?.(res.data);
     } catch (err) {
       setError(`Finalize failed: ${err.response?.data?.detail || err.message}`);
       setUploading(false);
     }
-  }, [onResult]);
+  }, [onResult, setSession]);
 
   const handleFile = useCallback((f) => {
     if (!f.name.endsWith('.zip')) { setError('Please upload a .zip file.'); return; }

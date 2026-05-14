@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import './index.css';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { SessionProvider } from './context/SessionContext';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
@@ -52,7 +53,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
+        <SessionProvider>
+          <AppRoutes />
+        </SessionProvider>
       </AuthProvider>
     </BrowserRouter>
   );

@@ -501,15 +501,22 @@ async def get_counter_data(
                 summary = txn_state
 
             # Check for counters in transaction timeframe
+            # Counter blocks are written by the ATM *after* a transaction completes,
+            # so we extend the search window 60 s past txn_end to catch post-dispense
+            # counter prints that fall just outside the strict [start, end] interval.
             counter_summary = ""
             try:
                 txn_start_dt = parse_time_from_trc(time_part)
-                txn_end_dt = parse_time_from_trc(txn_end_time.split()[-1] if ' ' in txn_end_time else txn_end_time)
+                _raw_end = txn_end_time.split()[-1] if ' ' in txn_end_time else txn_end_time
+                txn_end_dt = parse_time_from_trc(_raw_end)
 
                 if txn_start_dt and txn_end_dt and all_counter_blocks:
+                    from datetime import timedelta, datetime as _dt_cls
+                    _base = _dt_cls.today().date()
+                    _end_dt_ext = (_dt_cls.combine(_base, txn_end_dt) + timedelta(seconds=60)).time()
                     for block in all_counter_blocks:
                         block_time = block.get('time')
-                        if block_time and txn_start_dt <= block_time <= txn_end_dt:
+                        if block_time and txn_start_dt <= block_time <= _end_dt_ext:
                             counter_summary = "View Counters"
                             break
             except Exception as e:

@@ -233,7 +233,6 @@ async def debug_zip_members(file: UploadFile = File(...)):
         BadZipFile : If the uploaded file is not a valid ZIP archive.
         Exception  : Any unexpected errors during reading or processing the ZIP file.
     """
-    session_id = _resolve_session_id(session_id)
     logger.info(" Received request: /debug-zip-members")  
     try:
         zip_bytes = await file.read()
@@ -452,7 +451,16 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
                             i += 1
                         acu_files[dedup_key] = content
             else:
-                logger.info(" No acu.zip found in uploaded package — skipping ACU extraction.")
+                # Fallback: no acu.zip was found inside the uploaded package.
+                # Try scanning the outer ZIP directly — some packages place jdd*/x3*
+                # files at the top level rather than nesting them inside acu.zip.
+                logger.info(" No acu.zip found — attempting top-level ACU scan of outer ZIP.")
+                fallback_files = extract_from_zip_bytes(zip_content, acu_logs, target_prefixes=('jdd', 'x3'))
+                if fallback_files:
+                    acu_files.update(fallback_files)
+                    logger.info(f" Fallback ACU scan found {len(fallback_files)} file(s) in outer ZIP.")
+                else:
+                    logger.info(" Fallback ACU scan found no ACU files in outer ZIP either.")
             xml_count = sum(1 for k in acu_files if not k.startswith('__xsd__'))
             xsd_count = sum(1 for k in acu_files if k.startswith('__xsd__'))
             logger.info(f" ACU extraction: {xml_count} XML, {xsd_count} XSD files")

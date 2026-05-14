@@ -1,6 +1,0 @@
-# .streamlit/streamlit_config.toml
-
-
-[server]
-maxUploadSize = 4096        # 4 GB — adjust as needed
-maxMessageSize = 4096       # must be >= maxUploadSize

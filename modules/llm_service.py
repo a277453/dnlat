@@ -282,7 +282,7 @@ def _build_ej_record_from_txn_data(txn_data: dict, transaction_log: str) -> dict
         "protocol_steps":   protocol_steps_clean,
         "device_errors":    _parse_list_field(txn_data.get("JRN Device Errors")),
         "events":           ordered_events,      # sequenced — see above
-        "response_code":    txn_data.get("JRN Response Code"),
+        # response_code intentionally excluded — low signal, inferrable from host_outcome/events
         "app_state_start":  txn_data.get("JRN App State Start"),
         "app_state_end":    txn_data.get("JRN App State End"),
         "device_states":    txn_data.get("JRN Device States"),
@@ -356,16 +356,16 @@ def _enrich_record_with_jrn_context(record: dict, jrn_context: dict) -> dict:
         'card_events':       'card_events',
         'app_state_start':   'app_state_start',
         'app_state_end':     'app_state_end',
-        'response_codes':    'response_code',
+        # response_codes    — excluded: low signal, inferrable from host_outcome/events
         'host_replies':      'host_replies',
         'host_outcome':      'host_outcome',
-        'host_notes':        'host_notes',
+        # host_notes        — excluded: inferrable from context (e.g. NO REVERSAL REQUESTED)
         'emv_events':        'emv_events',
         'chip_decision':     'chip_decision',
-        'tvr_tsi':           'tvr_tsi',
+        # tvr_tsi           — excluded: raw EMV bitfields, LLM cannot parse them
         'cryptogram_info':   'cryptogram_info',
         'customer_actions':  'customer_actions',
-        'transaction_types': 'transaction_types',
+        # transaction_types — excluded: redundant with protocol_steps function codes
     }
 
     for src_key, dst_key in FIELD_MAP.items():

@@ -670,6 +670,10 @@ class LogPreprocessorService:
         #   host_cancelled, cancelled,         — boolean flags already encoded in events/status
         #   txn_timeout, dispense_ok,          — boolean flags already encoded in events/status
         #   present_timeout, present_failed    — boolean flags already encoded in events
+        #   tvr_tsi                           — raw bitfields, LLM cannot meaningfully parse them
+        #   response_code                     — rarely changes diagnosis; noise for small context models
+        #   transaction_types                 — always redundant with protocol_steps
+        #   host_notes                        — inferrable from context (e.g. NO REVERSAL REQUESTED)
         STRIP_FIELDS = {
             "pan",
             "account",
@@ -677,15 +681,45 @@ class LogPreprocessorService:
             "amount",
             "currency",
             "notes",
-            "stan",           # host audit trace number — not diagnostic
+            "stan",               # host audit trace number — not diagnostic
             "state",
             "end_state",
+            "tvr_tsi",            # raw EMV bitfields — not parseable by LLM
+            "response_code",      # low signal; inferrable from host_outcome / events
+            "transaction_types",  # redundant with protocol_steps function codes
+            "host_notes",         # inferrable from context
         }
-        return {
+
+        result = {
             k: v for k, v in record.items()
             if k not in STRIP_FIELDS
             and v is not None and v is not False and v != [] and v != ""
         }
+
+        # Conditional: chip_decision only if it carries a decline/cancel signal
+        # or has more than one entry (complex EMV flow worth preserving).
+        # Single-entry AAC-only lines add no diagnostic value for simple flows.
+        chip = result.get("chip_decision", [])
+        if chip:
+            has_signal = any(
+                keyword in entry.lower()
+                for entry in chip
+                for keyword in ("declined", "canceled", "cancel")
+            )
+            if not has_signal and len(chip) < 2:
+                result.pop("chip_decision", None)
+
+        # Strip internal event IDs ([XXXX]) from timestamped event fields.
+        # These codes are opaque to the LLM and waste tokens.
+        # host_replies are intentionally excluded — exact lines are needed in output.
+        for field in ("chip_decision", "card_events", "customer_actions"):
+            if field in result:
+                result[field] = [
+                    re.sub(r'\[\d{4}\]\s*', '', entry).strip()
+                    for entry in result[field]
+                ]
+
+        return result
 
 
 class TransactionMergerService:

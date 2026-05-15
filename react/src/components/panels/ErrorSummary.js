@@ -13,7 +13,7 @@
  */
 import React, { useState, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import api from 'utils/api';
+import api from '../../utils/api';
 import { AccessDenied, Loading, MetricCard } from '../UIComponents';
 
 /* ── Severity colour tokens ───────────────────────────────────────────────── */

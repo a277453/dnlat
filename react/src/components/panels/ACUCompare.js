@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import api from 'utils/api';
+import api from '../../utils/api';
 import { Loading, AccessDenied, SelectField, DiffViewer, FileDropZone } from '../UIComponents';
 
 export default function ACUCompare() {

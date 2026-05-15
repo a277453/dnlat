@@ -590,6 +590,8 @@ def user_exists(email: str, employee_code: str) -> bool:
     """
     try:
         conn = get_db_connection()
+        if conn is None:
+            raise Exception("Database connection failed")
         with conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -605,10 +607,10 @@ def user_exists(email: str, employee_code: str) -> bool:
         raise
 
     finally:
-        if 'conn' in locals():
+        if 'conn' in locals() and conn is not None:
             conn.close()
 
-def register_user(email, name, password, employee_code, role="USER") -> tuple[bool, str]:
+def register_user(email, name, password, employee_code, role="TEST") -> tuple[bool, str]:
     """
         Registers a new user account.
 
@@ -648,15 +650,19 @@ def register_user(email, name, password, employee_code, role="USER") -> tuple[bo
         cursor = conn.cursor()
         password_hash = hash_password(password)
         logger.info("Registering user | email=%s | employee_code=%s | role=%s",email, employee_code, role)
+        # TEST users are activated immediately — no admin approval needed.
+        # ADMIN and USER roles still require manual activation (is_active=False).
+        is_active = role == "TEST"
         cursor.execute("""
             INSERT INTO Users (username, name, password_hash, employee_code, role, is_active)
             VALUES (%s, %s, %s, %s, %s, %s)
-        """, (email, name, password_hash, employee_code, role, False))  # inactive by default
+        """, (email, name, password_hash, employee_code, role, is_active))
         conn.commit()
         cursor.close()
         conn.close()
         log_login_event(username=email, action="register")
-        return True, "Registration successful. Await admin activation."
+        message = "Registration successful. You can now log in." if is_active else "Registration successful. Await admin activation."
+        return True, message
     except Exception as e:
         logger.error("User registration failed")
         conn.rollback()

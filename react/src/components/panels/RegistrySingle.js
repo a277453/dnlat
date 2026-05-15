@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import api from 'utils/api';
+import api from '../../utils/api';
 import { Loading, AccessDenied, SelectField, MetricCard, ThemedTable } from '../UIComponents';
 
 /* Parse a .reg file text  array of { Path, Key, Value } */

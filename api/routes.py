@@ -3509,6 +3509,14 @@ async def chat_transaction(
     journal_llm_contents      = session_data.get('journal_llm_contents', {})
     all_jrn_contents          = {**ui_journal_contents, **journal_llm_contents}
 
+    # Extract string content for this specific transaction (dicts are keyed by txn_id)
+    ej_content  = customer_journal_contents.get(request.transaction_id, "")
+    jrn_content = all_jrn_contents.get(request.transaction_id, "")
+    if isinstance(ej_content, dict):
+        ej_content = str(ej_content)
+    if isinstance(jrn_content, dict):
+        jrn_content = str(jrn_content)
+
     # Pull txn_data row for pre-computed facts (duration, timestamps, outcome)
     txn_data = {}
     raw_transaction_data = session_data.get('transaction_data')
@@ -3519,10 +3527,12 @@ async def chat_transaction(
             txn_data = matches.iloc[0].to_dict()
 
     logger.info(
-        "chat_transaction: txn=%s question_len=%d history_turns=%d",
+        "chat_transaction: txn=%s question_len=%d history_turns=%d ej_chars=%d jrn_chars=%d",
         request.transaction_id,
         len(request.question),
         len(request.history),
+        len(ej_content),
+        len(jrn_content),
     )
 
     # Extract username from JWT for per-user log attribution
@@ -3545,8 +3555,8 @@ async def chat_transaction(
     try:
         response_text = chat_turn(
             question=request.question,
-            ej_content=customer_journal_contents,
-            jrn_content=all_jrn_contents,
+            ej_content=ej_content,
+            jrn_content=jrn_content,
             analysis_result=request.analysis_result,
             history=request.history,
             txn_data=txn_data,
@@ -3610,6 +3620,14 @@ async def chat_transaction_stream(
     journal_llm_contents      = session_data.get('journal_llm_contents', {})
     all_jrn_contents          = {**ui_journal_contents, **journal_llm_contents}
 
+    # Extract string content for this specific transaction (dicts are keyed by txn_id)
+    ej_content  = customer_journal_contents.get(request.transaction_id, "")
+    jrn_content = all_jrn_contents.get(request.transaction_id, "")
+    if isinstance(ej_content, dict):
+        ej_content = str(ej_content)
+    if isinstance(jrn_content, dict):
+        jrn_content = str(jrn_content)
+
     # Pull txn_data row for pre-computed facts (duration, timestamps, outcome)
     txn_data = {}
     raw_transaction_data = session_data.get('transaction_data')
@@ -3620,10 +3638,12 @@ async def chat_transaction_stream(
             txn_data = matches.iloc[0].to_dict()
 
     logger.info(
-        "chat_transaction_stream: txn=%s question_len=%d history_turns=%d",
+        "chat_transaction_stream: txn=%s question_len=%d history_turns=%d ej_chars=%d jrn_chars=%d",
         request.transaction_id,
         len(request.question),
         len(request.history),
+        len(ej_content),
+        len(jrn_content),
     )
 
     # Extract username from JWT for per-user log attribution
@@ -3647,8 +3667,8 @@ async def chat_transaction_stream(
         collected_reply = []
         try:
             for chunk in chat_turn_stream(
-                ej_content=customer_journal_contents,
-                jrn_content=all_jrn_contents,
+                ej_content=ej_content,
+                jrn_content=jrn_content,
                 analysis_result=request.analysis_result,
                 history=request.history,
                 question=request.question,

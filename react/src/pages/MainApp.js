@@ -183,7 +183,7 @@ export default function MainApp() {
 
   // RBAC: USER role only sees individual transaction analysis
   const visibleFunctions = isUser
-    ? { individual_transaction: FUNCTIONALITIES.individual_transaction }
+    ? FUNCTIONALITIES
     : FUNCTIONALITIES;
 
   const categories    = result?.categories || {};

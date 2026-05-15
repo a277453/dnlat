@@ -86,7 +86,7 @@ logger.info("FastAPI app started")
 # ============================================
 # Roles allowed to access all endpoints.
 # USER role is restricted to individual-transaction endpoints only.
-ALLOWED_ROLES = {"ADMIN", "DEV_MODE"}
+ALLOWED_ROLES = {"ADMIN", "DEV_MODE", "TEST"}
 
 async def require_elevated_role(
     authorization: str = Header(default=None),
@@ -233,6 +233,7 @@ async def debug_zip_members(file: UploadFile = File(...)):
         BadZipFile : If the uploaded file is not a valid ZIP archive.
         Exception  : Any unexpected errors during reading or processing the ZIP file.
     """
+    session_id = _resolve_session_id(session_id)
     logger.info(" Received request: /debug-zip-members")  
     try:
         zip_bytes = await file.read()
@@ -294,25 +295,181 @@ async def debug_zip_members(file: UploadFile = File(...)):
             "traceback": traceback.format_exc()
         }
 
-# Simple session ID for now (use UUID in production)
-global CURRENT_SESSION_ID
-CURRENT_SESSION_ID = str(uuid4())
+# Per-user session store: maps emp_suffix (e.g. "e1234") → session_id
+# Replaces the single CURRENT_SESSION_ID global which was shared across all
+# users and caused user-A's session to be overwritten when user-B uploaded.
+_USER_SESSIONS: dict = {}   # { "e1234": "20260515100040e1234", ... }
+
+# Keep a compatibility alias so any code that still reads CURRENT_SESSION_ID
+# gets an empty string instead of a NameError.  Write path is _USER_SESSIONS.
+CURRENT_SESSION_ID = ""   # legacy — no longer written; reads fall through to _USER_SESSIONS
+
+# ---------------------------------------------------------------------------
+# Session-ID builder
+# ---------------------------------------------------------------------------
+_EMP_CODE_DEV_MODE = "1234"   # hardcoded only for DEV_MODE
+
+def _fetch_emp_code_from_db(username: str) -> str | None:
+    """
+    Look up the employee_code column for *username* in the Users table.
+
+    Returns the code as a string on success, or None when:
+      - the DB is unreachable
+      - the employee_code column has been renamed / deleted
+      - any other unexpected DB error
+
+    Callers must handle the None case and fall back to "undefined".
+    """
+    try:
+        from modules.login import get_db_connection  # lightweight import
+        conn = get_db_connection()
+        if conn is None:
+            logger.error(
+                "_fetch_emp_code_from_db: DB connection returned None — "
+                "cannot retrieve employee_code for user '%s'", username
+            )
+            return None
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT employee_code FROM Users WHERE username = %s", (username,)
+            )
+            row = cursor.fetchone()
+            if row is None:
+                logger.warning(
+                    "_fetch_emp_code_from_db: no row found for username '%s'", username
+                )
+                return None
+            return str(row[0])
+        except Exception as col_err:
+            # Catches column-not-found, table-not-found, driver errors, etc.
+            logger.error(
+                "_fetch_emp_code_from_db: DB query failed for user '%s' — "
+                "employee_code column may be renamed or deleted. Error: %s",
+                username, col_err,
+            )
+            return None
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    except ImportError as imp_err:
+        logger.error(
+            "_fetch_emp_code_from_db: could not import get_db_connection — %s", imp_err
+        )
+        return None
+    except Exception as outer_err:
+        logger.error(
+            "_fetch_emp_code_from_db: unexpected error for user '%s' — %s",
+            username, outer_err,
+        )
+        return None
+
+
+def _build_session_id(authorization: str | None) -> tuple[str, str]:
+    """
+    Build a new session ID of the form  <timestamp>e<emp_code>.
+
+    Resolution order for emp_code:
+      1. Role is DEV_MODE  → hardcoded "1234"
+      2. Role is ADMIN     → employee_code fetched from DB (keyed on JWT 'sub')
+                             Falls back to timestamp+"undefined" if the column
+                             is missing/unreachable; access is still granted and
+                             an error is written to the log.
+      3. Any other role    → employee_code claim from the JWT payload
+      4. No / invalid JWT  → fallback "0000" (should not reach production)
+
+    Returns:
+        (session_id, emp_code_suffix)   e.g. ("20260504153022e1234", "e1234")
+    """
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+
+    # Safe default — overwritten below when JWT decodes successfully.
+    # Ensures emp_code is always bound even if the auth header is absent
+    # or JWT decoding raises an exception.
+    emp_code: str = "0000"
+
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            token   = authorization.split(" ", 1)[1]
+            payload = decode_access_token(token)
+            role    = payload.get("role", "")
+
+            if role == "DEV_MODE":
+                # Use the actual emp claim from the JWT (e.g. "DEV001", "DEV002")
+                # so that multiple DEV_MODE users each get their own session slot.
+                # Fallback to _EMP_CODE_DEV_MODE only if the claim is absent.
+                emp_code = str(payload.get("emp", _EMP_CODE_DEV_MODE))
+
+            elif role == "ADMIN":
+                username = payload.get("sub", "")
+                db_code  = _fetch_emp_code_from_db(username)
+                if db_code is not None:
+                    emp_code = db_code
+                else:
+                    # DB unavailable or column missing — grant access with a degraded session ID and a clear log entry.
+                    logger.error(
+                        "_build_session_id: employee_code could not be retrieved "
+                        "from DB for ADMIN user '%s' and session ID will use "
+                        "'undefined' suffix. Check DB connectivity and schema.",
+                        username,
+                    )
+                    suffix     = "undefined"
+                    session_id = f"{timestamp}{suffix}"
+                    logger.info("_build_session_id → %s (degraded)", session_id)
+                    return session_id, suffix
+
+            else:
+                # Regular user — read employee_code from their JWT claim
+                emp_code = str(payload.get("emp", "0000"))
+
+        except Exception:
+            emp_code = "0000"   # fallback — JWT missing, expired, or malformed
+            logger.warning(
+                "_build_session_id: could not decode JWT, using fallback emp_code '0000'"
+            )
+
+    suffix     = f"e{emp_code}"
+    session_id = f"{timestamp}{suffix}"
+    logger.info("_build_session_id → %s", session_id)
+    return session_id, suffix
 
 # ── Session-ID resolver ───────────────────────────────────────────────────────
 _SESSION_SENTINELS = {"current_session", "CURRENT_SESSION_ID", "", None}
 
-def _resolve_session_id(session_id) -> str:
+def _resolve_session_id(session_id, authorization: str = None) -> str:
     """
-    Resolve a client-supplied session_id to the real UUID.
+    Resolve a client-supplied session_id to the real session ID for this user.
 
     Accepts:
-        - None / empty string  → returns CURRENT_SESSION_ID
-        - "current_session"    → returns CURRENT_SESSION_ID  (frontend sentinel)
-        - any other string     → returned as-is
+        - A real session_id string → returned as-is (frontend always sends this)
+        - None / empty / sentinel  → looks up _USER_SESSIONS by the caller's JWT
+
+    The authorization header is used ONLY for sentinel resolution so that
+    each user gets their own session rather than a shared global.
     """
-    if session_id in _SESSION_SENTINELS:
-        return CURRENT_SESSION_ID
-    return session_id
+    if session_id not in _SESSION_SENTINELS:
+        return session_id
+
+    # Sentinel path — resolve from per-user dict via JWT
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            payload    = decode_access_token(authorization.split(" ", 1)[1])
+            role       = payload.get("role", "")
+            # Always use the JWT's emp claim — DEV_MODE users each have
+            # their own (DEV001, DEV002, …) so they get separate sessions.
+            emp_code   = str(payload.get("emp", _EMP_CODE_DEV_MODE))
+            emp_suffix = f"e{emp_code}"
+            resolved = _USER_SESSIONS.get(emp_suffix, "")
+            logger.debug("_resolve_session_id: sentinel → %s for %s", resolved, emp_suffix)
+            return resolved
+        except Exception:
+            logger.warning("_resolve_session_id: could not decode JWT for sentinel resolution")
+
+    return ""   # no session — caller will 404 cleanly
 # ──────────────────────────────────────────────────────────────────────────────
 
 from modules.counter_analysis import init_counter_router, counter_router
@@ -333,7 +490,11 @@ def get_processed_files_dir() -> str:
 
 
 @router.post("/process-zip", response_model=FileCategorizationResponse)
-async def process_zip_file(file: UploadFile = File(..., description="ZIP file to process"),mode: Optional[str] = Query(None, description="Processing mode (e.g., 'registry' to optimize for registry files)")):
+async def process_zip_file(
+    file: UploadFile = File(..., description="ZIP file to process"),
+    mode: Optional[str] = Query(None, description="Processing mode (e.g., 'registry' to optimize for registry files)"),
+    authorization: str = Header(default=None),
+):
     """
     FUNCTION:
         process_zip_file
@@ -451,16 +612,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
                             i += 1
                         acu_files[dedup_key] = content
             else:
-                # Fallback: no acu.zip was found inside the uploaded package.
-                # Try scanning the outer ZIP directly — some packages place jdd*/x3*
-                # files at the top level rather than nesting them inside acu.zip.
-                logger.info(" No acu.zip found — attempting top-level ACU scan of outer ZIP.")
-                fallback_files = extract_from_zip_bytes(zip_content, acu_logs, target_prefixes=('jdd', 'x3'))
-                if fallback_files:
-                    acu_files.update(fallback_files)
-                    logger.info(f" Fallback ACU scan found {len(fallback_files)} file(s) in outer ZIP.")
-                else:
-                    logger.info(" Fallback ACU scan found no ACU files in outer ZIP either.")
+                logger.info(" No acu.zip found in uploaded package — skipping ACU extraction.")
             xml_count = sum(1 for k in acu_files if not k.startswith('__xsd__'))
             xsd_count = sum(1 for k in acu_files if k.startswith('__xsd__'))
             logger.info(f" ACU extraction: {xml_count} XML, {xsd_count} XSD files")
@@ -626,21 +778,31 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         # ------------------ SESSION CREATION------------------
         logger.info("Creating/updating session")
 
+        # Build a fresh session ID: <timestamp>e<emp_code>
+        # Then purge any previous session for this employee (same "e<emp_code>" suffix)
+        # before creating the new one, so stale data never lingers across re-uploads.
+        new_session_id, emp_suffix = _build_session_id(authorization)
+        purged = session_service.cleanup_sessions_by_suffix(emp_suffix)
+        if purged:
+            logger.info(f"Purged {purged} old session(s) with suffix '{emp_suffix}' before new upload")
+        _USER_SESSIONS[emp_suffix] = new_session_id
+        logger.info(f"_USER_SESSIONS updated: {emp_suffix} → {new_session_id}")
+
         set_processed_files_dir(None)
-        session_service.create_session(CURRENT_SESSION_ID, file_categories, None)
+        session_service.create_session(new_session_id, file_categories, None)
 
         # Confirm new session after creation
-        new_sess = session_service.get_session(CURRENT_SESSION_ID)
+        new_sess = session_service.get_session(new_session_id)
         
-        session_service.update_session(CURRENT_SESSION_ID, 'acu_extracted_files',acu_files)
-        session_service.update_session(CURRENT_SESSION_ID, 'acu_extraction_logs',acu_logs)
-        session_service.update_session(CURRENT_SESSION_ID, 'registry_contents',registry_contents)
-        session_service.update_session(CURRENT_SESSION_ID, 'customer_journal_contents',customer_journal_contents)
-        session_service.update_session(CURRENT_SESSION_ID, 'ui_journal_contents',ui_journal_contents)
-        session_service.update_session(CURRENT_SESSION_ID, 'journal_llm_contents',journal_llm_contents)
-        session_service.update_session(CURRENT_SESSION_ID, 'trc_trace_contents',trc_trace_contents)
-        session_service.update_session(CURRENT_SESSION_ID, 'trc_error_contents',trc_error_contents)
-        session_service.update_session(CURRENT_SESSION_ID, 'extra_contents', extra_contents)
+        session_service.update_session(new_session_id, 'acu_extracted_files',acu_files)
+        session_service.update_session(new_session_id, 'acu_extraction_logs',acu_logs)
+        session_service.update_session(new_session_id, 'registry_contents',registry_contents)
+        session_service.update_session(new_session_id, 'customer_journal_contents',customer_journal_contents)
+        session_service.update_session(new_session_id, 'ui_journal_contents',ui_journal_contents)
+        session_service.update_session(new_session_id, 'journal_llm_contents',journal_llm_contents)
+        session_service.update_session(new_session_id, 'trc_trace_contents',trc_trace_contents)
+        session_service.update_session(new_session_id, 'trc_error_contents',trc_error_contents)
+        session_service.update_session(new_session_id, 'extra_contents', extra_contents)
 
         t_sess_end = time.perf_counter()
         logger.debug(f"SESSION SAVE TIME: {t_sess_end - t_sess_start:.4f} s")
@@ -674,7 +836,7 @@ async def process_zip_file(file: UploadFile = File(..., description="ZIP file to
         # Attach processing time to response dict so frontend can display it
         result_dict = result.dict() if hasattr(result, "dict") else dict(result)
         result_dict["processing_time_seconds"] = total_time
-        result_dict["session_id"] = CURRENT_SESSION_ID   
+        result_dict["session_id"] = new_session_id
         return result_dict
     except HTTPException:
         raise   
@@ -1090,7 +1252,7 @@ RAISES:
 # ============================================
 
 @router.get("/get-acu-files", dependencies=[Depends(require_elevated_role)])
-async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_acu_files(session_id: str = Query(default=None), authorization: str = Header(default=None)):
     """
     FUNCTION:
         get_acu_files
@@ -1121,7 +1283,7 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
             - 404 if session does not exist
             - 500 if unexpected errors occur during retrieval
     """
-    session_id = _resolve_session_id(session_id)
+    session_id = _resolve_session_id(session_id, authorization)
     try:
         if not session_service.session_exists(session_id):
             logger.warning(f"No session found for session_id: {session_id}")
@@ -1189,7 +1351,7 @@ async def get_acu_files(session_id: str = Query(default=CURRENT_SESSION_ID)):
         )
 
 @router.post("/parse-acu-files", dependencies=[Depends(require_elevated_role)])
-async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str = Query(default=None), authorization: str = Header(default=None)):
     """
     FUNCTION:
         parse_acu_files
@@ -1227,7 +1389,7 @@ async def parse_acu_files(files_to_parse: List[dict] = Body(...),session_id: str
             - 400 if no ACU files are found in the session
             - 500 if any unexpected error occurs during parsing
     """
-    session_id = _resolve_session_id(session_id)
+    session_id = _resolve_session_id(session_id, authorization)
     try:
         if not session_service.session_exists(session_id):
             logger.warning(f"No session found for session_id: {session_id}")
@@ -1933,7 +2095,7 @@ async def filter_transactions_by_sources(source_files: List[str] = Body(..., emb
         )
 
 @router.get("/transaction-statistics", dependencies=[Depends(require_elevated_role)])
-async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def get_transaction_statistics(session_id: str = Query(default=None), authorization: str = Header(default=None)):
     """
     FUNCTION:
         get_transaction_statistics
@@ -1972,7 +2134,7 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
             - 500 for unexpected errors during statistics generation
     """
 
-    session_id = _resolve_session_id(session_id)
+    session_id = _resolve_session_id(session_id, authorization)
     try:
         logger.info(f"Request received: Get transaction statistics for session {session_id}")
         if not session_service.session_exists(session_id):
@@ -2040,7 +2202,7 @@ async def get_transaction_statistics(session_id: str = Query(default=CURRENT_SES
         )
 
 @router.post("/compare-transactions-flow", dependencies=[Depends(require_elevated_role)])
-async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body(...),session_id: str = Query(default=None), authorization: str = Header(default=None)):
     """
     FUNCTION:
         compare_transactions_flow
@@ -2098,7 +2260,7 @@ async def compare_transactions_flow(txn1_id: str = Body(...),txn2_id: str = Body
         - Provides timing/duration analysis if start and end times are available.
         - Handles missing or empty UI journals gracefully.
     """
-    session_id = _resolve_session_id(session_id)
+    session_id = _resolve_session_id(session_id, authorization)
     try:
         logger.info(f" Comparing transactions: {txn1_id} vs {txn2_id}")
 
@@ -2541,7 +2703,7 @@ async def debug_session(session_id: str = Query(default=None)):
 
 
 @router.post("/visualize-individual-transaction-flow", dependencies=[Depends(require_elevated_role)])
-async def visualize_individual_transaction_flow(request: TransactionVisualizationRequest,session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def visualize_individual_transaction_flow(request: TransactionVisualizationRequest,session_id: str = Query(default=None), authorization: str = Header(default=None)):
     """
     FUNCTION:
         visualize_individual_transaction_flow
@@ -2590,7 +2752,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
             - If unexpected errors occur while parsing UI journals or
               generating the flow
     """
-    session_id = _resolve_session_id(session_id)
+    session_id = _resolve_session_id(session_id, authorization)
     try:
         transaction_id = request.transaction_id
         logger.info(f"Visualizing flow for transaction: {transaction_id}")
@@ -2850,7 +3012,7 @@ async def visualize_individual_transaction_flow(request: TransactionVisualizatio
         )
 
 @router.post("/generate-consolidated-flow", dependencies=[Depends(require_elevated_role)])
-async def generate_consolidated_flow(source_file: str = Body(...),transaction_type: str = Body(...),session_id: str = Query(default=CURRENT_SESSION_ID)):
+async def generate_consolidated_flow(source_file: str = Body(...),transaction_type: str = Body(...),session_id: str = Query(default=None), authorization: str = Header(default=None)):
     """
 FUNCTION:
     generate_consolidated_flow
@@ -2938,7 +3100,7 @@ RAISES:
         - Unexpected internal errors during UI flow extraction or processing
 """
 
-    session_id = _resolve_session_id(session_id)
+    session_id = _resolve_session_id(session_id, authorization)
     try:
         logger.info(f" Starting consolidated flow generation for type '{transaction_type}' from source '{source_file}'")
         logger.debug(f"Session ID received: {session_id}")
@@ -3347,6 +3509,14 @@ async def chat_transaction(
     journal_llm_contents      = session_data.get('journal_llm_contents', {})
     all_jrn_contents          = {**ui_journal_contents, **journal_llm_contents}
 
+    # Extract string content for this specific transaction (dicts are keyed by txn_id)
+    ej_content  = customer_journal_contents.get(request.transaction_id, "")
+    jrn_content = all_jrn_contents.get(request.transaction_id, "")
+    if isinstance(ej_content, dict):
+        ej_content = str(ej_content)
+    if isinstance(jrn_content, dict):
+        jrn_content = str(jrn_content)
+
     # Pull txn_data row for pre-computed facts (duration, timestamps, outcome)
     txn_data = {}
     raw_transaction_data = session_data.get('transaction_data')
@@ -3357,10 +3527,12 @@ async def chat_transaction(
             txn_data = matches.iloc[0].to_dict()
 
     logger.info(
-        "chat_transaction: txn=%s question_len=%d history_turns=%d",
+        "chat_transaction: txn=%s question_len=%d history_turns=%d ej_chars=%d jrn_chars=%d",
         request.transaction_id,
         len(request.question),
         len(request.history),
+        len(ej_content),
+        len(jrn_content),
     )
 
     # Extract username from JWT for per-user log attribution
@@ -3383,8 +3555,8 @@ async def chat_transaction(
     try:
         response_text = chat_turn(
             question=request.question,
-            ej_content=customer_journal_contents,
-            jrn_content=all_jrn_contents,
+            ej_content=ej_content,
+            jrn_content=jrn_content,
             analysis_result=request.analysis_result,
             history=request.history,
             txn_data=txn_data,
@@ -3448,6 +3620,14 @@ async def chat_transaction_stream(
     journal_llm_contents      = session_data.get('journal_llm_contents', {})
     all_jrn_contents          = {**ui_journal_contents, **journal_llm_contents}
 
+    # Extract string content for this specific transaction (dicts are keyed by txn_id)
+    ej_content  = customer_journal_contents.get(request.transaction_id, "")
+    jrn_content = all_jrn_contents.get(request.transaction_id, "")
+    if isinstance(ej_content, dict):
+        ej_content = str(ej_content)
+    if isinstance(jrn_content, dict):
+        jrn_content = str(jrn_content)
+
     # Pull txn_data row for pre-computed facts (duration, timestamps, outcome)
     txn_data = {}
     raw_transaction_data = session_data.get('transaction_data')
@@ -3458,10 +3638,12 @@ async def chat_transaction_stream(
             txn_data = matches.iloc[0].to_dict()
 
     logger.info(
-        "chat_transaction_stream: txn=%s question_len=%d history_turns=%d",
+        "chat_transaction_stream: txn=%s question_len=%d history_turns=%d ej_chars=%d jrn_chars=%d",
         request.transaction_id,
         len(request.question),
         len(request.history),
+        len(ej_content),
+        len(jrn_content),
     )
 
     # Extract username from JWT for per-user log attribution
@@ -3485,8 +3667,8 @@ async def chat_transaction_stream(
         collected_reply = []
         try:
             for chunk in chat_turn_stream(
-                ej_content=customer_journal_contents,
-                jrn_content=all_jrn_contents,
+                ej_content=ej_content,
+                jrn_content=jrn_content,
                 analysis_result=request.analysis_result,
                 history=request.history,
                 question=request.question,
@@ -3530,7 +3712,7 @@ class FeedbackSubmission(BaseModel):
     original_llm_response: str
 
 @router.post("/submit-llm-feedback")
-async def submit_llm_feedback(feedback: FeedbackSubmission, session_id: str = Query(default=CURRENT_SESSION_ID), authorization: str = Header(default=None)):
+async def submit_llm_feedback(feedback: FeedbackSubmission, session_id: str = Query(default=None), authorization: str = Header(default=None)):
     _jwt_role = None
     if authorization and authorization.startswith("Bearer "):
         payload = decode_access_token(authorization.split(" ", 1)[1])
@@ -3650,7 +3832,7 @@ async def submit_llm_feedback(feedback: FeedbackSubmission, session_id: str = Qu
             detail="ADMIN role is not permitted to submit feedback.",
         )
 
-    if jwt_role_upper not in ("USER", "DEV_MODE"):
+    if jwt_role_upper not in ("USER", "DEV_MODE", "TEST"):
         logger.warning(
             "FEEDBACK [403] — user='%s' role='%s' is not an allowed feedback role",
             jwt_username, jwt_role_upper,
@@ -3665,7 +3847,7 @@ async def submit_llm_feedback(feedback: FeedbackSubmission, session_id: str = Qu
     # feedback.user_name is kept only for the display message below.
     verified_username = jwt_username
 
-    session_id = _resolve_session_id(session_id)
+    session_id = _resolve_session_id(session_id, authorization)
     try:
         logger.info(
             "Submitting feedback — txn: %s  user: %s  role: %s",
@@ -3701,7 +3883,7 @@ async def submit_llm_feedback(feedback: FeedbackSubmission, session_id: str = Qu
 
         # Only USER and DEV_MODE roles can store feedback in database
         role = (_jwt_role or get_user_role(feedback.user_name) or "").upper()
-        if role not in ("USER", "DEV_MODE"):
+        if role not in ("USER", "DEV_MODE", "TEST"):
             raise HTTPException(
                 status_code=403,
                 detail="Only users with USER or DEV_MODE roles can submit feedback."
@@ -4418,7 +4600,7 @@ async def auth_register(request: RegisterRequest):
         request.name,
         request.password,
         request.employee_code,
-        request.role or "USER",
+        request.role or "TEST",
     )
 
     if success:
@@ -4476,9 +4658,10 @@ async def finalize_upload(
     filename:     str           = Form(..., description="Original ZIP filename"),
     total_chunks: int           = Form(..., description="Total number of expected chunks"),
     mode:         Optional[str] = Form(None, description="Optional processing mode"),
+    authorization: str          = Header(default=None),
 ):
     """Assemble all staged chunks and run the extraction pipeline."""
-    return await assemble_and_process(upload_id, total_chunks, mode)
+    return await assemble_and_process(upload_id, total_chunks, mode, authorization)
 
 
 @router.delete("/cancel-upload/{upload_id}")

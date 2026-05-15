@@ -313,6 +313,37 @@ RAISES:
         logger.error(f"Failed to delete session {session_id}: session does not exist")  
         return False
 
+    def cleanup_sessions_by_suffix(self, suffix: str) -> int:
+        """
+            FUNCTION: cleanup_sessions_by_suffix
+
+            DESCRIPTION:
+                Deletes all sessions whose session_id ends with the given suffix.
+                Used to purge a user's previous upload session before creating a
+                new one — the suffix is typically "e<emp_code>" (e.g. "e1234"),
+                which stays constant for a user across re-uploads within the same
+                login, while the timestamp prefix changes each time.
+
+            USAGE:
+                count = service.cleanup_sessions_by_suffix("e1234")
+
+            PARAMETERS:
+                suffix (str) : Trailing portion of the session ID to match against.
+
+            RETURNS:
+                int : Number of sessions deleted.
+
+            RAISES:
+                None
+        """
+        to_delete = [sid for sid in list(self._sessions.keys()) if sid.endswith(suffix)]
+        for sid in to_delete:
+            del self._sessions[sid]
+            logger.info(f"Session purged by suffix '{suffix}': {sid}")
+        if to_delete:
+            logger.info(f"cleanup_sessions_by_suffix('{suffix}'): removed {len(to_delete)} session(s)")
+        return len(to_delete)
+
     def session_exists(self, session_id: str) -> bool:
         """
             FUNCTION: session_exists

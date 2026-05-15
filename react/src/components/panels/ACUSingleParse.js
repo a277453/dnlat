@@ -23,7 +23,9 @@ function ACUSingleInner() {
   useEffect(() => {
     api.get('/get-acu-files', { timeout:30000 })
       .then(r => {
-        const f = r.data.acu_files || [];
+        const raw = r.data.acu_files || {};
+        // get-acu-files returns a dict (filename → content), extract keys as the file list
+        const f = Array.isArray(raw) ? raw : Object.keys(raw);
         if (!f.length) setError('No ACU files found in the uploaded ZIP.');
         setFiles(f);
       })

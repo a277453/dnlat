@@ -125,6 +125,7 @@ async def assemble_and_process(
     upload_id: str,
     total_chunks: int,
     mode: Optional[str],
+    authorization: Optional[str] = None,
 ) -> dict:
     """
     1. Verify every chunk is present.
@@ -184,7 +185,7 @@ async def assemble_and_process(
 
     # ── Run extraction pipeline ───────────────────────────────────────────────
     try:
-        return await _run_extraction_pipeline(zip_bytes, mode)
+        return await _run_extraction_pipeline(zip_bytes, mode, authorization)
     except HTTPException:
         raise
     except Exception as exc:
@@ -213,35 +214,44 @@ def cancel_upload(upload_id: str) -> dict:
 # PRIVATE — extraction + categorisation + session pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _run_extraction_pipeline(zip_bytes: bytes, mode: Optional[str]) -> dict:
+async def _run_extraction_pipeline(zip_bytes: bytes, mode: Optional[str], authorization: Optional[str] = None) -> dict:
     """
     Mirrors the body of routes.process_zip_file() so the two endpoints
     produce identical response dicts.
     """
-    from api.routes import set_processed_files_dir, CURRENT_SESSION_ID as _CURRENT_SESSION_ID
+    from api.routes import set_processed_files_dir, _build_session_id
 
     start = time.perf_counter()
 
     # ── 1. Extract ────────────────────────────────────────────────────────────
     ZipExtractionService().cleanup_old_extracts(max_age_hours=0.5)
     try:
-        extract_path, total_members, acu_zip_bytes = ZipExtractionService().extract_zip(zip_bytes)
+        extract_path, total_members, acu_zip_bytes_list = ZipExtractionService().extract_zip(zip_bytes)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"ZIP extraction failed: {exc}")
     logger.info("[CHUNK_SVC] Extracted %d members → %s", total_members, extract_path)
 
     # ── 2. ACU extraction ─────────────────────────────────────────────────────
+    # extract_zip returns a LIST of acu.zip byte-strings (one per main ZIP found).
+    # Must loop and merge — passing the list directly to extract_from_zip_bytes
+    # would silently fail because it expects bytes, not List[bytes].
     acu_logs: list = []
+    acu_files: dict = {}
     try:
-        acu_files = (
-            extract_from_zip_bytes(acu_zip_bytes, acu_logs, target_prefixes=("jdd", "x3"))
-            if acu_zip_bytes else {}
-        )
+        for acu_zip_bytes in acu_zip_bytes_list:
+            partial = extract_from_zip_bytes(acu_zip_bytes, acu_logs, target_prefixes=("jdd", "x3"))
+            for key, content in partial.items():
+                dedup_key = key
+                while dedup_key in acu_files:
+                    dedup_key += "_dup"
+                acu_files[dedup_key] = content
         logger.info(
             "[CHUNK_SVC] ACU: %d XML, %d XSD",
             sum(1 for k in acu_files if not k.startswith("__xsd__")),
             sum(1 for k in acu_files if k.startswith("__xsd__")),
         )
+        if not acu_zip_bytes_list:
+            logger.info("[CHUNK_SVC] No acu.zip found in uploaded package — skipping ACU extraction.")
     except Exception as exc:
         logger.error("[CHUNK_SVC] ACU error: %s", exc)
         acu_files = {}
@@ -303,18 +313,30 @@ async def _run_extraction_pipeline(zip_bytes: bytes, mode: Optional[str]) -> dic
         file_categories[branch] = [Path(p).name for p in file_categories[branch]]
 
     # ── 7. Session ────────────────────────────────────────────────────────────
+    # Build a fresh session ID from the JWT, purge the old one for this user,
+    # then create the new session. We do NOT read the module-level
+    # CURRENT_SESSION_ID from routes.py because that import captures the value
+    # at import time (always "") — instead we call _build_session_id directly.
+    import api.routes as _routes_mod
+    session_id, emp_suffix = _build_session_id(authorization)
+    purged = session_service.cleanup_sessions_by_suffix(emp_suffix)
+    if purged:
+        logger.info("[CHUNK_SVC] Purged %d old session(s) with suffix '%s'", purged, emp_suffix)
+    _routes_mod._USER_SESSIONS[emp_suffix] = session_id   # per-user session registry
+    logger.info("[CHUNK_SVC] Session ID built: %s → stored for %s", session_id, emp_suffix)
+
     set_processed_files_dir(None)
-    session_service.create_session(_CURRENT_SESSION_ID, file_categories, None)
+    session_service.create_session(session_id, file_categories, None)
     _upd = session_service.update_session
-    _upd(_CURRENT_SESSION_ID, "acu_extracted_files",       acu_files)
-    _upd(_CURRENT_SESSION_ID, "acu_extraction_logs",       acu_logs)
-    _upd(_CURRENT_SESSION_ID, "registry_contents",         registry_contents)
-    _upd(_CURRENT_SESSION_ID, "customer_journal_contents", customer_journal_contents)
-    _upd(_CURRENT_SESSION_ID, "ui_journal_contents",       ui_journal_contents)
-    _upd(_CURRENT_SESSION_ID, "journal_llm_contents",      journal_llm_contents)
-    _upd(_CURRENT_SESSION_ID, "trc_trace_contents",        trc_trace_contents)
-    _upd(_CURRENT_SESSION_ID, "trc_error_contents",        trc_error_contents)
-    _upd(_CURRENT_SESSION_ID, "extra_contents",            extra_contents)
+    _upd(session_id, "acu_extracted_files",       acu_files)
+    _upd(session_id, "acu_extraction_logs",       acu_logs)
+    _upd(session_id, "registry_contents",         registry_contents)
+    _upd(session_id, "customer_journal_contents", customer_journal_contents)
+    _upd(session_id, "ui_journal_contents",       ui_journal_contents)
+    _upd(session_id, "journal_llm_contents",      journal_llm_contents)
+    _upd(session_id, "trc_trace_contents",        trc_trace_contents)
+    _upd(session_id, "trc_error_contents",        trc_error_contents)
+    _upd(session_id, "extra_contents",            extra_contents)
 
     # ── 8. Clean up temp extract dir ─────────────────────────────────────────
     try:
@@ -331,7 +353,7 @@ async def _run_extraction_pipeline(zip_bytes: bytes, mode: Optional[str]) -> dic
 
     result_dict = result.dict() if hasattr(result, "dict") else dict(result)
     result_dict["processing_time_seconds"] = total_time
-    result_dict["session_id"] = _CURRENT_SESSION_ID
+    result_dict["session_id"] = session_id
     return result_dict
 
 

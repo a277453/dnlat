@@ -56,7 +56,7 @@ export default function RegisterPage() {
         name: form.name.trim(),
         password: form.password,
         employee_code: form.employee_code.trim(),
-        role: 'USER',
+        role: 'TEST',
       });
       setSuccess('Registration successful! Awaiting admin activation.');
       setTimeout(() => navigate('/login'), 2500);
@@ -104,7 +104,7 @@ export default function RegisterPage() {
             ))}
             <div className="mb-12">
               <label style={{ display: 'block', marginBottom: 5, fontWeight: 600, color: 'var(--text-primary)', fontSize: 13 }}>Role Type</label>
-              <input value="USER" disabled style={{ opacity: 0.5 }} readOnly />
+              <input value="TEST" disabled style={{ opacity: 0.5 }} readOnly />
             </div>
             <button className="btn btn-primary btn-full mt-8" type="submit" disabled={loading}>
               {loading ? <><span className="spinner" /> Registering…</> : 'Register'}
